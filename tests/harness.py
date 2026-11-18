@@ -6,11 +6,10 @@ Test harness for the Clean Vinyl Pro server: runs CleanVinylEngine WITHOUT the r
   runs exactly as in production and gives reproducible pixels.
 * make_studio_image() draws a synthetic studio frame: wall + floor with a corner line, a "person", a contact
   shadow, a vinyl seam, dust specks, hairs and scuffs.
-* load_baseline() loads engine.py / server.py of v3.2.1 straight from the git history, so the current code can
+* load_baseline() loads engine.py / server.py of v3.2.1 (kept in tests/baseline_v321), so the current code can
   be compared with it pixel by pixel on the same machine.
 """
 import os
-import subprocess
 import sys
 import tempfile
 import time
@@ -24,9 +23,11 @@ sys.dont_write_bytecode = True
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP_DIR = os.path.join(REPO_ROOT, "CleanVinylPro2")  # the program these checks are about
 SERVER_DIR = os.path.join(APP_DIR, "server")
-# The original program (folder CleanVinylPro, v3.2.1) is the reference for everything that was not meant to change.
+# The original program (v3.2.1) is the reference for everything that was not meant to change. Its folder
+# (CleanVinylPro, 666 MB with a Windows Python environment inside) left the repository in version 4.3.0; the files
+# the checks compare with are kept in tests/baseline_v321 exactly as they were in the first commit:
 BASELINE_COMMIT = "daae6ed072f93e109e10105574c211f698318b65"
-BASELINE_DIR = "CleanVinylPro/server"
+BASELINE_FILES_DIR = os.path.join(REPO_ROOT, "tests", "baseline_v321")
 
 if SERVER_DIR not in sys.path:
     sys.path.insert(0, SERVER_DIR)
@@ -66,8 +67,7 @@ _BASELINE = None
 
 def load_baseline():
     """
-    (engine_module, server_module) of v3.2.1 taken from the git history, or (None, None) when the history is
-    not available (for example in a ZIP download without the .git folder).
+    (engine_module, server_module) of v3.2.1 from tests/baseline_v321, or (None, None) when those files are missing.
     """
     global _BASELINE
     if _BASELINE is not None:
@@ -76,10 +76,8 @@ def load_baseline():
     tmp = tempfile.mkdtemp(prefix="cv_baseline_")
     try:
         for name in ("engine", "server"):
-            src = subprocess.check_output(
-                ["git", "-C", REPO_ROOT, "show", f"{BASELINE_COMMIT}:{BASELINE_DIR}/{name}.py"],
-                stderr=subprocess.DEVNULL,
-            )
+            with open(os.path.join(BASELINE_FILES_DIR, f"{name}.py"), "rb") as f:
+                src = f.read()
             with open(os.path.join(tmp, f"{name}_v321.py"), "wb") as f:
                 f.write(src)
     except Exception:

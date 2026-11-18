@@ -13,7 +13,6 @@ tests/package.json
 tests/package-lock.json
 
 # AI models (about 1 GB, downloaded by server\download_models.py; GitHub rejects files this large)
-CleanVinylPro/server/models/
 CleanVinylPro2/server/models/
 
 # Runtime files written by the server and by the installer of Clean Vinyl Pro 2

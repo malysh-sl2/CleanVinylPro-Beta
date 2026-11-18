@@ -319,6 +319,14 @@ html, body {
   pointer-events: none;
 }
 
+/* A press that waits for the server (the action starts by itself when the status turns green) */
+.btn-primary.waiting,
+.btn-sec.waiting {
+  background: #5a4a1e;
+  border-color: #c79a3a;
+  color: #ffe7b0;
+}
+
 .btn-row {
   display: flex;
   gap: 5px;
@@ -526,6 +534,57 @@ html, body {
   background: #1f559e;
   border-color: #5ea5ff;
   color: #ffffff;
+}
+
+/* "До / Після" and "Маска": icon + word, lit while their view is on screen */
+.r4m-text-btn {
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 4px;
+  border: 1px solid #526178;
+  background: #2b3442;
+  color: #eef4ff;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.r4m-text-btn:hover {
+  background: #394659;
+  border-color: #7088ab;
+  color: #ffffff;
+}
+
+.r4m-text-btn.active {
+  background: #1f559e;
+  border-color: #5ea5ff;
+  color: #ffffff;
+}
+
+.mask-swatch {
+  display: inline-flex;
+  border-radius: 2px;
+  overflow: hidden;
+  border: 1px solid #1b1e24;
+}
+
+.mask-swatch .sw-red,
+.mask-swatch .sw-green {
+  width: 7px;
+  height: 12px;
+  display: block;
+}
+
+.mask-swatch .sw-red {
+  background: #c8353c;
+}
+
+.mask-swatch .sw-green {
+  background: #35e05a;
 }
 
 .r4m-info-btn {
@@ -781,6 +840,15 @@ html, body {
   background: var(--blue);
   border-color: var(--blue-hover);
   color: #ffffff;
+}
+
+.auto-preset-row {
+  margin-bottom: 6px;
+  padding: 5px 6px;
+  border-radius: 4px;
+  background: #1d2a3a;
+  border: 1px solid #33506f;
+  color: #d6e8ff;
 }
 
 .dlg-presets-list {
@@ -1294,6 +1362,11 @@ html, body {
   color: #bfffdc;
 }
 
+.r4m-mode-badge.mask {
+  border-color: #e0a63c;
+  color: #ffe6b3;
+}
+
 /* State of the preview after the sliders were changed (light refresh, no progress card) */
 .r4m-preview-badge {
   display: none;
@@ -1321,6 +1394,13 @@ html, body {
   border-color: #e0a63c;
   color: #ffe6b3;
   font-weight: 400;
+}
+
+/* which preset was picked / what a clicked preset changed */
+.r4m-preview-badge.note {
+  border-color: #36d97e;
+  color: #d9ffe9;
+  font-weight: 600;
 }
 
 /* Progress Overlay (center of photo during initial scan) */

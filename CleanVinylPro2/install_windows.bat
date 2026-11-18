@@ -14,7 +14,7 @@ if /i not "%~1"=="--no-elevate" (
 pushd "%~dp0"
 
 echo ==============================================================
-echo   Clean Vinyl Pro 2 v4.2.0 — Встановлення для Windows 11 + RTX 5060 Ti
+echo   Clean Vinyl Pro 2 v4.3.0 — Встановлення для Windows 11 + RTX 5060 Ti
 echo ==============================================================
 echo.
 

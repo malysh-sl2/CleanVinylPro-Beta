@@ -61,7 +61,7 @@ from engine import CleanVinylEngine, DEFAULT_IDLE_UNLOAD_SEC
 
 APP_ID = "cleanvinylpro2"  # tells this program apart from the original Clean Vinyl Pro (port 18745)
 APP_PORT = 18746
-APP_VERSION = "4.2.0"
+APP_VERSION = "4.3.0"
 # Settings written by plugin builds older than this schema still carry the former 30 s idle-unload default
 SETTINGS_SCHEMA_IDLE_120 = 5
 LEGACY_IDLE_UNLOAD_SEC = 30.0
@@ -590,6 +590,10 @@ async def session_start(request: Request):
         has_selection = bool(meta.get("hasSelection", False))
         job_id = meta.get("jobId") or None
         params = meta.get("params", {})
+        # Automatic preset: parameters by kind of frame; the engine looks at the frame and uses the suitable set
+        scene_presets = meta.get("scenePresets")
+        if not isinstance(scene_presets, dict):
+            scene_presets = None
 
         _set_progress(job_id, 10, "Сканування людини та фону...", done=False)
 
@@ -617,7 +621,7 @@ async def session_start(request: Request):
         def _pcb(pct: int, stage: str):
             _set_progress(job_id, pct, stage, done=False)
 
-        res = await run_in_threadpool(eng.start_session, img_arr, bit_depth, params, selection_alpha, _pcb)
+        res = await run_in_threadpool(eng.start_session, img_arr, bit_depth, params, selection_alpha, _pcb, scene_presets)
         _set_progress(job_id, 100, "Готово!", done=True)
         return JSONResponse(status_code=200, content=res)
     except Exception as exc:

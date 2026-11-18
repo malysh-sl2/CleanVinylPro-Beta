@@ -3,9 +3,14 @@
 //   - nothing is computed while a slider is being dragged;
 //   - after the release the preview is refreshed once, the light way (quick: true), without the progress card;
 //   - several controls changed in a row give one refresh;
-//   - the full-size computation is asked for once: "Застосувати" carries the settings that are on the sliders.
+//   - the full-size computation is asked for once: "Застосувати" carries the settings that are on the sliders;
+//   - the window opens with the cleaned photo, "До / Після" and "Маска" switch the three views;
+//   - a preset click gives one light refresh with that preset's values and says what it changed;
+//   - the automatic preset: the presets travel with the photo, the server's choice lands on the controls;
+//   - a button pressed while the server is still starting is remembered and runs when the server answers.
 //
 //   node tests/plugin_preview.test.js
+//   node tests/plugin_preview.test.js "preset click" remembered     (only the scenarios whose name has one of the texts)
 //
 // Needs the "jsdom" package once (it is not part of the plugin):   npm install --prefix tests jsdom
 const fs = require("fs");
@@ -31,6 +36,7 @@ if (!jsdom) {
 const PLUGIN_DIR = process.env.CV_PLUGIN_DIR || path.join(__dirname, "..", "CleanVinylPro2", "uxp-plugin");
 const HTML = fs.readFileSync(path.join(PLUGIN_DIR, "index.html"), "utf8");
 const MAIN_JS = fs.readFileSync(path.join(PLUGIN_DIR, "main.js"), "utf8");
+const PLUGIN_VERSION = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, "manifest.json"), "utf8")).version;
 const SLIDER_PX = 200; // every slider is 200 px wide in this simulation -> value = clientX / 2 (Turbo: clientX)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -47,7 +53,14 @@ function makeEnv(serverOpts = {}) {
     applyDelay: 120,
     quickAware: true,      // false = an older server build: ignores "quick" and does not report it
     failRecompute: 0,      // how many next recomputes answer with an error
-    autoFractions: { fracFine: true, fracMed: true, fracLarge: true }
+    autoFractions: { fracFine: true, fracMed: true, fracLarge: true },
+    version: PLUGIN_VERSION, // the version the server reports (another one = a server left running after an update)
+    online: true,          // false = nothing answers on the port (the server is not running yet)
+    bootMs: null,          // ms after the launch request (cleanvinyl2://start) until the server answers; null = never
+    launches: 0,           // how many times the plugin asked Windows to start the server
+    scene: null,           // what the server sees in the frame, e.g. { kind: "wide", framing: "wide", dark: false }
+    startMaskShare: null,  // share of the frame that is green after the first scan
+    maskShares: []         // ...and after each following recompute
   }, serverOpts);
   const W = 4, H = 6;
 
@@ -82,20 +95,35 @@ function makeEnv(serverOpts = {}) {
     try {
       switch (u.pathname) {
         case "/health":
-          return reply({ ok: true, status: "ready", app: "cleanvinylpro2", version: "test", install_dir: "C:\\CleanVinylPro2", gpu: "Test GPU", provider: "CUDAExecutionProvider", models_loaded: true });
+          if (!server.online) throw new TypeError("Failed to fetch");
+          return reply({ ok: true, status: "ready", app: "cleanvinylpro2", version: server.version, install_dir: "C:\\CleanVinylPro2", gpu: "Test GPU", provider: "CUDAExecutionProvider", models_loaded: true });
         case "/presets":
           return reply(method === "GET" ? { presets: [], source: "defaults" } : { ok: true });
         case "/settings":
           return reply(method === "GET" ? { exists: false } : { ok: true });
         case "/progress":
           return reply({ ok: true, pct: 50, stage: "…" });
-        case "/session/start":
+        case "/session/start": {
           await waitOrAbort(server.startDelay, init.signal);
-          return reply({
+          // the automatic preset the way the engine does it: the set for this kind of frame replaces `params`
+          let used = body.params;
+          let scene = null;
+          if (server.scene) {
+            scene = Object.assign({ applied: null }, server.scene);
+            for (const key of [scene.kind, scene.framing, "default"]) {
+              if (body.scenePresets && body.scenePresets[key]) { used = body.scenePresets[key]; scene.applied = key; break; }
+            }
+          }
+          rec.used = used;
+          const ans = {
             ok: true, session_id: "sess-1", width: W, height: H, preview_w: W, preview_h: H,
-            auto_fractions: body.params.autoFractions ? server.autoFractions : { fracFine: body.params.fracFine, fracMed: body.params.fracMed, fracLarge: body.params.fracLarge },
+            auto_fractions: used.autoFractions ? server.autoFractions : { fracFine: used.fracFine, fracMed: used.fracMed, fracLarge: used.fracLarge },
             orig_jpg_b64: "QQ==", comp_jpg_b64: "QQ==", overlay_jpg_b64: "QQ==", stats: {}
-          });
+          };
+          if (scene) ans.scene = scene;
+          if (server.startMaskShare !== null) ans.mask_share = server.startMaskShare;
+          return reply(ans);
+        }
         case "/session/recompute": {
           await waitOrAbort(server.recomputeDelay, init.signal);
           if (server.failRecompute > 0) {
@@ -109,6 +137,7 @@ function makeEnv(serverOpts = {}) {
             comp_jpg_b64: "QQ==", overlay_jpg_b64: "QQ==", stats: {}
           };
           if (server.quickAware) ans.quick = !!body.quick && Number(p.cleanPasses || 1) < 2;
+          if (server.maskShares.length) ans.mask_share = server.maskShares.shift();
           return reply(ans);
         }
         case "/session/mask-edit":
@@ -132,7 +161,7 @@ function makeEnv(serverOpts = {}) {
   };
 
   const layer = { id: 99, opacity: 100, visible: true, move: async () => {} };
-  const psDoc = { id: 7, mode: "RGBColorMode", layers: [], createPixelLayer: async () => layer, createLayer: async () => layer };
+  const psDoc = { id: 7, width: W, height: H, mode: "RGBColorMode", layers: [], createPixelLayer: async () => layer, createLayer: async () => layer };
   const stubs = {
     photoshop: {
       app: { documents: [psDoc], activeDocument: psDoc },
@@ -146,7 +175,15 @@ function makeEnv(serverOpts = {}) {
       action: { batchPlay: async () => [] },
       constants: { ElementPlacement: { PLACEBEFORE: "placeBefore" } }
     },
-    uxp: { storage: { localFileSystem: { getDataFolder: async () => { throw new Error("no disk in the test"); } } }, shell: { openExternal: async () => {} } }
+    uxp: {
+      storage: { localFileSystem: { getDataFolder: async () => { throw new Error("no disk in the test"); } } },
+      shell: {
+        openExternal: async () => {
+          server.launches++;
+          if (server.bootMs !== null) setTimeout(() => { server.online = true; }, server.bootMs);
+        }
+      }
+    }
   };
   w.require = (name) => stubs[name];
 
@@ -159,6 +196,8 @@ function makeEnv(serverOpts = {}) {
   doc.querySelectorAll(".cv-slider").forEach((n) => {
     n.getBoundingClientRect = () => ({ left: 0, top: 0, right: SLIDER_PX, bottom: 10, width: SLIDER_PX, height: 10 });
   });
+  // the photo fills this rectangle of the window (a press inside it is a brush / eraser stroke)
+  doc.getElementById("dlgStage").getBoundingClientRect = () => ({ left: 0, top: 0, right: 400, bottom: 600, width: 400, height: 600 });
 
   const errors = [];
   w.addEventListener("error", (e) => errors.push(String(e.error || e.message)));
@@ -166,6 +205,9 @@ function makeEnv(serverOpts = {}) {
   // Run main.js the way a <script> tag does (its top-level let / const stay visible to the test afterwards)
   const ctx = dom.getInternalVMContext();
   const run = (code, filename) => new vm.Script(code, { filename }).runInContext(ctx);
+  // The plugin's clock can be moved forward by a test (cvClockSkewMs) - to live through the 2.5 minutes the
+  // plugin waits for a server that never starts.
+  run("var cvClockSkewMs = 0; (function () { const real = Date.now.bind(Date); Date.now = () => real() + cvClockSkewMs; })();", "test-clock");
   run(MAIN_JS, "main.js");
 
   const el = (id) => {
@@ -197,6 +239,29 @@ function makeEnv(serverOpts = {}) {
       env.release();
     },
     progressCardVisible: () => el("dlgProgressOverlay").classList.contains("visible"),
+    shown: (id) => el(id).style.display !== "none",
+    // which of the three pictures is on screen: "original" | "result" | "mask"
+    view() {
+      const o = env.shown("dlgOrigImg"), c = env.shown("dlgCompImg"), m = env.shown("dlgOverlayImg");
+      if (m && !c && !o) return "mask";
+      if (o && !c && !m) return "original";
+      if (c && !m) return "result";
+      return `mixed(orig=${o}, comp=${c}, mask=${m})`;
+    },
+    modeBadge: () => (el("dlgModeBadge").classList.contains("visible") ? el("dlgModeBadge").textContent : ""),
+    presetButton(name) {
+      const btn = Array.from(doc.querySelectorAll("#dlgPresetsList .preset-btn")).find((b) => b.textContent.trim() === name);
+      if (!btn) throw new Error("no preset named " + name);
+      return btn;
+    },
+    clickPreset(name) { mouse(env.presetButton(name), "click"); },
+    async waitFor(cond, ms = 4000) {
+      for (let waited = 0; waited < ms; waited += 20) {
+        if (cond()) return true;
+        await sleep(20);
+      }
+      return !!cond();
+    },
     badge: () => (el("dlgPreviewBadge").classList.contains("visible") ? el("dlgPreviewBadge").textContent : ""),
     async open() {
       env.click("btnRun");
@@ -226,7 +291,10 @@ for (const kind of ["unhandledRejection", "uncaughtException"]) {
   });
 }
 
+const ONLY = process.argv.slice(2);
+
 async function scenario(name, serverOpts, fn) {
+  if (ONLY.length && !ONLY.some((text) => name.includes(text))) return;
   const env = makeEnv(serverOpts);
   const rec = { name, problems: [] };
   const expect = (cond, text) => { if (!cond) rec.problems.push(text); };
@@ -516,10 +584,317 @@ async function main() {
     expect(!env.progressCardVisible(), "no progress card");
   });
 
+  // ---------------------------------------------------------------- the three views of the photo
+  await scenario("the window opens with the cleaned photo; 'До / Після' and 'Маска' switch the views", {}, async (env, expect) => {
+    await env.open();
+    expect(env.view() === "result", "the window must open with the cleaned photo, got " + env.view());
+    expect(env.modeBadge().includes("ПІСЛЯ"), "the corner label must say ПІСЛЯ: " + env.modeBadge());
+    env.click("dlgBtnBeforeAfter");
+    expect(env.view() === "original", "'До / Після' must show the original, got " + env.view());
+    expect(env.el("dlgBtnBeforeAfter").classList.contains("active"), "'До / Після' must be lit while the original is shown");
+    expect(env.modeBadge().includes("ДО"), "the corner label must say ДО: " + env.modeBadge());
+    env.click("dlgBtnBeforeAfter");
+    expect(env.view() === "result", "'До / Після' again must show the cleaned photo, got " + env.view());
+    expect(!env.el("dlgBtnBeforeAfter").classList.contains("active"), "'До / Після' must not stay lit");
+    env.click("dlgBtnMask");
+    expect(env.view() === "mask" && env.el("dlgBtnMask").classList.contains("active"), "'Маска' must show the red/green mask, got " + env.view());
+    expect(env.modeBadge().includes("МАСКА"), "the corner label must say МАСКА: " + env.modeBadge());
+    env.click("dlgBtnBeforeAfter");
+    expect(env.view() === "original" && !env.el("dlgBtnMask").classList.contains("active"), "'До / Після' from the mask must show the original, got " + env.view());
+    env.click("dlgBtnBeforeAfter");
+    expect(env.view() === "result", "...and then the cleaned photo, never the mask; got " + env.view());
+    env.click("dlgBtnMask");
+    env.click("dlgBtnMask");
+    expect(env.view() === "result" && !env.el("dlgBtnMask").classList.contains("active"), "'Маска' again must return to the cleaned photo");
+    expect(env.recomputes().length === 0, "switching views must not ask the server for anything");
+    await env.close();                                       // the next opening starts with the cleaned photo again
+  });
+
+  await scenario("a brush stroke shows the mask by itself; holding outside the photo lifts it", {}, async (env, expect) => {
+    await env.open();
+    expect(env.view() === "result", "cleaned photo first");
+    env.press("dlgViewport", 100);                           // inside the photo, the eraser is the tool on start
+    expect(env.view() === "mask", "a stroke edits the mask, so the mask must appear; got " + env.view());
+    env.move(120);
+    env.release();
+    await env.settle(200);
+    const edits = env.of("/session/mask-edit");
+    expect(edits.length === 1 && edits[0].body.op === "stroke" && edits[0].body.erase === true, "the eraser stroke must reach the server");
+    env.press("dlgViewport", 900);                           // outside the photo: a look at the clean result
+    expect(env.view() === "result", "holding outside the photo must lift the mask, got " + env.view());
+    env.release();
+    expect(env.view() === "mask", "...and the mask is back after the release, got " + env.view());
+    env.click("dlgBtnMask");
+    expect(env.view() === "result", "'Маска' switches it off");
+    env.click("dlgToolBrush");
+    expect(env.view() === "mask" && env.state("sessState.tool") === "brush", "picking the brush shows the mask");
+  });
+
+  // ---------------------------------------------------------------- presets
+  await scenario("a preset click: one light refresh with that preset's values, and a note about what changed",
+    { startMaskShare: 0.005, maskShares: [0.023] }, async (env, expect) => {
+      env.check("dlgChkAutoPreset", false);
+      await env.open();
+      env.click("dlgBtnPresets");
+      env.clickPreset("Темний ключ");
+      expect(env.el("dlgActivePresetName").textContent === "Темний ключ", "the button must show the clicked preset");
+      expect(!env.el("dlgPresetsPopover").classList.contains("visible"), "the list must close");
+      await env.settle(900);
+      const rc = env.recomputes();
+      expect(rc.length === 1, `one recompute expected, got ${rc.length}`);
+      if (rc[0]) {
+        const p = rc[0].body.params;
+        expect(rc[0].body.quick === true, "the refresh must be the light one");
+        expect(p.spots === 92 && p.scuffs === 55 && p.seam === 90 && p.edge === 78 && p.smoke === 70 && p.grain === 95,
+          "the values of 'Темний ключ' must be sent, got " + JSON.stringify(p));
+        expect(p.autoFractions === true, "AUTO stays on for a preset with all three fractions");
+      }
+      expect(env.badge().includes("Темний ключ") && env.badge().includes("2,3 %") && env.badge().includes("0,50 %"),
+        "the note must name the preset and both shares: " + env.badge());
+      expect(!env.progressCardVisible(), "no progress card for a preset");
+      env.click("dlgBtnPresets");
+      env.clickPreset("Темний ключ");                        // the same preset once more: nothing to compute
+      await env.settle(700);
+      expect(env.recomputes().length === 1, "the preset that is already on screen must not recompute");
+      expect(env.badge().includes("ті самі"), "...and the note must say so: " + env.badge());
+    });
+
+  await scenario("a preset that names its fractions switches AUTO off; the next preset gives AUTO back", {}, async (env, expect) => {
+    env.check("dlgChkAutoPreset", false);
+    await env.open();
+    expect(env.el("dlgFracAuto").classList.contains("active"), "AUTO is on at the start");
+    env.clickPreset("Ближній план");
+    await env.settle(800);
+    let p = env.recomputes()[0] && env.recomputes()[0].body.params;
+    expect(p && p.autoFractions === false && p.fracLarge === false && p.fracFine === true && p.fracMed === true,
+      "'Ближній план' must be sent with its own fractions (no large one) and AUTO off: " + JSON.stringify(p));
+    expect(!env.el("dlgFracAuto").classList.contains("active") && !env.el("dlgFracLarge").classList.contains("active"),
+      "the AUTO and the large-fraction buttons must be off");
+    env.clickPreset("Делікатний (точки)");
+    await env.settle(800);
+    p = env.recomputes()[1] && env.recomputes()[1].body.params;
+    expect(p && p.autoFractions === false && p.fracFine === true && p.fracMed === false && p.fracLarge === false,
+      "'Делікатний' must clean the fine fraction only: " + JSON.stringify(p));
+    env.clickPreset("Студія (Стандарт)");
+    await env.settle(800);
+    p = env.recomputes()[2] && env.recomputes()[2].body.params;
+    expect(p && p.autoFractions === true, "AUTO must be back with a preset that does not name fractions: " + JSON.stringify(p));
+    expect(env.el("dlgFracAuto").classList.contains("active"), "the AUTO button must be lit again");
+    expect(env.recomputes().length === 3, "three presets, three refreshes; got " + env.recomputes().length);
+    env.click("dlgFracAuto");                                // the user switches AUTO off himself...
+    env.clickPreset("Дальній план");
+    await env.settle(800);
+    p = env.recomputes()[3] && env.recomputes()[3].body.params;
+    expect(p && p.autoFractions === false, "...then presets leave it off: " + JSON.stringify(p));
+  });
+
+  await scenario("what a preset would send equals what the controls send once it is applied (all presets)", {}, async (env, expect) => {
+    const bad = env.state(`(function () {
+      const out = [];
+      const sorted = (o) => JSON.stringify(Object.keys(o).sort().map((k) => [k, o[k]]));
+      presetsList.forEach((p) => {
+        const before = presetRequestParams(p);
+        applyPreset(p);
+        const after = Object.assign(readCurrentConfig(), { autoFractions: fracAuto });
+        if (sorted(before) !== sorted(after)) out.push(p.id + ": " + sorted(before) + " vs " + sorted(after));
+      });
+      const odd = { id: "odd", builtin: false, cfg: { spots: 500, master: 20, blur: -4, cleanPasses: 7, fracAuto: false } };
+      const b2 = presetRequestParams(odd);
+      applyPreset(odd);
+      const a2 = Object.assign(readCurrentConfig(), { autoFractions: fracAuto });
+      if (sorted(b2) !== sorted(a2)) out.push("odd: " + sorted(b2) + " vs " + sorted(a2));
+      if (a2.spots !== 100 || a2.master !== 100 || a2.blur !== 0 || a2.cleanPasses !== 2 || a2.autoFractions !== false) out.push("limits: " + sorted(a2));
+      return out.join(" || ");
+    })()`);
+    expect(bad === "", "differences: " + bad);
+    expect(env.state("presetsList.length") >= 8, "the built-in presets must be loaded");
+  });
+
+  // ---------------------------------------------------------------- the automatic preset
+  await scenario("automatic preset: the presets travel with the photo, the server's choice lands on the controls",
+    { scene: { kind: "wide", framing: "wide", dark: false }, startMaskShare: 0.01 }, async (env, expect) => {
+      await env.open();
+      await env.settle(900);
+      const start = env.of("/session/start")[0];
+      const sp = start.body.scenePresets || {};
+      expect(Object.keys(sp).sort().join() === "close,dark,default,medium,wide", "five sets must be sent, got " + Object.keys(sp).sort().join());
+      expect(sp.wide && sp.wide.spots === 85 && sp.wide.scuffs === 78 && sp.wide.edge === 66 && sp.wide.speedMode === "fast" && sp.wide.autoFractions === true,
+        "the 'wide' set must be the preset 'Дальній план': " + JSON.stringify(sp.wide));
+      expect(sp.dark && sp.dark.spots === 92 && sp.close && sp.close.fracLarge === false && sp.close.autoFractions === false && sp.default && sp.default.spots === 75,
+        "the other sets must be 'Темний ключ', 'Ближній план', 'Студія'");
+      expect(env.state("activePresetId") === "wide_shot", "the active preset must be 'Дальній план', got " + env.state("activePresetId"));
+      expect(env.el("dlgActivePresetName").textContent === "Дальній план", "the button must show it");
+      expect(env.state("getSliderVal('gSlSpots')") === 85 && env.state("getSliderVal('gSlScuffs')") === 78, "the sliders must show its values");
+      expect(env.recomputes().length === 0, `the frame was already cleaned with this preset: no recompute, got ${env.recomputes().length}`);
+      expect(env.state("previewMatchesSettings()") === true, "the preview must count as up to date");
+      expect(env.badge().includes("Авто-пресет") && env.badge().includes("Дальній план") && env.badge().includes("повний зріст"),
+        "the note must say what was picked and why: " + env.badge());
+      expect(env.view() === "result", "cleaned photo on screen");
+      env.click("dlgBtnPresets");
+      env.clickPreset("Студія (Стандарт)");                  // a manual choice still works afterwards
+      await env.settle(800);
+      expect(env.recomputes().length === 1 && env.recomputes()[0].body.params.spots === 75, "a manual choice must refresh with its values");
+      expect(env.state("activePresetId") === "std", "...and become the active preset");
+    });
+
+  await scenario("automatic preset for a close-up: the preset's own fractions are used, AUTO steps aside",
+    { scene: { kind: "close", framing: "close", dark: false }, autoFractions: { fracFine: true, fracMed: true, fracLarge: true } }, async (env, expect) => {
+      await env.open();
+      await env.settle(600);
+      expect(env.state("activePresetId") === "closeup", "active preset: " + env.state("activePresetId"));
+      expect(!env.el("dlgFracAuto").classList.contains("active"), "AUTO must be off for this preset");
+      expect(env.el("dlgFracFine").classList.contains("active") && env.el("dlgFracMed").classList.contains("active") && !env.el("dlgFracLarge").classList.contains("active"),
+        "fine + medium on, large off");
+      expect(env.recomputes().length === 0, "no recompute after the opening");
+      expect(env.state("previewMatchesSettings()") === true, "the preview must count as up to date");
+      await env.close();
+    });
+
+  await scenario("automatic preset: a dark frame takes 'Темний ключ'; a deleted preset falls back to 'Студія'",
+    { scene: { kind: "dark", framing: "wide", dark: true } }, async (env, expect) => {
+      env.state("presetsList = presetsList.filter((p) => p.id !== 'lowkey' && p.id !== 'wide_shot'); renderPresets();");
+      await env.open();
+      await env.settle(600);
+      const sp = env.of("/session/start")[0].body.scenePresets || {};
+      expect(!sp.dark && !sp.wide && sp.default, "deleted presets must not be offered: " + Object.keys(sp).join());
+      expect(env.state("activePresetId") === "std", "the fallback preset must be used, got " + env.state("activePresetId"));
+      expect(env.badge().includes("Студія") && env.badge().includes("темний фон"), "the note: " + env.badge());
+    });
+
+  await scenario("automatic preset switched off: nothing is offered, the chosen preset stays", { scene: { kind: "wide", framing: "wide", dark: false } }, async (env, expect) => {
+    env.check("dlgChkAutoPreset", false);
+    env.state("applyPreset(presetsList.find((p) => p.id === 'smoke')); renderPresets();");
+    await env.open();
+    await env.settle(600);
+    const start = env.of("/session/start")[0];
+    expect(start.body.scenePresets === undefined, "no presets may be sent when the automatic choice is off");
+    expect(start.body.params.smoke === 95, "the chosen preset's values are sent");
+    expect(env.state("activePresetId") === "smoke", "the chosen preset stays");
+    expect(env.badge() === "", "no note: " + env.badge());
+    expect(env.recomputes().length === 0, "no recompute");
+  });
+
+  await scenario("sliders touched during the first scan win over the automatic preset", { startDelay: 500, scene: { kind: "wide", framing: "wide", dark: false } }, async (env, expect) => {
+    env.click("btnRun");
+    await sleep(150);
+    await env.drag("gSlSpots", 40);
+    await env.waitFor(() => env.state("sessState.id"));
+    await env.settle(1200);
+    expect(env.state("activePresetId") === "std", "the preset must not be swapped under the user's hand, got " + env.state("activePresetId"));
+    expect(env.state("getSliderVal('gSlSpots')") === 40, "the user's value stays");
+    expect(env.recomputes().length === 1 && env.recomputes()[0].body.params.spots === 40, "one refresh for the user's values");
+    expect(env.state("previewMatchesSettings()") === true, "the preview is up to date afterwards");
+  });
+
+  await scenario("a server of another version left running: the panel says how to restart it", { version: "4.2.0" }, async (env, expect) => {
+    const text = env.el("statusBanner").classList.contains("visible") ? env.el("statusBannerText").textContent : "";
+    expect(text.includes("4.2.0") && text.includes(PLUGIN_VERSION) && text.includes("restart_gpu_server.bat"), "the banner must name both versions and the file to run: " + text);
+    expect(env.state("serverOnline") === true, "the older server is still used");
+    await env.open();                                        // ...and the window still works with it
+    expect(env.view() === "result", "the window opens");
+  });
+
+  await scenario("a server of the same version: no banner", {}, async (env, expect) => {
+    expect(!env.el("statusBanner").classList.contains("visible"), "no banner expected: " + env.el("statusBannerText").textContent);
+    expect(env.state("PLUGIN_VERSION") === PLUGIN_VERSION, `main.js says ${env.state("PLUGIN_VERSION")}, manifest.json says ${PLUGIN_VERSION}`);
+  });
+
+  // ---------------------------------------------------------------- a press made before the server is ready
+  await scenario("'Очистити фон' pressed while the server is starting is remembered and runs by itself",
+    { online: false, bootMs: 1700 }, async (env, expect) => {
+      expect(env.server.launches === 1, "the panel must ask for the server once on opening, got " + env.server.launches);
+      env.click("btnRun");
+      await sleep(300);
+      expect(env.el("btnRun").textContent.includes("Чекаю на сервер"), "the button must say it is waiting: " + env.el("btnRun").textContent.trim());
+      expect(env.el("footerStatus").textContent.includes("почнеться само"), "the panel must explain: " + env.el("footerStatus").textContent);
+      expect(env.of("/session/start").length === 0, "nothing can start before the server answers");
+      expect(!env.el("serverErrorCard").classList.contains("visible"), "no error while the server is still starting");
+      const opened = await env.waitFor(() => env.state("sessState.id"), 6000);
+      expect(opened, "the window must open by itself once the server answers: " + env.el("footerStatus").textContent);
+      expect(env.of("/session/start").length === 1, "exactly one scan, got " + env.of("/session/start").length);
+      expect(env.server.launches === 1, "the server must not be launched a second time, got " + env.server.launches);
+      expect(env.el("btnRun").textContent.trim() === "Очистити фон", "the button text must be back: " + env.el("btnRun").textContent.trim());
+      expect(!env.el("btnRun").classList.contains("waiting"), "the waiting look must be gone");
+      expect(!env.el("serverErrorCard").classList.contains("visible"), "no error card");
+      expect(env.el("gpuStatusText").textContent.includes("Test GPU"), "the status must show the GPU: " + env.el("gpuStatusText").textContent);
+    });
+
+  await scenario("the status turns green by itself after a slow start, without any press", { online: false, bootMs: 2300 }, async (env, expect) => {
+    await sleep(1200);
+    expect(env.state("serverOnline") === false && env.el("gpuStatusText").textContent.includes("Запуск"), "still starting: " + env.el("gpuStatusText").textContent);
+    expect(env.el("btnPlayServer").style.display === "none", "no ▶ button while the start is in progress");
+    const up = await env.waitFor(() => env.state("serverOnline") === true, 5000);
+    expect(up, "the plugin must notice the server by itself");
+    expect(env.el("gpuStatusBtn").className === "gpu-pill", "the status must be green: " + env.el("gpuStatusBtn").className);
+    expect(env.of("/session/start").length === 0, "nothing opens by itself when no button was pressed");
+    expect(env.server.launches === 1, "one launch");
+  });
+
+  await scenario("pressing the waiting button again takes the press back", { online: false, bootMs: 1500 }, async (env, expect) => {
+    env.click("btnRun");
+    await sleep(250);
+    expect(env.el("btnRun").classList.contains("waiting"), "waiting");
+    env.click("btnRun");
+    await sleep(100);
+    expect(!env.el("btnRun").classList.contains("waiting") && env.el("btnRun").textContent.trim() === "Очистити фон", "the button must be back to normal");
+    expect(env.el("footerStatus").textContent.includes("Скасовано"), "the panel must confirm: " + env.el("footerStatus").textContent);
+    await env.waitFor(() => env.state("serverOnline") === true, 5000);
+    await sleep(400);
+    expect(env.of("/session/start").length === 0, "a press that was taken back must not run");
+    expect(env.state("sessState.open") === false && env.state("isBusy") === false, "nothing is open");
+    env.click("btnRun");                                     // and the button works as usual afterwards
+    expect(await env.waitFor(() => env.state("sessState.id"), 3000), "a new press opens the window");
+  });
+
+  await scenario("another button pressed while waiting replaces the remembered press", { online: false, bootMs: 1500 }, async (env, expect) => {
+    env.click("btnRun");
+    await sleep(200);
+    env.click("btnFormat57");
+    await sleep(200);
+    expect(!env.el("btnRun").classList.contains("waiting") && env.el("btnFormat57").classList.contains("waiting"), "only the last pressed button waits");
+    await env.waitFor(() => env.of("/extend-canvas").length > 0, 5000);
+    await sleep(300);
+    expect(env.of("/extend-canvas").length === 1 && env.of("/session/start").length === 0, "the last press runs, the first one does not");
+  });
+
+  await scenario("the document changed while the server was starting: the remembered press is dropped", { online: false, bootMs: 1200 }, async (env, expect) => {
+    env.click("btnRun");
+    await sleep(200);
+    env.state("require('photoshop').app.activeDocument = { id: 8, mode: 'RGBColorMode', layers: [] }");
+    await env.waitFor(() => env.state("serverOnline") === true, 5000);
+    await sleep(400);
+    expect(env.of("/session/start").length === 0, "another document must not be scanned by a press made for the first one");
+    expect(env.el("footerStatus").textContent.includes("документ"), "the panel must say why: " + env.el("footerStatus").textContent);
+    expect(env.state("isBusy") === false, "not busy");
+  });
+
+  await scenario("the server never starts: the wait ends with the error card, the press is dropped", { online: false }, async (env, expect) => {
+    env.click("btnRun");
+    await sleep(1000);
+    expect(env.el("btnRun").classList.contains("waiting"), "waiting");
+    expect(!env.el("serverErrorCard").classList.contains("visible"), "no error card during the wait");
+    env.state("cvClockSkewMs = 26000");                      // 26 s later: a hint, still waiting
+    await sleep(1000);
+    expect(env.el("statusBanner").classList.contains("visible") && env.el("statusBannerText").textContent.includes("start_gpu_server.bat"),
+      "after a while the panel must say what to do if no server window appeared");
+    expect(env.el("btnRun").classList.contains("waiting"), "still waiting");
+    env.state("cvClockSkewMs = 151000");                     // 2.5 minutes later
+    await sleep(1100);
+    expect(env.el("serverErrorCard").classList.contains("visible"), "the error card must appear when the wait is over");
+    expect(!env.el("btnRun").classList.contains("waiting") && env.el("btnRun").textContent.trim() === "Очистити фон", "the button must be back to normal");
+    expect(env.el("gpuStatusText").textContent === "Вимк." && env.el("btnPlayServer").style.display !== "none", "status 'Вимк.' with the ▶ button");
+    expect(env.of("/session/start").length === 0 && env.state("isBusy") === false, "nothing started");
+    expect(env.server.launches === 1, "one launch request, got " + env.server.launches);
+  });
+
   const failed = results.filter((r) => r.problems.length);
+  if (!results.length) {
+    console.log("plugin preview: no scenario has that text in its name");
+    process.exit(1);
+  }
   console.log(failed.length
     ? `plugin preview: ${failed.length} of ${results.length} scenarios FAILED`
-    : `plugin preview: ${results.length} scenarios pass (drag -> nothing; release -> one light refresh; Apply carries the settings)`);
+    : `plugin preview: ${results.length} scenarios pass (drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press)`);
   process.exit(failed.length ? 1 : 0);
 }
 

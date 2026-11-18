@@ -1,5 +1,7 @@
 // Runs the real setIdleUnloadSec / buildSettingsSnapshot / applySettingsSnapshot of the plugin (main.js)
-// in a stub environment and checks the move of the idle-unload default from 30 s to 2 minutes:
+// in a stub environment and checks the move of the idle-unload default from 30 s to 2 minutes, and that the
+// settings added in 4.3.0 (automatic preset; the AUTO button of the fractions as the user left it and as the
+// active preset made it) are read from old and new files and written back:
 //   node tests/plugin_settings.test.js
 const fs = require("fs");
 const path = require("path");
@@ -23,7 +25,7 @@ if (!consts) throw new Error("idle-unload constants block not found in main.js")
 
 const code = `
 ${consts[0]}
-let activePresetId = "std", speedMode = "fast", makeMaskDefault = false, fracAuto = true;
+let activePresetId = "std", speedMode = "fast", makeMaskDefault = false, fracAuto = true, fracAutoUser = true, autoPreset = true;
 let deletedDefaultIds = [], knownDefaultIds = [], presetsList = [];
 const sessState = { brushSize: 24 };
 const pills = [30, 120, 300, 0].map((sec) => ({ dataset: { sec: String(sec) }, active: sec === 120 }));
@@ -33,11 +35,13 @@ function scheduleSaveSettings() {}
 function readCurrentConfig() { return {}; }
 function applyConfig() {}
 ${grab("setIdleUnloadSec")}
+${grab("setAutoPreset")}
 ${grab("buildSettingsSnapshot")}
 ${grab("applySettingsSnapshot")}
 module.exports = function run(snapshot) {
   idleUnloadSec = DEFAULT_IDLE_UNLOAD_SEC;
   settingsMigrated = false;
+  fracAuto = fracAutoUser = autoPreset = true;
   pills.forEach((p) => (p.active = Number(p.dataset.sec) === 120));
   applySettingsSnapshot(snapshot);
   return {
@@ -78,5 +82,22 @@ for (const [name, snapshot, expSec, expMigrated] of cases) {
     console.log("FAIL " + name + " -> " + JSON.stringify(r));
   }
 }
-console.log(failed ? `plugin settings migration: ${failed} of ${cases.length} cases FAILED` : `plugin settings migration: ${cases.length} cases pass`);
+// [name, saved file, expected in the file written back: autoPreset, fracAuto (the user's choice), fracAutoNow]
+const newKeys = [
+  ["a file of 4.2.0: the automatic preset is on, AUTO as saved", { schemaVersion: 5, fracAuto: true }, true, true, true],
+  ["a file of 4.2.0 with AUTO switched off", { schemaVersion: 5, fracAuto: false }, true, false, false],
+  ["automatic preset switched off", { schemaVersion: 5, autoPreset: false, fracAuto: true }, false, true, true],
+  ["a preset that names its fractions was active", { schemaVersion: 5, fracAuto: true, fracAutoNow: false }, true, true, false],
+  ["nothing saved yet", {}, true, true, true],
+  ["broken values are ignored", { autoPreset: "no", fracAuto: 0, fracAutoNow: "x" }, true, true, true]
+];
+for (const [name, snapshot, expAutoPreset, expUser, expNow] of newKeys) {
+  const r = run(snapshot);
+  if (r.saved.autoPreset !== expAutoPreset || r.saved.fracAuto !== expUser || r.saved.fracAutoNow !== expNow) {
+    failed++;
+    console.log("FAIL " + name + " -> " + JSON.stringify(r.saved));
+  }
+}
+const total = cases.length + newKeys.length;
+console.log(failed ? `plugin settings migration: ${failed} of ${total} cases FAILED` : `plugin settings migration: ${total} cases pass`);
 process.exit(failed ? 1 : 0);

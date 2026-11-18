@@ -29,17 +29,28 @@ written here and in the repository.
   - he must always know where to download ("де качати") — see section 6.
 - Decisions he made on 2026-11-18: the work may be published in this public repository, and finished versions
   are merged into `main`.
+- Decisions he made for 4.3.0 (asked with two option cards): a button pressed while the server is starting is
+  remembered and runs by itself, but **nothing opens without a press**; a full-length photo gets the preset
+  «Дальній план» automatically (not «Студія (Стандарт)»).
+- He reports problems as a short numbered list. When a point can be read two ways and the readings behave
+  differently for him, ask with an option card (one click for him) instead of guessing.
 
 ## 2. What is in the repository
 
 | Path | What it is | Rule |
 |---|---|---|
-| `CleanVinylPro/` | the ORIGINAL program, v3.2.1 (plugin, server, a committed Windows `.venv`) | **Never modify.** The checks use it as the reference, and he may still run it. |
 | `CleanVinylPro2/` | the program under development, «Чистий Вініл Pro 2» | all product work goes here |
+| `tests/baseline_v321/` | six files of the ORIGINAL program, v3.2.1, byte for byte: `engine.py`, `server.py`, `setup_launcher.py`, `manifest.json`, `install_windows.bat`, `pyvenv.cfg` | **Never modify.** They are the reference the checks compare with. |
 | `CleanVinylPro2.zip` | the download for the owner: the folder `CleanVinylPro2`, zipped | never edit by hand; rebuild with `tools/build_zip.py` |
 | `tests/` | self-checks that need no GPU, no models and no Photoshop; `tests/README.md` (Ukrainian) describes them | keep them passing |
 | `tools/` | `build_ccx.py`, `build_zip.py`, `serve_download.py` | |
 | `README.md` | the owner's own instruction (Ukrainian): download, install, how to continue with an agent | keep it true |
+
+The original program (folder `CleanVinylPro/`, 7,812 files, 666 MB with a committed Windows `.venv`) was removed
+from the repository in 4.3.0 because the owner asked for it. It is still in the history (first commit
+`daae6ed`), and it is still installed on his PC in `D:\CleanVinylPro` - the new program must keep running next
+to it (table below). Removing the folder did not make the GitHub repository smaller; only rewriting the history
+would, and he has not been asked about that.
 
 ### The product
 
@@ -79,29 +90,54 @@ Both programs must be able to run side by side, so nothing is shared with the or
   `<LIBS_DIR>\py312`; the program folder keeps only a pointer `server\.venv`. The installer takes libraries
   and models from another copy of the program on the PC before it downloads anything, and re-links
   everything after Python moves. Image processing is unchanged from 4.1.0.
+- **4.3.0** — the big window and the panel; the cleaning itself is unchanged from 4.1.0.
+  - Three views of the photo, one at a time (`sessState.view`, `setView`): the window opens with the cleaned
+    photo; «До / Після» switches original and cleaned photo; «Маска» shows the red/green mask. Brush, eraser and
+    inversion switch the mask on by themselves. (Before, the window opened with the mask and «До / Після»
+    compared the original with the mask.)
+  - Automatic preset: the plugin sends its presets by kind of frame with `/session/start` (`scenePresets`), the
+    engine looks at the frame (`_scene_info`: dark backdrop / close-up / cut at the waist or knees / whole
+    figure) and cleans with the suitable set from the start; the answer carries `scene`. Mapping in `main.js`:
+    `AUTO_PRESET_BY_SCENE` (dark → `lowkey`, close → `closeup`, medium → `medium_shot`, wide → `wide_shot`,
+    default → `std`), matched by preset id. Checkbox «Авто: підбирати пресет під кадр» in the preset list.
+  - Presets: a click gives one light refresh and a note in the corner of the photo telling what changed
+    (`mask_share` in the answers = share of the frame that is green). Built-in presets that switch a fraction
+    off («Ближній план», «Делікатний») now turn the AUTO button of the fractions off - AUTO used to overrule
+    them (`presetFracAuto`, `fracAutoUser`).
+  - Server start: one launch request, then a patient wait of up to 150 s (it was 9-12 s, shorter than a cold
+    start); the status turns green by itself. A button pressed meanwhile is remembered
+    (`ensureServerForAction`, `pendingPress`); a second press takes it back.
+  - The panel shows a banner when the running server reports another version (`PLUGIN_VERSION`).
 
 ## 3. Current state — update this at the end of every session
 
-_Last updated: 2026-11-18, by the agent of the first session._
+_Last updated: 2026-11-18, by the agent of the first session, after releasing 4.3.0._
 
-- **Released:** 4.2.0, tag `cvp2-v4.2.0`, as a pre-release. Direct download:
-  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.2.0/CleanVinylPro2.zip`
-- **Owner's progress:** he downloaded 4.2.0, unpacked it to `D:\Plugin Photoshop\CleanVinylPro2`, and was
-  given the install steps (run `install_windows.bat` as administrator, then double-click the `.ccx`).
-  **The result of his first install is not known yet.** Expect a screenshot or log text next.
-- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (26 results) on 2026-11-18,
-  with NumPy 2.4.6 and OpenCV 5.1.0, set up exactly as in section 4.
-- **Never run so far:** the `.bat` files in a real `cmd.exe` (they were only linted), the installer on Windows
-  with the real CUDA libraries, the GPU, the real BRIA and LaMa models, the panel inside Photoshop. Treat every
-  one of these as likely to need a fix after his first report.
+- **Released:** 4.3.0, tag `cvp2-v4.3.0`, as a pre-release. Direct download:
+  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.3.0/CleanVinylPro2.zip`
+- **Owner's progress:** 4.2.0 is installed and works on his PC (install log of 2026-11-18): the installer
+  copied the libraries from the old program (2.0 GB, no download), found the models in `D:\model AI fotoshop`,
+  LaMa ran on `CUDAExecutionProvider`, the panel opened in Photoshop with a green status. So the `.bat` files,
+  the installer, the GPU, the real models and the panel HAVE run on Windows once, with 4.2.0.
+  After using it he sent a list of wishes; 4.3.0 answers it. **He has not reported on 4.3.0 yet.**
+- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (27 results, 35 scenarios of
+  the panel test among them) on 2026-11-18, with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4.
+  Deliberate defects: 20 put into `main.js` and 10 into the engine / server; the checks caught 29, the 30th
+  changes nothing but speed. The real panel code was also run once against the real server code over HTTP
+  (stand-in networks): open with the automatic preset, preset clicks, the three views, «Застосувати».
+- **Not run in Photoshop yet (4.3.0):** everything new in the big window and on the panel - only the simulated
+  browser of `tests/plugin_preview.test.js` has seen it. In particular: the look of the new buttons in UXP, the
+  remembered press with the real launcher, the automatic preset with the real BRIA silhouettes (the framing
+  rule was validated with another person-segmentation model, see section 4).
 - **Merging:** pull request #1 (`arena/33f1ced8-cleanvinylpro-beta` into `main`) is open and deliberately not
-  merged yet: the owner is installing 4.2.0 for the first time, and the fixes that follow should come from the
-  session that knows the code. Merge it when that session ends (section 6). If `main` already contains this
-  file, that has happened.
+  merged yet: fixes that follow his report on 4.3.0 should come from the session that knows the code. Merge it
+  when that session ends or when he writes «зливай» (section 6). If `main` already contains this file, that
+  has happened. Merging also removes the folder `CleanVinylPro/` from `main`.
 
 ### Offered to the owner, not built (he has not asked for them)
 
-- make the original 3.2.1 use the shared folders too (after his moves it probably no longer starts);
+- rewriting the history so that the 666 MB of the removed original program really leave GitHub (needs a force
+  push of `main`; ask him first, and do it only at the very start of a session);
 - a switch "update nothing until I press a button" for the big window;
 - a turnkey preset, a wall/floor switch, batch processing.
 
@@ -109,6 +145,17 @@ _Last updated: 2026-11-18, by the agent of the first session._
 
 - Write the install log as `install_log.txt` instead of `install.log`: Arena accepts `.txt` uploads and
   rejects `.log`, so today he has to paste the text.
+
+### Known limits of the automatic preset
+
+- The framing is read from the silhouette only. Checked on 44 real photos: 40 as judged by eye; the misses were
+  neighbouring classes in unusual frames (a tight group, a jump). A raised hand above the head, a hat or very
+  big hair can shift the answer by one class.
+- "Dark" means: median brightness of the backdrop below 26 of 255 (`SCENE_DARK_LUMA`). His dark-grey sample
+  (about 31-35) is therefore NOT dark and gets «Дальній план»; his black sample (about 19) gets «Темний ключ».
+  If he disagrees, this one number moves.
+- Presets differ mostly in search sensitivity, so the cleaned photo changes little between them; the difference
+  shows in the mask. That is why the note after a preset click gives the share of the frame that is green.
 
 ### Known limits of the image processing
 
@@ -127,7 +174,7 @@ python3 -m venv /tmp/cvenv
 /tmp/cvenv/bin/pip install numpy opencv-python-headless fastapi uvicorn httpx Pillow
 npm install --prefix tests jsdom@24      # for the panel test; the folder is git-ignored
 
-# the checks: the quick run takes about 9 minutes and ends with "ALL CHECKS PASSED"
+# the checks: the quick run takes about 10 minutes and ends with "ALL CHECKS PASSED"
 /tmp/cvenv/bin/python tests/run_checks.py
 /tmp/cvenv/bin/python tests/run_checks.py install bat    # only the groups named
 /tmp/cvenv/bin/python tests/run_checks.py --full         # more random cases
@@ -137,15 +184,23 @@ python3 tools/build_ccx.py && python3 tools/build_zip.py
 python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
 ```
 
-- Run the 9-minute check in the background and poll it; a single blocking wait times out.
+- Run the 10-minute check in the background and poll it; a single blocking wait times out.
+- The comparisons with v3.2.1 (`process`, `session`, `http`) load the old engine and server from
+  `tests/baseline_v321/`. If that folder is missing they are skipped and the group `server` fails.
+- No real AI models here, so what the person-matting model returns is faked (`FakeMatting`). To try something
+  on real photos with real silhouettes, MediaPipe's person segmentation is a usable stand-in:
+  `python3 -m venv /tmp/mpenv && /tmp/mpenv/bin/pip install mediapipe==0.10.14 opencv-python-headless==4.10.0.84`
+  (uninstall `opencv-contrib-python` first: it needs libGL). Public test photos of people:
+  `https://codeload.github.com/xuebinqin/U-2-Net/tar.gz/refs/heads/master`, folder `test_data`. The framing rule
+  of the automatic preset was tuned this way.
 - `tools/*.py`, `server/setup_env.py` and `tests/install_checks.py` need only the standard library.
 - The group `install` runs the real `setup_env.py` in imitated PCs with stand-in packages. The group `bat`
   only reads the `.bat` files the way `cmd.exe` does; it cannot run them.
 - **Line endings:** the eight `.bat`, `folders.ini` and the `.txt` manual must stay CRLF, or `cmd.exe` can lose
   labels. `.gitattributes` stores them untouched (`-text`), `build_zip.py` restores CRLF, and `--check` proves it.
-- **Version number:** it lives in `server/server.py` (`APP_VERSION`), `uxp-plugin/manifest.json`, the `echo`
-  lines of `install_windows.bat`, `start_gpu_server.bat` and `restart_gpu_server.bat`, and the manual. The
-  group `server` fails if they disagree.
+- **Version number:** it lives in `server/server.py` (`APP_VERSION`), `uxp-plugin/manifest.json`,
+  `uxp-plugin/main.js` (`PLUGIN_VERSION`), the `echo` lines of `install_windows.bat`, `start_gpu_server.bat`
+  and `restart_gpu_server.bat`, and the manual. The group `server` fails if they disagree.
 - **The owner's photos** arrive in `/tmp/arena-coding-uploads/`. They show his clients: never commit them and
   never publish previews made from them. `_local/` is git-ignored for such experiments.
 
@@ -161,6 +216,15 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
 - A failed download must not fall back to the program-folder layout (`DownloadError` is re-raised).
 - jsdom: run the panel with `vm.Script(...).runInContext(dom.getInternalVMContext())` and close the window only
   after its requests and timers have finished.
+- The panel test can move the plugin's clock (`cvClockSkewMs`) - that is how the 150 s wait for a server that
+  never starts is lived through in a second.
+- `check_http` compares whole JSON answers of the old and the new server: a new key in an answer must be added
+  to the ignore list in its `norm()`.
+- The built-in presets are stored on the owner's PC (`presets_local.json`, `user_presets.json`) the way they
+  were when first seen: changing a value in `DEFAULT_PRESETS` / `presets_defaults.json` does NOT reach an
+  existing installation. New behaviour for an existing preset must be derived in code (as `presetFracAuto` does).
+- A preset click often changes almost nothing in the cleaned preview. Measure before you conclude that a click
+  "does not work": the engine recomputes, the picture just stays within a few levels.
 - Badge texts in the panel avoid the glyphs ⚙ and ⟳; keep avoiding them.
 - Pyflakes reports "undefined name 'weighted'" in `engine.py` and an unused `k` in `tests/run_checks.py`. Both
   are harmless; leave them.

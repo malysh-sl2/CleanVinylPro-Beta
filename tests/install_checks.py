@@ -32,7 +32,17 @@ sys.dont_write_bytecode = True
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP_DIR = os.path.join(REPO_ROOT, "CleanVinylPro2")
 SERVER_DIR = os.path.join(APP_DIR, "server")
-OLD_APP_DIR = os.path.join(REPO_ROOT, "CleanVinylPro")
+# What is kept of the original program (v3.2.1; its folder left the repository in version 4.3.0): the files the
+# checks compare with, exactly as they were.
+BASELINE_DIR = os.path.join(REPO_ROOT, "tests", "baseline_v321")
+# The Python environment of the original program on the owner's PC: Windows layout, real file names (no contents)
+OLD_ENV_FILES = (
+    "Lib/site-packages/numpy/__init__.py", "Lib/site-packages/numpy/_core/_multiarray_umath.cp312-win_amd64.pyd",
+    "Lib/site-packages/cv2/__init__.py", "Lib/site-packages/PIL/__init__.py", "Lib/site-packages/fastapi/__init__.py",
+    "Lib/site-packages/uvicorn/__init__.py", "Lib/site-packages/onnxruntime/__init__.py",
+    "Lib/site-packages/onnxruntime/capi/onnxruntime_providers_shared.dll",
+    "Lib/site-packages/onnxruntime/capi/onnxruntime_providers_tensorrt.dll",
+)
 if SERVER_DIR not in sys.path:
     sys.path.insert(0, SERVER_DIR)
 
@@ -460,9 +470,16 @@ def _unit_checks(bad):
     if S.py_tag((3, 12, 10)) != "py312":
         bad.append("py_tag")
 
-    # the environment the owner's PC really has (stored in the repository in the Windows layout)
-    old_env = os.path.join(OLD_APP_DIR, "server", ".venv")
-    if os.path.isdir(old_env):
+    # the environment of the original program as the owner's PC has it: its real pyvenv.cfg in the Windows layout
+    old_cfg = os.path.join(BASELINE_DIR, "pyvenv.cfg")
+    if not os.path.isfile(old_cfg):
+        bad.append("tests/baseline_v321/pyvenv.cfg is missing")
+    else:
+        old_env = tempfile.mkdtemp(prefix="cv_oldenv_")
+        shutil.copy(old_cfg, old_env)
+        for rel in OLD_ENV_FILES:
+            os.makedirs(os.path.dirname(os.path.join(old_env, rel)), exist_ok=True)
+            open(os.path.join(old_env, rel), "wb").close()
         site = S.guess_site_packages(old_env)
         info = S.donor_info(old_env)
         if not site.endswith(os.path.join("Lib", "site-packages")) or S.cfg_tag(old_env) != "py312" or S.files_tag(site) != "py312":
@@ -470,7 +487,7 @@ def _unit_checks(bad):
         if info is None or info["tag"] != "py312" or S.is_thin(old_env) or not S.is_full(old_env):
             bad.append(f"the real environment of the old program is not accepted as a source of libraries: {info}")
         elif info["cuda"]:
-            bad.append("the repository copy has no CUDA provider file, yet it was reported")
+            bad.append("that environment has no CUDA provider file, yet one was reported")
         if not S.other_version(old_env, "py313") or S.other_version(old_env, "py312"):
             bad.append("other_version on the real environment")
         tmp = tempfile.mkdtemp(prefix="cv_cfg_")
@@ -484,6 +501,7 @@ def _unit_checks(bad):
                 bad.append(f"pyvenv.cfg of the old program after re-linking: {cfg!r}")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+            shutil.rmtree(old_env, ignore_errors=True)
 
     # copying the libraries of another copy of the program: all or nothing
     tmp = tempfile.mkdtemp(prefix="cv_adopt_")
@@ -1010,9 +1028,11 @@ def check_bat(report):
     ):
         if not lint_bat("bad.bat", mutation):
             bad.append(f"the reader misses: {what}")
-    old_install = os.path.join(OLD_APP_DIR, "install_windows.bat")
-    if os.path.isfile(old_install):  # the installer of v3.2.1 has two of these mistakes in its last lines
-        found = lint_bat("old", open(old_install, "rb").read().decode("utf-8").replace("\r\n", "\n").replace("\n", "\r\n"), OLD_APP_DIR)
+    old_install = os.path.join(BASELINE_DIR, "install_windows.bat")
+    if not os.path.isfile(old_install):
+        bad.append("tests/baseline_v321/install_windows.bat is missing")
+    else:  # the installer of v3.2.1 has two of these mistakes in its last lines
+        found = lint_bat("old", open(old_install, "rb").read().decode("utf-8").replace("\r\n", "\n").replace("\n", "\r\n"), BASELINE_DIR)
         if not any("block would end early" in p for p in found) or not any("unescaped" in p for p in found):
             bad.append("the reader misses the two known mistakes of the v3.2.1 installer")
     report("bat", not bad, f"{len(names)} .bat files read the way cmd.exe does: brackets, labels, texts, variables, the Python inside "

@@ -16,3 +16,6 @@ CleanVinylPro2/*.bat -text
 CleanVinylPro2/*.cmd -text
 CleanVinylPro2/*.txt -text
 CleanVinylPro2/*.ini -text
+
+# The files kept of the original program (v3.2.1) are a reference: stored byte for byte, never converted.
+tests/baseline_v321/** -text

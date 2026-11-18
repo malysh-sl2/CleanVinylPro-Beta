@@ -85,9 +85,9 @@
 
       <div class="panel-help-box" id="panelHelpBox">
         <b>Як працювати:</b><br/>
-        1. Відкрийте RGB-фото (8 або 16 біт) і натисніть <b>«Очистити фон»</b>.<br/>
-        2. У новому вікні AI сам знайде дефекти. Одразу активна <b>Гумка (E)</b> — просто стирайте зайве зелене.<br/>
-        3. Затисніть мишку <b>поза фото</b> — побачите чистий результат без червоного/зеленого.<br/>
+        1. Відкрийте RGB-фото (8 або 16 біт) і натисніть <b>«Очистити фон»</b>. Якщо сервер ще запускається — вікно відкриється само, щойно він буде готовий.<br/>
+        2. Вікно відкривається одразу з <b>чистим фото</b>; пресет підбирається сам під кадр. <b>«До / Після»</b> — порівняти з оригіналом.<br/>
+        3. <b>«Маска»</b> показує зеленим, що буде очищено. <b>Гумка (E)</b> стирає зайве зелене, <b>Пензель (B)</b> домальовує.<br/>
         4. Натисніть <b>«Застосувати»</b> — у Photoshop одразу створиться новий шар.<br/>
         5. <b>«Формат 5:7»</b> — за потреби розширює кадр під друк і добудовує фон з боків (окремим шаром).
       </div>
@@ -105,16 +105,17 @@
       <!-- ВЕРХНЯ ПАНЕЛЬ -->
       <div class="r4m-topbar">
         <div class="r4m-top-left">
-          <!-- До / Після (тільки іконка без слів) -->
-          <div role="button" tabindex="0" class="r4m-icon-btn" id="dlgBtnBeforeAfter" data-tip="До / Після — перемикає між оригіналом (ДО) і робочим переглядом">
+          <!-- До / Після: оригінал <-> чисте фото (ніколи не червоно-зелена маска) -->
+          <div role="button" tabindex="0" class="r4m-text-btn" id="dlgBtnBeforeAfter" data-tip="До / Після — показує фото, яким воно було (ДО). Натисніть ще раз — знову чисте фото (ПІСЛЯ). Без червоного й зеленого.">
             <img src="icons/ui/before_after.png" class="ui-icon" alt="" />
+            <span>До / Після</span>
           </div>
 
-          <!-- Автомаска (чекбокс + назва) -->
-          <label class="r4m-check-pill" id="dlgWrapAutoMask" data-tip="Автомаска — показувати яскраво-зелені зони очищення на червоному фоні">
-            <input type="checkbox" id="dlgChkAutoMask" checked />
-            <span>Автомаска</span>
-          </label>
+          <!-- Маска: показати, що саме буде очищено -->
+          <div role="button" tabindex="0" class="r4m-text-btn" id="dlgBtnMask" data-tip="Маска — показує, що саме буде очищено: зелене чиститься, червоне не чіпається. Гумка (E) стирає зайве зелене, Пензель (B) домальовує. Натисніть ще раз — знову чисте фото.">
+            <span class="mask-swatch"><span class="sw-red"></span><span class="sw-green"></span></span>
+            <span>Маска</span>
+          </div>
 
           <!-- Повзунок Змішування (0-100%) -->
           <div class="r4m-blend-box" data-tip="Змішування (Blend 0–100%) — плавно регулює силу ефекту наживо">
@@ -141,7 +142,7 @@
         <div class="r4m-top-right">
           <!-- Пресети (розгортається, всередині × і ✎) -->
           <div class="r4m-popover-anchor">
-            <div role="button" tabindex="0" class="r4m-presets-btn" id="dlgBtnPresets" data-tip="Пресети — вибір готового профілю, збереження (+), редагування (✎) або видалення (×)">
+            <div role="button" tabindex="0" class="r4m-presets-btn" id="dlgBtnPresets" data-tip="Пресети — пресет підбирається сам під кадр (галочка «Авто» у списку). Тут можна вибрати інший, зберегти свій (+), змінити порядок (✎) або видалити (×)">
               <span class="preset-dot" id="dlgActivePresetDot"></span>
               <span id="dlgActivePresetName">Студія (Стандарт)</span>
               <span class="caret">▾</span>
@@ -160,6 +161,10 @@
                 <div role="button" tabindex="0" class="small-save-btn" id="dlgBtnSaveNewPreset">ОК</div>
                 <div role="button" tabindex="0" class="small-cancel-btn" id="dlgBtnCancelNewPreset">×</div>
               </div>
+              <label class="ps-check auto-preset-row" data-tip="Авто-пресет — щоразу, коли відкривається це вікно, програма дивиться на кадр і сама ставить пресет: темний фон → «Темний ключ», голова й плечі → «Ближній план», по пояс або коліна → «Середній план», на повний зріст → «Дальній план», інакше «Студія (Стандарт)». Зніміть галочку, щоб лишався пресет, який вибрали ви.">
+                <input type="checkbox" id="dlgChkAutoPreset" checked />
+                <span>Авто: підбирати пресет під кадр</span>
+              </label>
               <div class="dlg-presets-list" id="dlgPresetsList"></div>
               <div role="button" tabindex="0" class="restore-presets-btn" id="dlgBtnRestorePresets" style="display:none">↺ Повернути видалені стандартні</div>
             </div>
@@ -272,10 +277,10 @@
             <div class="r4m-popover r4m-info-popover" id="dlgInfoPopover">
               <div class="pop-head"><span>Як користуватися</span><div role="button" tabindex="0" class="pop-sm-btn" id="dlgBtnCloseInfo">×</div></div>
               <div class="info-text">
-                • <b>При старті</b> одразу ввімкнена <b>Гумка (E)</b> — просто зітріть зайве зелене з одягу, взуття або тіней.<br/>
-                • <b>Пензель (B)</b> — домалюйте зелене там, де треба дочистити.<br/>
+                • Вікно відкривається з <b>чистим фото</b>. <b>«До / Після»</b> показує оригінал, ще раз — знову результат.<br/>
+                • <b>«Маска»</b> показує зеленим, що буде очищено. <b>Гумка (E)</b> стирає зайве зелене з одягу, взуття або тіней; <b>Пензель (B)</b> домальовує там, де треба дочистити. Перший же мазок сам вмикає маску.<br/>
                 • <b>Ctrl + Клік</b> по Пензлю — залити всю маску; по Гумці — очистити всю маску.<br/>
-                • <b>Натисніть і тримайте поза фото</b> — миттєво сховає червоне/зелене, щоб побачити чисте фото.<br/>
+                • <b>Пресет</b> підбирається сам під кадр; інший можна вибрати у списку вгорі праворуч.<br/>
                 • <b>Колесо миші</b> — зум; <b>[ / ]</b> — розмір пензля; <b>Пробіл + мишка</b> — рух фото.<br/>
                 • <b>Повзунки в налаштуваннях</b> — перегляд оновлюється сам, щойно відпустите повзунок. Повний розрахунок робиться один раз — під час <b>Застосувати</b>.
               </div>
@@ -296,12 +301,12 @@
           </div>
 
           <!-- Brush (Ctrl+Click fill) -->
-          <div role="button" tabindex="0" class="r4m-tool-btn" id="dlgToolBrush" data-tip="Пензель (B) — домалювати зелену зону очищення. Ctrl + Клік = залити всю маску">
+          <div role="button" tabindex="0" class="r4m-tool-btn" id="dlgToolBrush" data-tip="Пензель (B) — домалювати зелену зону очищення (маска вмикається сама). Ctrl + Клік = залити всю маску">
             <img src="icons/ui/brush.png" class="ui-icon" alt="" />
           </div>
 
           <!-- Eraser (Default on start! Ctrl+Click clear) -->
-          <div role="button" tabindex="0" class="r4m-tool-btn eraser-active" id="dlgToolEraser" data-tip="Гумка (E) — стерти зайве зелене, щоб не чіпати ділянку. Ctrl + Клік = стерти всю маску">
+          <div role="button" tabindex="0" class="r4m-tool-btn eraser-active" id="dlgToolEraser" data-tip="Гумка (E) — стерти зайве зелене, щоб не чіпати ділянку (маска вмикається сама). Ctrl + Клік = стерти всю маску">
             <img src="icons/ui/eraser.png" class="ui-icon" alt="" />
           </div>
 

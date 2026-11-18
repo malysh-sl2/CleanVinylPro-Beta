@@ -26,6 +26,8 @@ Part 2 - what Clean Vinyl Pro 2 does differently, each with its own measurable p
   smoke     smoke protection: no "protected ring" around the person; real smoke is still protected
   empty     a frame without people: nobody is invented
   format    format 5:7: size, seamless join, nothing drawn over the photo, 8/16 bit, both orientations
+  scene     automatic preset: the frame is recognised (whole figure / cut at the waist or knees / close-up / dark
+            backdrop) and the window opens exactly as if the suitable preset had been chosen by hand
 
 Part 3 - the program around the engine:
   server    settings migration, binary packets, one version everywhere, and no name / port shared with the
@@ -41,7 +43,8 @@ Part 4 - installing (tests/install_checks.py; needs nothing but Python):
             of the program needs no pip, a moved Python is re-linked, libraries of the old program are re-used
   bat       the .bat files read the way cmd.exe reads them (they cannot be run without Windows)
 
-The comparisons with v3.2.1 take that engine.py from the git history (CleanVinylPro/server at the first commit).
+The comparisons with v3.2.1 use the files of the original program kept in tests/baseline_v321 (engine.py, server.py
+and a few more, exactly as they were; the program itself is no longer in the repository).
 """
 import json
 import os
@@ -222,7 +225,7 @@ def _rand_selection(rng, w, h, bit16):
 
 def check_process():
     if E_OLD is None:
-        report("process", True, "SKIPPED - v3.2.1 is not available (no git history here)")
+        report("process", True, "SKIPPED - v3.2.1 is not available (tests/baseline_v321 is missing)")
         return
     rng = np.random.default_rng(1000)
     n_cases = 60 if FULL else 14
@@ -510,7 +513,7 @@ def _response_diff(ro, rn):
 
 def check_session():
     if E_OLD is None:
-        report("session", True, "SKIPPED - v3.2.1 is not available (no git history here)")
+        report("session", True, "SKIPPED - v3.2.1 is not available (tests/baseline_v321 is missing)")
         return
     rng = np.random.default_rng(5000)
     bad = []
@@ -903,6 +906,206 @@ def check_empty():
     report("empty", not bad, note if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
+def _people_matte(w, h, visible, share, people=1, skirt=0.0, stand=False):
+    """
+    Matte (1024x1024, 0..1) of standing people. Only the upper `visible` part of the body is inside the frame and
+    takes `share` of the frame height (visible=1: whole figure with floor under the feet). skirt: half-width of a
+    dress hem in body heights (0 = trousers). stand: a softbox on a stand next to the people - a wide box above
+    their heads, a pole and wide feet that reach the bottom edge of the frame.
+    """
+    m = np.zeros((h, w), np.uint8)
+    hp = share * h / visible                      # body height in pixels
+    y0 = (1.0 - share) * h * (0.45 if visible >= 1.0 else 1.0)
+    centres = [w * 0.5] if people == 1 else [w * 0.5 - 0.14 * hp, w * 0.5 + 0.14 * hp]
+    for cx in centres:
+        pt = lambda fx, fy: (int(round(cx + fx * hp)), int(round(y0 + fy * hp)))  # noqa: E731
+        cv2.ellipse(m, pt(0, 0.065), (int(0.048 * hp), int(0.065 * hp)), 0, 0, 360, 255, -1)
+        cv2.rectangle(m, pt(-0.025, 0.12), pt(0.025, 0.17), 255, -1)
+        cv2.fillPoly(m, [np.array([pt(-0.13, 0.17), pt(0.13, 0.17), pt(0.10, 0.36), pt(0.105, 0.52), pt(-0.105, 0.52), pt(-0.10, 0.36)], np.int32)], 255)
+        for s in (-1, 1):
+            cv2.fillPoly(m, [np.array([pt(s * 0.13, 0.175), pt(s * 0.165, 0.19), pt(s * 0.16, 0.50), pt(s * 0.125, 0.50)], np.int32)], 255)
+        if skirt > 0:
+            cv2.fillPoly(m, [np.array([pt(-0.105, 0.45), pt(0.105, 0.45), pt(skirt, 0.99), pt(-skirt, 0.99)], np.int32)], 255)
+        else:
+            for s in (-1, 1):
+                cv2.fillPoly(m, [np.array([pt(s * 0.012, 0.52), pt(s * 0.105, 0.52), pt(s * 0.075, 0.95), pt(s * 0.02, 0.95)], np.int32)], 255)
+                cv2.ellipse(m, pt(s * 0.055, 0.975), (int(0.045 * hp), int(0.025 * hp)), 0, 0, 360, 255, -1)
+    if stand:
+        cv2.rectangle(m, (int(w * 0.58), int(h * 0.02)), (int(w * 0.98), int(h * 0.14)), 255, -1)
+        cv2.rectangle(m, (int(w * 0.93), int(h * 0.14)), (int(w * 0.945), h - 1), 255, -1)
+        cv2.rectangle(m, (int(w * 0.76), int(h * 0.97)), (int(w * 0.99), h - 1), 255, -1)
+    return cv2.resize(m, (1024, 1024), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+
+
+def check_scene():
+    """The automatic preset: what kind of frame it is, and that the suitable set of values is used from the start."""
+    bad = []
+    eng0 = ENG("/nonexistent-models", load_models=False)
+
+    def kind_of(matte, w, h, backdrop=150, person=90):
+        img = np.full((h, w, 3), backdrop, np.uint8)
+        img[cv2.resize(matte, (w, h)) > 0.5] = person
+        return eng0._scene_info((matte * 255).astype(np.uint8), img, w, h)
+
+    # 1. the framing is read from the silhouette: every body crop, both orientations, one or two people, dress or trousers
+    n_frames = 0
+    want = {"full": (1.0, 0.76, "wide"), "full, tight": (1.0, 0.92, "wide"), "waist": (0.50, 0.86, "medium"),
+            "bust": (0.27, 0.85, "close"), "head": (0.19, 0.88, "close")}
+    for (w, h) in ((2000, 3000), (3000, 2000), (2400, 2400), (2000, 2800), (2800, 2000)):
+        for name, (visible, share, kind) in want.items():
+            for skirt in (0.0, 0.22):
+                for people in (1, 2):
+                    if people == 2 and 0.19 * (share * h / visible) > 0.5 * w:
+                        continue  # two heads this large do not fit into the frame side by side
+                    got = kind_of(_people_matte(w, h, visible, share, people, skirt), w, h)
+                    n_frames += 1
+                    # two people side by side, cut by the frame: "medium" and "close" are both fine (no floor either way)
+                    ok = got["framing"] == kind or (people == 2 and kind != "wide" and got["framing"] in ("medium", "close"))
+                    if not ok or got["kind"] != got["framing"] or got["dark"]:
+                        bad.append(f"{w}x{h} {name}, people={people}, skirt={skirt}: {got['framing']} (kind {got['kind']}), expected {kind}")
+    # a whole figure whose wide hem is cut by the bottom edge is still a whole figure; knees cut -> not a close-up
+    for (w, h) in ((2000, 3000), (3000, 2000)):
+        got = kind_of(_people_matte(w, h, 0.97, 0.97, 1, 0.30), w, h)
+        n_frames += 1
+        if got["framing"] != "wide" or not got["cut"]:
+            bad.append(f"{w}x{h} whole figure with the hem at the frame edge: {got}")
+        got = kind_of(_people_matte(w, h, 0.72, 0.90, 1, 0.0), w, h)
+        n_frames += 1
+        if got["framing"] == "close":
+            bad.append(f"{w}x{h} knees-up frame taken for a close-up: {got}")
+    # a softbox on a stand whose feet reach the bottom edge must not turn a whole figure into a cut one
+    for skirt in (0.0, 0.22):
+        got = kind_of(_people_matte(2000, 3000, 1.0, 0.76, 1, skirt, stand=True), 2000, 3000)
+        n_frames += 1
+        if got["framing"] != "wide" or got["cut"]:
+            bad.append(f"a softbox on a stand next to the person changed the framing: {got}")
+    # nobody in the frame
+    blob = np.zeros((1024, 1024), np.float32)
+    cv2.circle(blob, (500, 620), 110, 0.03, -1)
+    for m in (np.zeros((1024, 1024), np.float32), cv2.GaussianBlur(blob, (0, 0), 20)):
+        got = kind_of(m, 2000, 3000)
+        if got["framing"] != "none" or got["kind"] != "none":
+            bad.append(f"an empty frame got a framing: {got}")
+
+    # 2. dark key: decided by the backdrop alone, whatever the person wears
+    full = _people_matte(2000, 3000, 1.0, 0.76)
+    bust = _people_matte(2000, 3000, 0.27, 0.85)
+    limit = ENG.SCENE_DARK_LUMA
+    for backdrop, person, dark in ((12, 230, True), (int(limit) - 4, 20, True), (int(limit) + 5, 20, False), (60, 230, False), (150, 10, False), (240, 30, False)):
+        for matte, framing in ((full, "wide"), (bust, "close")):
+            got = kind_of(matte, 2000, 3000, backdrop, person)
+            if got["dark"] != dark or got["framing"] != framing or got["kind"] != ("dark" if dark else framing):
+                bad.append(f"backdrop {backdrop}, person {person}: {got}")
+            if abs((got["backdrop_luma"] or 0) - backdrop) > 1.5:
+                bad.append(f"backdrop {backdrop} measured as {got['backdrop_luma']}")
+    # ...also when the person takes most of the frame: a bright face on black is dark key, a dark coat on grey is not
+    big = np.zeros((1024, 1024), np.float32)
+    cv2.ellipse(big, (512, 640), (430, 560), 0, 0, 360, 1.0, -1)
+    for backdrop, person, dark in ((12, 230, True), (150, 10, False)):
+        got = kind_of(big, 2000, 3000, backdrop, person)
+        if got["person_share"] < 0.6 or got["dark"] != dark or abs((got["backdrop_luma"] or 0) - backdrop) > 1.5:
+            bad.append(f"person over most of the frame, backdrop {backdrop}, person {person}: {got}")
+
+    # 3. the engine: start_session with the sets by kind of frame == start_session with the suitable set given by hand
+    w, h = 1500, 2100
+    img, _ = H.make_studio_image(w, h, n_dust=50, n_hair=4, seed=41)
+    sil = _people_matte(w, h, 1.0, 0.76)
+    sets = {
+        "dark": dict(H.STD, speedMode="fast", autoFractions=True, spots=92, scuffs=55, edge=78),
+        "close": dict(H.STD, speedMode="fast", autoFractions=False, spots=62, scuffs=48, blur=18, edge=84, seamOn=False, fracLarge=False),
+        "medium": dict(H.STD, speedMode="fast", autoFractions=True, blur=10, seam=78, edge=74),
+        "wide": dict(H.STD, speedMode="fast", autoFractions=True, spots=85, scuffs=78, edge=66, seam=90),
+        "default": dict(H.STD, speedMode="fast", autoFractions=True),
+    }
+    asked = dict(H.STD, speedMode="fast", autoFractions=True, spots=40, edge=50)  # what the controls showed before
+    same = ("auto_fractions", "comp_jpg_b64", "overlay_jpg_b64", "orig_jpg_b64", "mask_share")
+
+    def opened(image, matte, presets, params=asked):
+        e = H.make_engine(E, matte)
+        return e, _quiet(e.start_session, image, 8, dict(params), None, None, presets)
+
+    cases = [("whole figure", img, sil, "wide", "wide"),
+             ("close-up", img, _people_matte(w, h, 0.27, 0.85), "close", "close"),
+             ("cut at the waist", img, _people_matte(w, h, 0.50, 0.86), "medium", "medium"),
+             ("dark backdrop", (img * 0.12).astype(np.uint8), sil, "dark", "dark"),
+             ("nobody", img, np.zeros((1024, 1024), np.float32), "none", "default")]
+    for name, image, matte, kind, used in cases:
+        e1, r1 = opened(image, matte, sets)
+        e2, r2 = opened(image, matte, None, sets[used])
+        sc = r1.get("scene") or {}
+        if sc.get("kind") != kind or sc.get("applied") != used:
+            bad.append(f"{name}: seen as {sc.get('kind')}, used the set '{sc.get('applied')}' (expected {kind} / {used})")
+        if any(r1[k] != r2[k] for k in same) or not _same_stats(r1["stats"], r2["stats"]) or e1._active_session["params"] != e2._active_session["params"]:
+            bad.append(f"{name}: the window differs from the one opened with that set by hand")
+        if (r2.get("scene") or {}).get("applied") is not None or (r2.get("scene") or {}).get("kind") != kind:
+            bad.append(f"{name}: without sets nothing may be replaced, yet the frame must still be described: {r2.get('scene')}")
+        if name in ("whole figure", "close-up"):
+            a1 = _quiet(e1.apply_session, r1["session_id"], 100.0, False, False, 45.0)
+            a2 = _quiet(e2.apply_session, r2["session_id"], 100.0, False, False, 45.0)
+            if not np.array_equal(a1[0], a2[0]):
+                bad.append(f"{name}: the layer after Apply differs from the one made with that set by hand")
+    # a deleted preset: its kind falls back to the framing, then to "default"; nothing offered -> `params` as sent
+    for presets, used in (({k: v for k, v in sets.items() if k != "dark"}, "wide"),
+                          ({"default": sets["default"]}, "default"), ({}, None), ({"close": sets["close"]}, None)):
+        e1, r1 = opened((img * 0.12).astype(np.uint8), sil, presets)
+        e2, r2 = opened((img * 0.12).astype(np.uint8), sil, None, sets[used] if used else asked)
+        if r1["scene"]["applied"] != used or r1["comp_jpg_b64"] != r2["comp_jpg_b64"] or e1._active_session["params"] != e2._active_session["params"]:
+            bad.append(f"sets {sorted(presets)}: used '{r1['scene']['applied']}', expected '{used}'")
+
+    # 4. "how much of the frame is green": reported after every step and equal to the mask on screen
+    e1, r1 = opened(img, sil, None)
+    sid = r1["session_id"]
+    share = lambda: float(np.count_nonzero(e1._compute_effective_mask_small(e1._active_session) > 127)) / (r1["preview_w"] * r1["preview_h"])  # noqa: E731
+    if not (0.0 < r1["mask_share"] < 0.5) or abs(r1["mask_share"] - share()) > 1e-4:
+        bad.append(f"mask_share after the scan: {r1.get('mask_share')} vs {share():.5f}")
+    r2 = _quiet(e1.recompute_session, sid, dict(asked, spots=95), True, None, True)
+    if abs(r2["mask_share"] - share()) > 1e-4 or r2["mask_share"] <= r1["mask_share"]:
+        bad.append(f"mask_share after a more sensitive search: {r1['mask_share']} -> {r2.get('mask_share')}")
+    r3 = _quiet(e1.edit_session_mask, sid, "fill", None, 20, False, False, 45.0)
+    r4 = _quiet(e1.edit_session_mask, sid, "clear", None, 20, False, False, 45.0)
+    if r3.get("mask_share") != 1.0 or r4.get("mask_share") != 0.0:
+        bad.append(f"mask_share after fill / clear: {r3.get('mask_share')} / {r4.get('mask_share')}")
+
+    # 5. over HTTP, the way the plugin sends it
+    note = ""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            from fastapi.testclient import TestClient
+    except Exception:
+        TestClient = None
+        note = "; HTTP part SKIPPED (pip install httpx)"
+    if TestClient is not None:
+        srv = H.load_server()
+        keep = srv.ENGINE, srv.ENGINE_ERROR
+        real_out = sys.stdout
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+        try:
+            srv.ENGINE, srv.ENGINE_ERROR = H.make_engine(E, sil), None
+            with TestClient(srv.app) as client:
+                def start(extra):
+                    meta = dict({"width": w, "height": h, "channels": 3, "bitDepth": 8, "hasSelection": False, "jobId": "s", "params": asked}, **extra)
+                    mb = json.dumps(meta).encode("utf-8")
+                    return client.post("/session/start", content=struct.pack("<I", len(mb)) + mb + np.ascontiguousarray(img).tobytes())
+                ra, rb, rc = start({"scenePresets": sets}), start({}), start({"scenePresets": "nonsense"})
+                ja, jb = ra.json(), rb.json()
+                if ra.status_code != 200 or ja["scene"]["applied"] != "wide" or ja["scene"]["kind"] != "wide" or srv.ENGINE._active_session is None:
+                    bad.append(f"HTTP /session/start with scenePresets: {ra.status_code} {ja.get('scene')}")
+                if rb.status_code != 200 or jb["scene"]["applied"] is not None or jb["comp_jpg_b64"] == ja["comp_jpg_b64"]:
+                    bad.append("HTTP /session/start without scenePresets must use `params` as sent")
+                if rc.status_code != 200 or rc.json()["scene"]["applied"] is not None or rc.json()["comp_jpg_b64"] != jb["comp_jpg_b64"]:
+                    bad.append("HTTP /session/start with a broken scenePresets must behave as without it")
+                if not isinstance(ja.get("mask_share"), float):
+                    bad.append("HTTP /session/start must report mask_share")
+        finally:
+            sys.stdout.close()
+            sys.stdout = real_out
+            srv.ENGINE, srv.ENGINE_ERROR = keep
+    report("scene", not bad, f"{n_frames} silhouettes framed right (whole figure / waist / close-up, both orientations, 1-2 people); dark key by the "
+                             f"backdrop (limit {limit:.0f}); opening with the automatic preset == opening with that preset by hand, layer included{note}"
+           if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
 def check_format():
     bad = []
     notes = []
@@ -1071,7 +1274,9 @@ def check_server():
                 bad.append("_packet_array accepted a short body")
     # One version number in three places: a mismatch makes start_gpu_server.bat restart the server on every launch
     root = H.APP_DIR
-    old_root = os.path.join(H.REPO_ROOT, "CleanVinylPro")
+    old_dir = H.BASELINE_FILES_DIR  # manifest.json and setup_launcher.py of the original program
+    if E_OLD is None or SRV_OLD is None:
+        bad.append("tests/baseline_v321 is missing or broken: the comparisons with v3.2.1 were skipped")
 
     def text(*parts):
         with open(os.path.join(*parts), encoding="utf-8") as fh:
@@ -1079,8 +1284,10 @@ def check_server():
 
     bat_versions = set(re.findall(r"get\('version'\)=='([^']+)'", text(root, "start_gpu_server.bat")))
     manifest = json.loads(text(root, "uxp-plugin", "manifest.json"))
-    if bat_versions != {srv.APP_VERSION} or manifest["version"] != srv.APP_VERSION:
-        bad.append(f"version mismatch: server {srv.APP_VERSION}, start_gpu_server.bat {sorted(bat_versions)}, manifest {manifest['version']}")
+    js_versions = re.findall(r'const PLUGIN_VERSION = "([^"]+)";', text(root, "uxp-plugin", "main.js"))
+    if bat_versions != {srv.APP_VERSION} or manifest["version"] != srv.APP_VERSION or js_versions != [srv.APP_VERSION]:
+        bad.append(f"version mismatch: server {srv.APP_VERSION}, start_gpu_server.bat {sorted(bat_versions)}, manifest {manifest['version']}, "
+                   f"main.js {js_versions}")
     # ...and the same number wherever the user reads it: window titles of the .bat files, the first lines of the instruction
     shown = {bat: set(re.findall(r"\bv(\d+\.\d+\.\d+)", text(root, bat))) for bat in sorted(os.listdir(root)) if bat.endswith(".bat")}
     wrong = {bat: sorted(v) for bat, v in shown.items() if v - {srv.APP_VERSION}}
@@ -1108,9 +1315,11 @@ def check_server():
     ):
         if not ok:
             bad.append(f"identity: {where}")
-    if os.path.isdir(old_root):
-        old_manifest = json.loads(text(old_root, "uxp-plugin", "manifest.json"))
-        old_launcher = text(old_root, "server", "setup_launcher.py")
+    if not os.path.isfile(os.path.join(old_dir, "manifest.json")) or not os.path.isfile(os.path.join(old_dir, "setup_launcher.py")):
+        bad.append("tests/baseline_v321: manifest.json / setup_launcher.py of the original program are missing")
+    else:
+        old_manifest = json.loads(text(old_dir, "manifest.json"))
+        old_launcher = text(old_dir, "setup_launcher.py")
         old_port = old_manifest["requiredPermissions"]["network"]["domains"][0].rsplit(":", 1)[1]
         task = re.search(r'"/TN", "([^"]+)"', launcher).group(1)
         clashes = [name for name, same in (
@@ -1178,7 +1387,7 @@ def _http_quick_round_trip(client, srv, packet, split, bad) -> int:
 
 def check_http():
     if SRV_OLD is None:
-        report("http", True, "SKIPPED - v3.2.1 is not available (no git history here)")
+        report("http", True, "SKIPPED - v3.2.1 is not available (tests/baseline_v321 is missing)")
         return
     try:
         import warnings
@@ -1202,8 +1411,9 @@ def check_http():
         return meta, body[4 + n:]
 
     def norm(d):
-        # ("quick" is new: a recompute says whether it only refreshed the preview)
-        d = {k: v for k, v in d.items() if k not in ("session_id", "mask_png_b64", "quick")}
+        # ("quick" is new: a recompute says whether it only refreshed the preview; "scene" and "mask_share" are new:
+        #  the answer describes the frame and tells how much of it is green)
+        d = {k: v for k, v in d.items() if k not in ("session_id", "mask_png_b64", "quick", "scene", "mask_share")}
         if "stats" in d:
             d["stats"] = {k: v for k, v in d["stats"].items() if k not in ("elapsed_ms", "reused_stages")}
         return d
@@ -1372,7 +1582,7 @@ GROUPS = [("convert", check_convert), ("process", check_process), ("stage", chec
           ("session", check_session),
           ("white", check_white), ("gpu", check_gpu),
           ("cyc", check_cyc), ("dress", check_dress), ("speed", check_speed), ("smoke", check_smoke), ("empty", check_empty),
-          ("format", check_format),
+          ("format", check_format), ("scene", check_scene),
           ("server", check_server), ("http", check_http),
           ("folders", lambda: IC.check_folders(report)), ("install", lambda: IC.check_install(report)),
           ("bat", lambda: IC.check_bat(report)), ("plugin", check_plugin)]

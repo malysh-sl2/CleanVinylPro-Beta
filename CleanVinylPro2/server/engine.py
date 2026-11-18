@@ -579,6 +579,113 @@ class CleanVinylEngine:
 
         return np.clip(m * 255.0, 0, 255).astype(np.uint8)
 
+    # ------------------------------------------------------------------
+    # 1b. The scene of the frame (for the automatic choice of a preset)
+    # ------------------------------------------------------------------
+    SCENE_GRID = 256            # long side of the small grid the silhouette is measured on
+    SCENE_DARK_LUMA = 26.0      # median brightness of the backdrop (0..255) below which the frame is a dark key
+    SCENE_CLOSE_VISIBLE = 0.37  # less than this share of the body is in the frame -> close-up
+    SCENE_SMALL_HEAD = 0.15     # head narrower than this share of the visible figure -> the whole person is in the frame
+
+    @staticmethod
+    def _scene_person_mask(matte_u8: np.ndarray) -> np.ndarray:
+        """
+        The people of the frame on the small grid: the largest silhouette and everything of at least half its size
+        (a second person standing apart). Lamps, softboxes on stands and specks are left out - they must not decide
+        the framing.
+        """
+        bin_m = (matte_u8 > 102).astype(np.uint8)
+        n, lbl, st, _ = cv2.connectedComponentsWithStats(bin_m, 8)
+        if n <= 1:
+            return np.zeros(matte_u8.shape, dtype=bool)
+        areas = st[:, cv2.CC_STAT_AREA].astype(np.int64)
+        peaks = np.zeros(n, dtype=np.uint8)
+        np.maximum.at(peaks, lbl.ravel(), matte_u8.ravel())
+        sure = peaks >= 184  # the model is certain somewhere inside (the rule of _clean_fg_mask)
+        sure[0] = False
+        if not sure.any():
+            return np.zeros(matte_u8.shape, dtype=bool)
+        keep = sure & (areas >= 0.5 * int(areas[sure].max()))
+        return keep[lbl]
+
+    @staticmethod
+    def _longest_run(row: np.ndarray) -> int:
+        """Length of the longest unbroken stretch of True in a 1-D boolean array."""
+        if not row.any():
+            return 0
+        edges = np.flatnonzero(np.diff(np.concatenate(([False], row, [False])).astype(np.int8)))
+        return int((edges[1::2] - edges[0::2]).max())
+
+    def _scene_info(self, fg_raw_1024: np.ndarray, img_rgb_u8: np.ndarray, w: int, h: int) -> dict:
+        """
+        What kind of frame this is, measured before anything is cleaned:
+          framing  "wide"   - the whole figure with the floor under it,
+                   "medium" - the figure is cut by the bottom edge at the waist / hips / knees,
+                   "close"  - head and shoulders,
+                   "none"   - no person found;
+          dark     the backdrop is dark (low key);
+          kind     "dark" for a dark backdrop, otherwise the framing - the key a preset is chosen by.
+        The framing is read from the silhouette alone:
+          1. not cut by the bottom edge of the frame            -> the whole figure;
+          2. cut, but the head is small against what is visible -> still the whole figure (only a hem, a train or
+             the feet reach the edge): the head is about 1/8 of a standing person, measured as the width of the
+             silhouette just under its top;
+          3. otherwise, how much of the body is above the cut. The body height is estimated from the widest part
+             of the silhouette (the largest circle that fits into it has a radius of about 0.11 body heights).
+        """
+        g = float(self.SCENE_GRID)
+        sc = g / float(max(w, h, 1))
+        gw, gh = max(8, int(round(w * sc))), max(8, int(round(h * sc)))
+        matte = cv2.resize(fg_raw_1024, (gw, gh), interpolation=cv2.INTER_AREA)
+        person = self._scene_person_mask(matte)
+
+        # Brightness of the backdrop: everything that is neither a person nor an object, with a margin around them
+        small = cv2.resize(img_rgb_u8, (gw, gh), interpolation=cv2.INTER_AREA).astype(np.float32)
+        luma = 0.299 * small[:, :, 0] + 0.587 * small[:, :, 1] + 0.114 * small[:, :, 2]
+        k = int(round(g * 0.03)) * 2 + 1
+        near = cv2.dilate((matte > 76).astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+        backdrop = near == 0
+        backdrop_luma = float(np.median(luma[backdrop])) if int(backdrop.sum()) >= 0.02 * gw * gh else None
+        dark = backdrop_luma is not None and backdrop_luma < self.SCENE_DARK_LUMA
+
+        framing, cut, visible, height_share, head = "none", False, 0.0, 0.0, 0.0
+        share = float(person.mean())
+        rows = np.flatnonzero(person.any(axis=1))
+        if rows.size and share >= 0.004:
+            top, bottom = int(rows[0]), int(rows[-1]) + 1
+            vis = float(bottom - top)
+            height_share = vis / gh
+            edge_rows = max(1, int(round(gh * 0.012)))
+            contact = float(person[gh - edge_rows:].sum(axis=1).mean())
+            cut = contact >= 0.05 * gw and contact >= 0.12 * vis
+            # width of the head: the widest unbroken stretch of the silhouette in a band just under its top
+            band_a = top + int(round(vis * 0.03))
+            band_b = min(gh, max(band_a + 1, top + int(round(vis * 0.12))))
+            head = max(self._longest_run(person[y]) for y in range(band_a, band_b)) / vis
+            # the frame is thought to go on below its bottom edge: a body cut there keeps its width
+            ext = np.vstack([person, np.repeat(person[-1:], gh // 2, axis=0)]).astype(np.uint8)
+            ext = cv2.copyMakeBorder(ext, 1, 0, 1, 1, cv2.BORDER_CONSTANT, value=0)
+            radius = float(cv2.distanceTransform(ext, cv2.DIST_L2, 3).max())
+            visible = 0.11 * vis / max(radius, 1.0)
+            if not cut or head < self.SCENE_SMALL_HEAD:
+                framing = "wide"
+            elif visible < self.SCENE_CLOSE_VISIBLE:
+                framing = "close"
+            else:
+                framing = "medium"
+
+        return {
+            "kind": "dark" if dark else framing,
+            "framing": framing,
+            "dark": bool(dark),
+            "backdrop_luma": None if backdrop_luma is None else round(backdrop_luma, 1),
+            "person_share": round(share, 4),
+            "person_height": round(height_share, 3),
+            "cut": bool(cut),
+            "visible": round(float(visible), 3),
+            "head": round(float(head), 3),
+        }
+
     def _clean_fg_mask(self, fg_raw_1024: np.ndarray, w: int, h: int, edge_protection: float):
         m = fg_raw_1024.astype(np.float32) / 255.0
         bin_m = (m > 0.40).astype(np.uint8)
@@ -3122,7 +3229,8 @@ class CleanVinylEngine:
         need_mask: bool = True,
     ) -> dict:
         eff_mask = self._compute_effective_mask_small(sess)
-        out: dict = {}
+        # how much of the frame is green (will be cleaned): lets the plugin say what a preset changed
+        out: dict = {"mask_share": round(float(np.count_nonzero(eff_mask > 127)) / max(1, eff_mask.size), 5)}
 
         if need_mask:
             # Only on explicit request: the plugin shows the pre-composited overlay JPEG, not this PNG.
@@ -3458,7 +3566,14 @@ class CleanVinylEngine:
         params: dict,
         selection_alpha: np.ndarray | None = None,
         progress_cb=None,
+        scene_presets: dict | None = None,
     ) -> dict:
+        """
+        scene_presets (optional): parameters by kind of frame - {"dark": {...}, "close": {...}, "medium": {...},
+        "wide": {...}, "default": {...}}. The frame is looked at first (see _scene_info) and the set that suits it
+        is used INSTEAD of `params`, before anything is cleaned - the window opens with the right preset at once.
+        The answer tells what was seen and which set was used ("scene").
+        """
         t0 = time.perf_counter()
         self._begin_job()
         try:
@@ -3478,12 +3593,23 @@ class CleanVinylEngine:
                 img_rgba.setflags(write=False)
                 sel_own = selection_alpha.copy() if selection_alpha is not None else None
                 orig_rgb_u8 = self._to_analysis_u8(self._rgb_planes(img_rgba), ps_max)  # read-only use below
-                edge_prot = float(p.get("edge", 70))
 
                 # Quick initial subject detection & automatic fraction selection
                 with self.lock:
                     self._ensure_models_loaded(need_matting=True, need_lama=False, progress_cb=progress_cb)
                     fg_raw_1024 = self._predict_fg_raw(orig_rgb_u8, progress_cb=progress_cb, fast_mode=(str(p.get("speedMode", "fast")).lower() == "fast"))
+
+                    # What kind of frame is it? With scene_presets the set made for this kind replaces `params`.
+                    scene = self._scene_info(fg_raw_1024, orig_rgb_u8, w, h)
+                    scene["applied"] = None
+                    if isinstance(scene_presets, dict):
+                        for key in (scene["kind"], scene["framing"], "default"):
+                            if isinstance(scene_presets.get(key), dict):
+                                p = dict(scene_presets[key])
+                                scene["applied"] = key
+                                break
+
+                    edge_prot = float(p.get("edge", 70))
                     fg_mask_u8, core_mask_u8 = self._clean_fg_mask(fg_raw_1024, w, h, edge_prot)
                 fg_mask_u8.setflags(write=False)
                 core_mask_u8.setflags(write=False)
@@ -3593,6 +3719,8 @@ class CleanVinylEngine:
                     "comp_jpg_b64": previews["comp_jpg_b64"],
                     "overlay_jpg_b64": previews["overlay_jpg_b64"],
                     "stats": stats,
+                    "scene": scene,
+                    "mask_share": previews["mask_share"],
                 }
         finally:
             self._end_job()
@@ -3697,6 +3825,7 @@ class CleanVinylEngine:
                     "overlay_jpg_b64": previews["overlay_jpg_b64"],
                     "stats": stats,
                     "quick": took_quick,
+                    "mask_share": previews["mask_share"],
                 }
         finally:
             self._end_job()

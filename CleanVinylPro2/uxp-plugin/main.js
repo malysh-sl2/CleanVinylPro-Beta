@@ -4,6 +4,9 @@ const uxpFs = uxp.storage.localFileSystem;
 const uxpShell = uxp.shell;
 
 const CANDIDATE_URLS = ["http://127.0.0.1:18746", "http://localhost:18746"];
+// The same number as in manifest.json and server.py. A server of another version still answers (for example the
+// previous one that was left running after an update) - the panel then says how to restart it.
+const PLUGIN_VERSION = "4.3.0";
 let SERVER_URL = CANDIDATE_URLS[0];
 
 const DEFAULT_PRESETS = [
@@ -73,7 +76,9 @@ let smokeEnabled = true;
 let fracFine = true;
 let fracMed = true;
 let fracLarge = true;
-let fracAuto = true;
+let fracAuto = true;      // the AUTO button of the fractions as it is right now
+let fracAutoUser = true;  // ...and as the user left it (a preset that names its fractions switches AUTO off for a while)
+let autoPreset = true;    // pick the preset that suits the frame every time the big window opens
 let dressSmoothEnabled = false;
 let cleanPasses = 1;
 let speedMode = "fast";
@@ -121,9 +126,10 @@ let sessState = {
   ph: 0,
   tool: "eraser", // default to Eraser on start so user can erase extra green immediately!
   brushSize: 28,
-  autoMask: true,
+  // What the photo area shows: "result" - the cleaned photo (the window opens with it), "original" - the photo as
+  // it was, "mask" - the cleaned photo under the red/green mask (green = will be cleaned). See setView().
+  view: "result",
   blend: 100,
-  showingOriginal: false,
   peekingClean: false,
   peekingBlend: false,
   zoom: 1.0,
@@ -151,7 +157,11 @@ let sessState = {
   previewSyncedSig: "",    // the settings the preview on screen was made for
   previewForce: false,     // refresh even if the settings look the same (AUTO fractions were asked for again)
   quickUnsupported: false, // the running server is an older build that only knows the full recompute
-  lastStats: null
+  lastStats: null,
+  maskShare: null,         // share of the frame that is green now (0..1), as the server last reported it
+  presetNote: null,        // a preset was just clicked: say what it changed when the refresh comes back
+  note: "",                // short message in the corner of the photo (which preset was picked and why)
+  noteTimer: null
 };
 let pendingApplyPayload = null;
 
@@ -221,9 +231,13 @@ function getSliderVal(id) {
   return sliderState[id] !== undefined ? sliderState[id] : 0;
 }
 
+function clampSliderVal(id, rawVal) {
+  return Math.max(0, Math.min(getSliderMax(id), Math.round(Number(rawVal) || 0)));
+}
+
 function setSliderVal(id, rawVal) {
   const maxV = getSliderMax(id);
-  const v = Math.max(0, Math.min(maxV, Math.round(Number(rawVal) || 0)));
+  const v = clampSliderVal(id, rawVal);
   sliderState[id] = v;
   const pct = (v / maxV) * 100;
   const node = el(id);
@@ -303,8 +317,9 @@ function escapeHtml(s) {
 // Progress Tracking, Live Timer & Rotating Ukrainian Tips
 // ------------------------------------------------------------------
 const USER_GUIDE_TIPS = [
-  "💡 Після сканування одразу активна Гумка (E) — просто зітріть зайве зелене з одягу, взуття або тіней.",
-  "💡 Затисніть мишку за межами фото — миттєво сховається зелена/червона маска, щоб оцінити чистий результат.",
+  "💡 Вікно відкривається одразу з чистим фото. Кнопка «До / Після» показує оригінал, ще раз — знову результат.",
+  "💡 Кнопка «Маска» показує зеленим, що буде очищено. Гумка (E) стирає зайве зелене з одягу, взуття або тіней.",
+  "💡 Пресет підбирається сам під кадр: темний фон, ближній, середній план чи повний зріст. Іншої думки — виберіть свій у списку.",
   "💡 Ctrl + Клік по іконці Пензля (B) заливає всю маску; Ctrl + Клік по Гумці (E) — повністю очищає маску.",
   "💡 Увімкніть іконку сукні зверху, щоб AI делікатно розгладив різкі складки на одязі без впливу на шкіру й волосся.",
   "💡 Натисніть квадратики фракцій знизу (Дрібна / Середня / Велика), щоб швидко вмикати або вимикати типи чистки.",
@@ -456,30 +471,133 @@ function setCleanPassesUI(n) {
   if (el("gPass2")) el("gPass2").classList.toggle("active", cleanPasses === 2);
 }
 
-function applyConfig(cfg) {
-  setSliderVal("gSlSpots", cfg.spots ?? 75);
-  setSliderVal("gSlScuffs", cfg.scuffs ?? 65);
-  setSliderVal("gSlBlur", cfg.blur ?? 0);
-  setSliderVal("gSlCyc", cfg.cycCurve ?? 0);
-  setSliderVal("gSlFeather", cfg.feather ?? 60);
-  seamEnabled = cfg.seamOn !== undefined ? !!cfg.seamOn : true;
-  setSliderVal("gSlSeam", cfg.seam ?? 85);
-  setSliderVal("gSlEdge", cfg.edge ?? 70);
-  smokeEnabled = cfg.smokeOn !== undefined ? !!cfg.smokeOn : true;
-  setSliderVal("gSlSmoke", cfg.smoke ?? 80);
-  setSliderVal("gSlGrain", cfg.grain ?? 90);
-  if (el("gChkShadow")) el("gChkShadow").checked = cfg.shadow !== undefined ? !!cfg.shadow : true;
-  if (el("gChkRemoveStands")) el("gChkRemoveStands").checked = !!cfg.removeStands;
-  setSliderVal("gSlTurbo", Math.max(100, cfg.master ?? 100));
+// The values of a preset exactly as applyConfig() puts them on the controls: defaults for missing keys, the limits
+// of the sliders. readCurrentConfig() right after applyConfig(cfg) gives these same values (plus speedMode) -
+// the automatic preset relies on it: the server is sent these values before the controls show them.
+function normalizedPresetConfig(cfg) {
+  const c = cfg || {};
+  const flag = (v, dflt) => (v !== undefined ? !!v : dflt);
+  return {
+    spots: clampSliderVal("gSlSpots", c.spots ?? 75),
+    scuffs: clampSliderVal("gSlScuffs", c.scuffs ?? 65),
+    blur: clampSliderVal("gSlBlur", c.blur ?? 0),
+    cycCurve: clampSliderVal("gSlCyc", c.cycCurve ?? 0),
+    feather: clampSliderVal("gSlFeather", c.feather ?? 60),
+    seamOn: flag(c.seamOn, true),
+    seam: clampSliderVal("gSlSeam", c.seam ?? 85),
+    edge: clampSliderVal("gSlEdge", c.edge ?? 70),
+    smokeOn: flag(c.smokeOn, true),
+    smoke: clampSliderVal("gSlSmoke", c.smoke ?? 80),
+    grain: clampSliderVal("gSlGrain", c.grain ?? 90),
+    shadow: flag(c.shadow, true),
+    removeStands: !!c.removeStands,
+    master: clampSliderVal("gSlTurbo", Math.max(100, c.master ?? 100)),
+    fracFine: flag(c.fracFine, true),
+    fracMed: flag(c.fracMed, true),
+    fracLarge: flag(c.fracLarge, true),
+    dressSmooth: flag(c.dressSmooth, false),
+    dressStrength: clampSliderVal("gSlDress", c.dressStrength ?? 45),
+    cleanPasses: Number(c.cleanPasses ?? 1) >= 2 ? 2 : 1
+  };
+}
 
-  fracFine = cfg.fracFine !== undefined ? !!cfg.fracFine : true;
-  fracMed = cfg.fracMed !== undefined ? !!cfg.fracMed : true;
-  fracLarge = cfg.fracLarge !== undefined ? !!cfg.fracLarge : true;
-  dressSmoothEnabled = cfg.dressSmooth !== undefined ? !!cfg.dressSmooth : false;
-  setSliderVal("gSlDress", cfg.dressStrength ?? 45);
-  setCleanPassesUI(cfg.cleanPasses ?? 1);
+function applyConfig(cfg) {
+  const c = normalizedPresetConfig(cfg);
+  setSliderVal("gSlSpots", c.spots);
+  setSliderVal("gSlScuffs", c.scuffs);
+  setSliderVal("gSlBlur", c.blur);
+  setSliderVal("gSlCyc", c.cycCurve);
+  setSliderVal("gSlFeather", c.feather);
+  seamEnabled = c.seamOn;
+  setSliderVal("gSlSeam", c.seam);
+  setSliderVal("gSlEdge", c.edge);
+  smokeEnabled = c.smokeOn;
+  setSliderVal("gSlSmoke", c.smoke);
+  setSliderVal("gSlGrain", c.grain);
+  if (el("gChkShadow")) el("gChkShadow").checked = c.shadow;
+  if (el("gChkRemoveStands")) el("gChkRemoveStands").checked = c.removeStands;
+  setSliderVal("gSlTurbo", c.master);
+
+  fracFine = c.fracFine;
+  fracMed = c.fracMed;
+  fracLarge = c.fracLarge;
+  dressSmoothEnabled = c.dressSmooth;
+  setSliderVal("gSlDress", c.dressStrength);
+  setCleanPassesUI(c.cleanPasses);
   updateSliderVisuals();
   updateFractionButtonsUI();
+}
+
+// ------------------------------------------------------------------
+// Presets: fractions, the automatic choice by the kind of frame
+// ------------------------------------------------------------------
+// What a preset says about the AUTO button of the fractions:
+//   true / false - it was saved with AUTO on / off (presets saved by this version carry "fracAuto");
+//   null         - it says nothing: AUTO stays the way the user left it.
+// A built-in preset that switches a fraction off ("Ближній план": no large one, "Делікатний": only the fine one)
+// means exactly that choice. AUTO used to overrule it, so these presets cleaned all three fractions anyway.
+function presetFracAuto(p) {
+  const c = (p && p.cfg) || {};
+  if (typeof c.fracAuto === "boolean") return c.fracAuto;
+  if (p && p.builtin && (c.fracFine === false || c.fracMed === false || c.fracLarge === false)) return false;
+  return null;
+}
+
+function applyPreset(p) {
+  activePresetId = p.id;
+  applyConfig(p.cfg);
+  const auto = presetFracAuto(p);
+  fracAuto = auto === null ? fracAutoUser : auto;
+  updateFractionButtonsUI();
+}
+
+// The current values as a preset stores them (the AUTO button of the fractions is part of the recipe)
+function presetConfigToSave() {
+  return Object.assign(readCurrentConfig(), { fracAuto });
+}
+
+// What the server would be sent if this preset were on the controls
+function presetRequestParams(p) {
+  const params = normalizedPresetConfig(p.cfg);
+  params.speedMode = speedMode;
+  const auto = presetFracAuto(p);
+  params.autoFractions = auto === null ? fracAutoUser : auto;
+  return params;
+}
+
+// Which preset suits which kind of frame. The server looks at the frame (dark backdrop / close-up / cut at the
+// waist or knees / whole figure) and uses the matching set of values before it cleans anything. Presets are found
+// by id: a renamed or edited one keeps working, a deleted one is simply not offered ("default" is used instead).
+const AUTO_PRESET_BY_SCENE = { dark: "lowkey", close: "closeup", medium: "medium_shot", wide: "wide_shot", default: "std" };
+const SCENE_WORDS = {
+  dark: "темний фон",
+  close: "ближній план",
+  medium: "середній план",
+  wide: "людина на повний зріст",
+  none: "людини в кадрі не знайдено"
+};
+
+function buildScenePresets() {
+  const params = {};
+  const ids = {};
+  Object.keys(AUTO_PRESET_BY_SCENE).forEach((kind) => {
+    const p = presetsList.find((x) => x.id === AUTO_PRESET_BY_SCENE[kind]);
+    if (p) {
+      params[kind] = presetRequestParams(p);
+      ids[kind] = p.id;
+    }
+  });
+  return Object.keys(ids).length > 0 ? { params, ids } : null;
+}
+
+function autoPresetNote(scene, preset) {
+  const kind = scene && scene.dark ? "dark" : ((scene && scene.framing) || "none");
+  return `Авто-пресет: «${preset.name}» — ${SCENE_WORDS[kind] || SCENE_WORDS.none}. Інший можна вибрати у списку пресетів.`;
+}
+
+function setAutoPreset(on) {
+  autoPreset = !!on;
+  if (el("dlgChkAutoPreset")) el("dlgChkAutoPreset").checked = autoPreset;
 }
 
 function updateSliderVisuals() {
@@ -553,7 +671,9 @@ function buildSettingsSnapshot() {
     speedMode,
     idleUnloadSec,
     makeMaskDefault,
-    fracAuto,
+    fracAuto: fracAutoUser,   // the user's own choice...
+    fracAutoNow: fracAuto,    // ...and what the active preset made of it
+    autoPreset,
     brushSize: sessState.brushSize,
     deletedDefaultIds: Array.from(new Set(deletedDefaultIds)),
     knownDefaultIds: Array.from(new Set(knownDefaultIds))
@@ -580,7 +700,11 @@ function applySettingsSnapshot(s) {
     makeMaskDefault = s.makeMaskDefault;
     if (el("dlgChkMakeMask")) el("dlgChkMakeMask").checked = makeMaskDefault;
   }
-  if (typeof s.fracAuto === "boolean") fracAuto = s.fracAuto;
+  if (typeof s.fracAuto === "boolean") {
+    fracAutoUser = s.fracAuto;
+    fracAuto = typeof s.fracAutoNow === "boolean" ? s.fracAutoNow : s.fracAuto;
+  }
+  if (typeof s.autoPreset === "boolean") setAutoPreset(s.autoPreset);
   if (typeof s.brushSize === "number" && s.brushSize >= 4) sessState.brushSize = Math.round(s.brushSize);
   if (s.activePresetId && presetsList.some((p) => p.id === s.activePresetId)) activePresetId = s.activePresetId;
   if (s.cfg && typeof s.cfg === "object") applyConfig(s.cfg);
@@ -764,11 +888,11 @@ function renderPresets() {
     btn.appendChild(dot);
     btn.appendChild(lbl);
     btn.addEventListener("click", async () => {
-      activePresetId = p.id;
-      applyConfig(p.cfg);
+      applyPreset(p);
       renderPresets();
       scheduleSaveSettings();
       if (el("dlgPresetsPopover")) el("dlgPresetsPopover").classList.remove("visible");
+      announcePresetClick(p);
       refreshPreviewAfterClick(false);
     });
     row.appendChild(btn);
@@ -879,7 +1003,13 @@ async function probeHealthSilent() {
           const shortGpu = (info.gpu || "GPU").replace("NVIDIA GeForce ", "").split(",")[0].trim();
           const sleepTag = info.models_loaded === false ? " • сон" : "";
           txt.textContent = (isCpu ? "CPU" : (shortGpu || "GPU")) + sleepTag;
-          if (isCpu && info.gpu_error) {
+          if (info.version && info.version !== PLUGIN_VERSION) {
+            showBanner(
+              `Працює сервер версії ${info.version}, а панель — версії ${PLUGIN_VERSION}. Запустіть ` +
+              "restart_gpu_server.bat у папці програми: без цього нові функції панелі не працюватимуть.",
+              "info"
+            );
+          } else if (isCpu && info.gpu_error) {
             showBanner("Сервер працює на CPU: " + info.gpu_error, "info");
           } else {
             hideBanner();
@@ -903,6 +1033,7 @@ async function checkServerHealth() {
 
   const res = await probeHealthSilent();
   if (res.ok) return true;
+  if (serverLaunchPromise && !res.modelError) return false;  // it is being started right now: that wait reports
 
   serverOnline = false;
   pill.className = "gpu-pill offline";
@@ -917,6 +1048,13 @@ async function checkServerHealth() {
   if (playBtn) playBtn.style.display = "inline-flex";
   return false;
 }
+
+// A cold start is slow: Python, the libraries and both AI models load before the server answers at all (half a
+// minute and more after the PC was switched on). So the start is asked for once and then waited for patiently;
+// the status turns green by itself the moment the server answers.
+const SERVER_START_WAIT_MS = 150000;
+const SERVER_START_POLL_MS = 750;
+const SERVER_START_HINT_AFTER_MS = 25000;
 
 async function launchServerViaProtocol(isAutoAttempt = false) {
   if (serverLaunchPromise) {
@@ -955,9 +1093,10 @@ async function launchServerViaProtocol(isAutoAttempt = false) {
     }
 
     if (!launchBlocked) {
-      const maxTries = isAutoAttempt ? 12 : 16;
-      for (let i = 0; i < maxTries; i++) {
-        await delayMs(750);
+      const startedAt = Date.now();
+      let hinted = false;
+      while (Date.now() - startedAt < SERVER_START_WAIT_MS) {
+        await delayMs(SERVER_START_POLL_MS);
         const res = await probeHealthSilent();
         if (res.ok) {
           setBtnDisabled(playBtn, false);
@@ -966,10 +1105,24 @@ async function launchServerViaProtocol(isAutoAttempt = false) {
         }
         if (res.modelError) {
           setBtnDisabled(playBtn, false);
+          hideBanner();
           showServerErrorCard("Сервер відкрито, але не завантажено моделі: " + escapeHtml(res.modelError));
           return false;
         }
+        const waited = Date.now() - startedAt;
+        pill.className = "gpu-pill loading";
+        txt.textContent = `Запуск… ${Math.round(waited / 1000)} с`;
+        if (playBtn) playBtn.style.display = "none";
+        if (!hinted && waited >= SERVER_START_HINT_AFTER_MS) {
+          hinted = true;
+          showBanner(
+            "Сервер ще завантажує AI-моделі — перший запуск після ввімкнення ПК може тривати до хвилини. " +
+            "Якщо вікно сервера так і не з’явилося, запустіть start_gpu_server.bat вручну.",
+            "info"
+          );
+        }
       }
+      hideBanner();
     }
 
     serverOnline = false;
@@ -995,11 +1148,83 @@ async function launchServerViaProtocol(isAutoAttempt = false) {
   }
 }
 
-async function ensureServerReadyOrPrompt() {
-  const ok = await probeHealthSilent();
-  if (ok.ok) return true;
-  const started = await launchServerViaProtocol(false);
-  return started;
+// ------------------------------------------------------------------
+// A button pressed while the server is not ready is remembered
+// ------------------------------------------------------------------
+// "Очистити фон" (and the two other actions) pressed before the server answers: the server is started, the press
+// is kept and the action goes on by itself the moment the status turns green - no second press. Pressing the
+// same button again while it waits takes the press back.
+let pendingPress = null; // { btnId, cancelled, cancel() }
+
+function showPendingPress(btnId, on) {
+  const btn = el(btnId);
+  if (!btn) return;
+  if (on) {
+    if (btn.dataset.idleText === undefined) btn.dataset.idleText = btn.textContent;
+    btn.textContent = "Чекаю на сервер…";
+    btn.classList.add("waiting");
+  } else {
+    if (btn.dataset.idleText !== undefined) btn.textContent = btn.dataset.idleText;
+    btn.classList.remove("waiting");
+  }
+}
+
+async function ensureServerForAction(btnId, actionName) {
+  const first = await probeHealthSilent();
+  if (first.ok) return true;
+  if (first.modelError) {
+    await checkServerHealth();
+    return false;
+  }
+
+  if (pendingPress) pendingPress.cancel("replaced");
+  const ticket = { btnId, cancelled: false, cancel: null };
+  const takenBack = new Promise((resolve) => {
+    ticket.cancel = (why) => {
+      if (ticket.cancelled) return;
+      ticket.cancelled = why || "user";
+      resolve(false);
+    };
+  });
+  pendingPress = ticket;
+  showPendingPress(btnId, true);
+  setFooterStatus(
+    `Сервер запускається. ${actionName} почнеться само, щойно він буде готовий, — вдруге натискати не треба. ` +
+    "Щоб скасувати, натисніть цю кнопку ще раз.",
+    "info"
+  );
+
+  let ok = false;
+  try {
+    ok = await Promise.race([launchServerViaProtocol(false), takenBack]);
+  } finally {
+    showPendingPress(btnId, false);
+    if (pendingPress === ticket) pendingPress = null;
+  }
+  if (ticket.cancelled) {
+    if (ticket.cancelled === "user") setFooterStatus("Скасовано. Сервер продовжує запускатися.", "info");
+    return false;
+  }
+  if (ok) setFooterStatus("");
+  return !!ok;
+}
+
+// A click on an action button: a press that is already waiting for the server is taken back, otherwise the action runs.
+function pressOrTakeBack(btnId, action) {
+  return () => {
+    if (pendingPress && pendingPress.btnId === btnId) {
+      pendingPress.cancel("user");
+      return;
+    }
+    action();
+  };
+}
+
+// Starting the server took a while: the action goes on only if the same document is still the active one.
+function sameDocumentStillActive(doc) {
+  if (app.documents && app.documents.length > 0 && app.activeDocument && app.activeDocument.id === doc.id) return true;
+  setFooterStatus("Сервер готовий. Поки він запускався, документ у Photoshop змінився — натисніть кнопку ще раз.", "info");
+  return false;
 }
 
 async function unloadVramManual() {
@@ -1132,14 +1357,22 @@ function clampBounds(b, maxW, maxH) {
 // ------------------------------------------------------------------
 // Stage Geometry, Zoom / Pan & Reliable Opaque JPEG Previews (No Canvas!)
 // ------------------------------------------------------------------
+// One of three views at any moment: "До / Після" switches original <-> cleaned photo (never the red/green one),
+// "Маска" switches mask <-> cleaned photo. The brush and the eraser work on the mask, so using them shows it.
+function setView(view) {
+  sessState.view = view === "original" || view === "mask" ? view : "result";
+  updateStageVisibility();
+}
+
 function updateStageVisibility() {
   const orig = el("dlgOrigImg");
   const comp = el("dlgCompImg");
   const over = el("dlgOverlayImg");
   const dots = el("dlgStrokeDots");
 
-  const showOrig = sessState.showingOriginal;
-  const showMask = sessState.autoMask && !sessState.showingOriginal && !sessState.peekingClean && !sessState.peekingBlend;
+  const showOrig = sessState.view === "original";
+  // (holding the mouse outside the photo, or dragging Blend, lifts the mask for that moment)
+  const showMask = sessState.view === "mask" && !sessState.peekingClean && !sessState.peekingBlend;
   const showClean = !showOrig && !showMask;
 
   if (orig) {
@@ -1155,19 +1388,26 @@ function updateStageVisibility() {
     over.style.opacity = "1";
   }
   if (dots) {
-    dots.style.display = (!sessState.showingOriginal && !sessState.peekingClean && showMask) ? "block" : "none";
+    dots.style.display = showMask ? "block" : "none";
   }
 
+  if (el("dlgBtnBeforeAfter")) el("dlgBtnBeforeAfter").classList.toggle("active", showOrig);
+  if (el("dlgBtnMask")) el("dlgBtnMask").classList.toggle("active", sessState.view === "mask");
+
+  // The corner label always names what is on screen (hidden until the first scan has something to show)
   const badge = el("dlgModeBadge");
   if (badge) {
-    if (showOrig) {
-      badge.textContent = "👁 ОРИГІНАЛ (ДО)";
-      badge.className = "r4m-mode-badge visible";
-    } else if (sessState.peekingClean || sessState.peekingBlend) {
-      badge.textContent = "✨ ЧИСТЕ ФОТО (ПІСЛЯ)";
-      badge.className = "r4m-mode-badge visible clean";
-    } else {
+    if (!sessState.id) {
       badge.className = "r4m-mode-badge";
+    } else if (showOrig) {
+      badge.textContent = "ДО · оригінал";
+      badge.className = "r4m-mode-badge visible";
+    } else if (showMask) {
+      badge.textContent = "МАСКА · зелене буде очищено";
+      badge.className = "r4m-mode-badge visible mask";
+    } else {
+      badge.textContent = "ПІСЛЯ · чисте фото";
+      badge.className = "r4m-mode-badge visible clean";
     }
   }
 }
@@ -1314,6 +1554,7 @@ async function sendMaskEditOp(op, points = null) {
       const d = await r.json();
       if (d.comp_jpg_b64 && el("dlgCompImg")) el("dlgCompImg").src = "data:image/jpeg;base64," + d.comp_jpg_b64;
       if (d.overlay_jpg_b64 && el("dlgOverlayImg")) el("dlgOverlayImg").src = "data:image/jpeg;base64," + d.overlay_jpg_b64;
+      if (typeof d.mask_share === "number") sessState.maskShare = d.mask_share;
     }
   } catch (_) {}
   clearStrokeDots();
@@ -1342,7 +1583,7 @@ async function sendDressPreviewUpdate() {
 async function saveCurrentConfigToActivePreset(announce = true) {
   const active = presetsList.find((p) => p.id === activePresetId);
   if (!active) return false;
-  active.cfg = readCurrentConfig();
+  active.cfg = presetConfigToSave();
   renderPresets();
   await persistPresets();
   await persistSettingsNow();
@@ -1384,6 +1625,48 @@ function cancelPreviewTimer() {
   }
 }
 
+// A short message in the corner of the photo: which preset was picked and why, what a clicked preset changed.
+// It gives way to the "refreshing" / "stale" messages and goes away by itself.
+function showPreviewNote(text, ms = 8000) {
+  if (sessState.noteTimer) clearTimeout(sessState.noteTimer);
+  sessState.note = text || "";
+  sessState.noteTimer = sessState.note
+    ? setTimeout(() => {
+      sessState.noteTimer = null;
+      sessState.note = "";
+      updatePreviewBadge();
+    }, ms)
+    : null;
+  updatePreviewBadge();
+}
+
+function percentOfFrame(share) {
+  const pct = Math.max(0, Number(share) || 0) * 100;
+  return pct.toFixed(pct >= 10 ? 0 : pct >= 1 ? 1 : 2).replace(".", ",") + " %";
+}
+
+// A preset was clicked. Between presets the cleaned photo often changes very little (they differ in how sensitive
+// the search is), so what happened is also said in words once the refreshed preview is back.
+function announcePresetClick(p) {
+  if (!sessState.open || !sessState.id) return;
+  if (previewMatchesSettings()) {
+    sessState.presetNote = null;
+    showPreviewNote(`Пресет «${p.name}»: значення ті самі, що вже на екрані, — перегляд не змінився.`);
+    return;
+  }
+  sessState.presetNote = { name: p.name, before: sessState.maskShare };
+}
+
+function presetNoteText(note, shareNow) {
+  if (typeof shareNow !== "number") return `✓ Пресет «${note.name}» застосовано.`;
+  const now = percentOfFrame(shareNow);
+  if (typeof note.before !== "number") return `✓ Пресет «${note.name}»: буде очищено ${now} кадру.`;
+  const was = percentOfFrame(note.before);
+  return now === was
+    ? `✓ Пресет «${note.name}»: зона очищення та сама (${now} кадру) — відмінність лише в м’якості та краях.`
+    : `✓ Пресет «${note.name}»: буде очищено ${now} кадру (було ${was}).`;
+}
+
 function updatePreviewBadge() {
   const badge = el("dlgPreviewBadge");
   if (!badge) return;
@@ -1402,6 +1685,9 @@ function updatePreviewBadge() {
         text = "Перегляд не оновився. Натисніть «↻ Точний перегляд» у налаштуваннях. «Застосувати» врахує нові значення й без цього.";
       }
       cls += " visible stale";
+    } else if (sessState.note) {
+      text = sessState.note;
+      cls += " visible note";
     }
   }
   badge.textContent = text;
@@ -1516,10 +1802,17 @@ async function recomputeInteractiveSession(preserveEdits = true, quick = false) 
       if (d.overlay_jpg_b64 && el("dlgOverlayImg")) el("dlgOverlayImg").src = "data:image/jpeg;base64," + d.overlay_jpg_b64;
       sessState.lastStats = d.stats || null;
       sessState.previewSyncedSig = untouched ? previewSettingsSignature() : sigAtSend;
+      if (sessState.presetNote && untouched) {
+        const note = sessState.presetNote;
+        sessState.presetNote = null;
+        showPreviewNote(presetNoteText(note, d.mask_share));
+      }
+      if (typeof d.mask_share === "number") sessState.maskShare = d.mask_share;
       done = true;
       updateStageVisibility();
     }
   } catch (err) {
+    sessState.presetNote = null;
     if (err && err.name === "AbortError") {
       aborted = true;
       if (el("dlgHoverHint")) el("dlgHoverHint").textContent = quick ? "Оновлення перегляду перервано." : "Перерахунок скасовано.";
@@ -1590,8 +1883,8 @@ async function openInteractiveWorkspace() {
   }
 
   setFooterStatus("");
-  const ready = await ensureServerReadyOrPrompt();
-  if (!ready) return;
+  const ready = await ensureServerForAction("btnRun", "«Очистити фон»");
+  if (!ready || isBusy || !sameDocumentStillActive(doc)) return;
 
   isBusy = true;
   setBtnDisabled(el("btnRun"), true);
@@ -1618,13 +1911,17 @@ async function openInteractiveWorkspace() {
       params.autoFractions = fracAuto;
       const settingsSig = previewSettingsSignature();
       const jobId = makeJobId();
-      const packet = encodeProcessPacket(
-        { width, height, channels: components, bitDepth, hasSelection: false, jobId, params },
-        rawBuf,
-        null
-      );
+      const meta = { width, height, channels: components, bitDepth, hasSelection: false, jobId, params };
+      // Automatic preset: the presets travel with the photo, the server uses the one that suits the frame
+      const scenePresets = autoPreset ? buildScenePresets() : null;
+      if (scenePresets) meta.scenePresets = scenePresets.params;
+      const packet = encodeProcessPacket(meta, rawBuf, null);
       px.imageData.dispose();
-      captured = { packet, width, height, bitDepth, colorProfile, jobId, settingsSig, autoFractions: !!params.autoFractions };
+      captured = {
+        packet, width, height, bitDepth, colorProfile, jobId, settingsSig,
+        autoFractions: !!params.autoFractions,
+        scenePresetIds: scenePresets ? scenePresets.ids : null
+      };
     }, { commandName: "Читання фото Чистий Вініл Pro 2" });
   } catch (err) {
     hideProgressUI("panel");
@@ -1647,9 +1944,11 @@ async function openInteractiveWorkspace() {
   sessState.colorProfile = captured.colorProfile;
   sessState.pw = captured.width;
   sessState.ph = captured.height;
-  sessState.autoMask = true;
+  sessState.view = "result";   // the window opens with the cleaned photo; "Маска" shows the green zones
+  sessState.maskShare = null;
+  sessState.presetNote = null;
+  showPreviewNote("");
   sessState.blend = 100;
-  sessState.showingOriginal = false;
   sessState.peekingClean = false;
   sessState.peekingBlend = false;
   sessState.scanAborted = false;
@@ -1664,10 +1963,9 @@ async function openInteractiveWorkspace() {
   pendingApplyPayload = null;
   updatePreviewBadge();
 
-  if (el("dlgChkAutoMask")) el("dlgChkAutoMask").checked = true;
   setSliderVal("dlgSlBlend", 100);
   updateSliderVisuals();
-  if (el("dlgBtnBeforeAfter")) el("dlgBtnBeforeAfter").classList.remove("active");
+  if (el("dlgChkAutoPreset")) el("dlgChkAutoPreset").checked = autoPreset;
   if (el("dlgChkMakeMask")) el("dlgChkMakeMask").checked = makeMaskDefault;
   if (el("dlgBrushSizeVal")) el("dlgBrushSizeVal").textContent = String(sessState.brushSize);
   if (el("dlgOrigImg")) el("dlgOrigImg").src = "";
@@ -1679,7 +1977,7 @@ async function openInteractiveWorkspace() {
   if (el("dlgGearPopover")) el("dlgGearPopover").classList.remove("visible");
   if (el("dlgInfoPopover")) el("dlgInfoPopover").classList.remove("visible");
 
-  // Default tool = Eraser so user starts erasing extra green right away!
+  // Default tool = Eraser: the first stroke over the photo shows the mask and erases the extra green there
   setActiveTool("eraser");
   updateStageVisibility();
   updateFractionButtonsUI();
@@ -1713,13 +2011,30 @@ async function openInteractiveWorkspace() {
 
       // Sliders may have been moved while the first scan was running: then the picture is for the values sent.
       const untouched = previewSettingsSignature() === captured.settingsSig;
+
+      // Automatic preset: the server has already cleaned the frame with the preset that suits it; put that
+      // preset on the controls. (Controls touched during the scan win: the preview is refreshed for them.)
+      const sceneKey = res.scene && res.scene.applied;
+      const scenePresetId = sceneKey && captured.scenePresetIds ? captured.scenePresetIds[sceneKey] : null;
+      const scenePreset = scenePresetId ? presetsList.find((p) => p.id === scenePresetId) : null;
+      let autoNote = "";
+      if (scenePreset && untouched) {
+        applyPreset(scenePreset);
+        renderPresets();
+        scheduleSaveSettings();
+        autoNote = autoPresetNote(res.scene, scenePreset);
+      }
+
       if (res.auto_fractions && (untouched || (captured.autoFractions && fracAuto))) {
         fracFine = !!res.auto_fractions.fracFine;
         fracMed = !!res.auto_fractions.fracMed;
         fracLarge = !!res.auto_fractions.fracLarge;
         updateFractionButtonsUI();
       }
-      sessState.previewSyncedSig = untouched ? previewSettingsSignature() : captured.settingsSig;
+      if (untouched) sessState.previewSyncedSig = previewSettingsSignature();
+      else sessState.previewSyncedSig = scenePreset ? "" : captured.settingsSig;
+      if (typeof res.mask_share === "number") sessState.maskShare = res.mask_share;
+      if (autoNote) showPreviewNote(autoNote);
 
       if (el("dlgOrigImg")) el("dlgOrigImg").src = "data:image/jpeg;base64," + res.orig_jpg_b64;
       if (el("dlgCompImg")) el("dlgCompImg").src = "data:image/jpeg;base64," + res.comp_jpg_b64;
@@ -1756,6 +2071,8 @@ async function openInteractiveWorkspace() {
     sessState.scanAborted = true;
     cancelPreviewTimer();
     sessState.pendingRecompute = false;
+    sessState.presetNote = null;
+    showPreviewNote("");
     stopProgressPolling();
     stopModalTimer();
     hideProgressUI("all");
@@ -2019,8 +2336,8 @@ async function runQuickSelectionClean() {
     return;
   }
 
-  const ready = await ensureServerReadyOrPrompt();
-  if (!ready) return;
+  const ready = await ensureServerForAction("btnSelection", "Очищення у виділенні");
+  if (!ready || isBusy || !sameDocumentStillActive(doc)) return;
 
   isBusy = true;
   setBtnDisabled(el("btnRun"), true);
@@ -2179,8 +2496,8 @@ async function runExtendCanvasToFormat() {
     return;
   }
 
-  const ready = await ensureServerReadyOrPrompt();
-  if (!ready) return;
+  const ready = await ensureServerForAction("btnFormat57", "«Формат 5:7»");
+  if (!ready || isBusy || !sameDocumentStillActive(doc)) return;
 
   isBusy = true;
   setMainButtonsDisabled(true);
@@ -2517,9 +2834,9 @@ function initEvents() {
   el("btnPlayServer").addEventListener("click", () => launchServerViaProtocol(false));
   el("btnRetryPlay").addEventListener("click", () => launchServerViaProtocol(false));
   el("btnRecheckServer").addEventListener("click", checkServerHealth);
-  el("btnRun").addEventListener("click", openInteractiveWorkspace);
-  el("btnSelection").addEventListener("click", runQuickSelectionClean);
-  el("btnFormat57").addEventListener("click", runExtendCanvasToFormat);
+  el("btnRun").addEventListener("click", pressOrTakeBack("btnRun", openInteractiveWorkspace));
+  el("btnSelection").addEventListener("click", pressOrTakeBack("btnSelection", runQuickSelectionClean));
+  el("btnFormat57").addEventListener("click", pressOrTakeBack("btnFormat57", runExtendCanvasToFormat));
   el("btnCompare").addEventListener("click", toggleBeforeAfterInPhotoshop);
   el("btnQuickUnload").addEventListener("click", unloadVramManual);
   el("btnPanelHelp").addEventListener("click", () => {
@@ -2527,15 +2844,23 @@ function initEvents() {
   });
 
   // Modal Topbar Controls
+  // "До / Після": the photo as it was <-> the cleaned photo. "Маска": the red/green mask <-> the cleaned photo.
   el("dlgBtnBeforeAfter").addEventListener("click", () => {
-    sessState.showingOriginal = !sessState.showingOriginal;
-    el("dlgBtnBeforeAfter").classList.toggle("active", sessState.showingOriginal);
-    updateStageVisibility();
+    setView(sessState.view === "original" ? "result" : "original");
   });
 
-  el("dlgChkAutoMask").addEventListener("change", () => {
-    sessState.autoMask = !!el("dlgChkAutoMask").checked;
-    updateStageVisibility();
+  el("dlgBtnMask").addEventListener("click", () => {
+    setView(sessState.view === "mask" ? "result" : "mask");
+  });
+
+  el("dlgChkAutoPreset").addEventListener("change", () => {
+    setAutoPreset(el("dlgChkAutoPreset").checked);
+    scheduleSaveSettings();
+    if (el("dlgHoverHint")) {
+      el("dlgHoverHint").textContent = autoPreset
+        ? "✓ Авто-пресет увімкнено: з наступного фото пресет підбиратиметься під кадр"
+        : "Авто-пресет вимкнено: лишається пресет, який вибрали ви";
+    }
   });
 
   el("dlgChkDress").addEventListener("change", async () => {
@@ -2545,7 +2870,7 @@ function initEvents() {
     await sendDressPreviewUpdate();
     if (el("dlgHoverHint")) {
       el("dlgHoverHint").textContent = dressSmoothEnabled
-        ? "✓ Рівняння одягу увімкнено (затисніть поза фото для перегляду без маски)"
+        ? "✓ Рівняння одягу увімкнено"
         : "Рівняння одягу вимкнено (повзунок у налаштуваннях неактивний)";
     }
   });
@@ -2611,7 +2936,7 @@ function initEvents() {
       name,
       color: palette[presetsList.length % palette.length],
       builtin: false,
-      cfg: readCurrentConfig()
+      cfg: presetConfigToSave()
     };
     presetsList.unshift(newP);
     activePresetId = newP.id;
@@ -2707,8 +3032,10 @@ function initEvents() {
   // Left Toolbar (Pan / Brush + Ctrl-Click Fill / Eraser + Ctrl-Click Clear / Invert / Size)
   el("dlgToolPan").addEventListener("click", () => setActiveTool("pan"));
 
+  // The brush, the eraser and the inversion work on the mask: picking one of them shows it
   el("dlgToolBrush").addEventListener("click", async (e) => {
     setActiveTool("brush");
+    setView("mask");
     if (e.ctrlKey || e.metaKey) {
       await sendMaskEditOp("fill");
     }
@@ -2716,12 +3043,14 @@ function initEvents() {
 
   el("dlgToolEraser").addEventListener("click", async (e) => {
     setActiveTool("eraser");
+    setView("mask");
     if (e.ctrlKey || e.metaKey) {
       await sendMaskEditOp("clear");
     }
   });
 
   el("dlgToolInvert").addEventListener("click", async () => {
+    setView("mask");
     await sendMaskEditOp("invert");
   });
 
@@ -2758,6 +3087,8 @@ function initEvents() {
 
     if (e.button === 0 && (sessState.tool === "brush" || sessState.tool === "eraser")) {
       e.preventDefault();
+      if (!sessState.id) return;                         // nothing to draw on while the first scan is running
+      if (sessState.view !== "mask") setView("mask");    // a stroke edits the mask: show it
       sessState.isDrawing = true;
       sessState.lastDotX = -1;
       sessState.lastDotY = -1;
@@ -2795,8 +3126,10 @@ function initEvents() {
       adjustBrushSize(6);
     } else if (e.key === "b" || e.key === "B" || e.key === "и" || e.key === "И") {
       setActiveTool("brush");
+      if (sessState.id) setView("mask");
     } else if (e.key === "e" || e.key === "E" || e.key === "у" || e.key === "У") {
       setActiveTool("eraser");
+      if (sessState.id) setView("mask");
     } else if (e.key === "h" || e.key === "H" || e.key === "р" || e.key === "Р") {
       setActiveTool("pan");
     }
@@ -2812,28 +3145,28 @@ function initEvents() {
 
   // Bottom Bar: Fractions + Auto + Speed + Zoom + Apply/Cancel
   el("dlgFracFine").addEventListener("click", () => {
-    fracAuto = false;
+    fracAuto = fracAutoUser = false;
     fracFine = !fracFine;
     updateFractionButtonsUI();
     scheduleSaveSettings();
     refreshPreviewAfterClick(false);
   });
   el("dlgFracMed").addEventListener("click", () => {
-    fracAuto = false;
+    fracAuto = fracAutoUser = false;
     fracMed = !fracMed;
     updateFractionButtonsUI();
     scheduleSaveSettings();
     refreshPreviewAfterClick(false);
   });
   el("dlgFracLarge").addEventListener("click", () => {
-    fracAuto = false;
+    fracAuto = fracAutoUser = false;
     fracLarge = !fracLarge;
     updateFractionButtonsUI();
     scheduleSaveSettings();
     refreshPreviewAfterClick(false);
   });
   el("dlgFracAuto").addEventListener("click", () => {
-    fracAuto = !fracAuto;
+    fracAuto = fracAutoUser = !fracAuto;
     updateFractionButtonsUI();
     scheduleSaveSettings();
     if (fracAuto) refreshPreviewAfterClick(true);  // the server picks the fractions again
