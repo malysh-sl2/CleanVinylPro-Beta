@@ -1,0 +1,1401 @@
+#!/usr/bin/env python3
+"""
+Self-checks of the Clean Vinyl Pro 2 server (folder CleanVinylPro2). No AI models, no GPU and no Photoshop needed.
+
+    python tests/run_checks.py            # quick run (a few minutes)
+    python tests/run_checks.py --full     # more random cases
+    python tests/run_checks.py stage http # only the groups whose name contains one of the words
+
+Part 1 - what was NOT meant to change still gives the pixels of the original program (folder CleanVinylPro,
+v3.2.1). These comparisons run in the "legacy regime": quality mode, smoke protection off, cyclorama 0, clothing
+off - the four places where Clean Vinyl Pro 2 works differently on purpose:
+  convert   fast pixel conversions give the same numbers as the plain NumPy formulas (all 8/16-bit values)
+  process   one-shot clean: current engine == v3.2.1 engine, pixel for pixel
+  session   interactive window (open / sliders / brush / apply): current engine == v3.2.1
+  http      every HTTP endpoint: current server == v3.2.1 server (needs the `httpx` package)
+  stage     interactive stage cache: a recompute that re-uses stored stages == a full recompute
+  quick     light preview after the sliders: the layer made by "light refreshes + one full computation at Apply"
+            == the layer of the old way (a full recompute after every change); the preview itself stays close
+  white     the "white patch after Apply" bug stays fixed
+  gpu       the cuDNN option can never push the models from the GPU onto the CPU
+
+Part 2 - what Clean Vinyl Pro 2 does differently, each with its own measurable promise:
+  cyc       cyclorama: the wall-floor line goes away, people are not touched, a frame without a corner is not touched
+  dress     clothing: wrinkles get weaker; volume, colour, fine texture, denim and everything outside stay
+  speed     "Швидкий" and "Якісний" find exactly the same defects (they differ only in how defects are repaired)
+  smoke     smoke protection: no "protected ring" around the person; real smoke is still protected
+  empty     a frame without people: nobody is invented
+  format    format 5:7: size, seamless join, nothing drawn over the photo, 8/16 bit, both orientations
+
+Part 3 - the program around the engine:
+  server    settings migration, binary packets, one version everywhere, and no name / port shared with the
+            original program (both must be able to run side by side)
+  plugin    plugin settings migration and the behaviour of the big window (needs Node.js; the window test
+            also needs the jsdom package), the .ccx package and the download archive CleanVinylPro2.zip being
+            up to date, CRLF line endings of the .bat files
+
+Part 4 - installing (tests/install_checks.py; needs nothing but Python):
+  folders   folders.ini (shared folders for the AI models, Python and its libraries): read alike by Python and by
+            install_windows.bat; the models are found in the shared folder, copied before they are downloaded
+  install   server/setup_env.py really run in an imitated PC: libraries once in the shared folder, a second copy
+            of the program needs no pip, a moved Python is re-linked, libraries of the old program are re-used
+  bat       the .bat files read the way cmd.exe reads them (they cannot be run without Windows)
+
+The comparisons with v3.2.1 take that engine.py from the git history (CleanVinylPro/server at the first commit).
+"""
+import json
+import os
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import time
+import types
+import warnings
+
+sys.dont_write_bytecode = True  # keep the repository free of __pycache__ folders
+
+import cv2  # noqa: E402
+import numpy as np  # noqa: E402
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import harness as H  # noqa: E402
+import install_checks as IC  # noqa: E402
+
+# The seam detector (unchanged since v3.2.1) averages an empty selection on some frames; NumPy reports that
+# as a RuntimeWarning in both versions. It is not what these checks are about.
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+
+FULL = "--full" in sys.argv
+ONLY = [a for a in sys.argv[1:] if not a.startswith("-")]
+E = H.load_engine()
+E_OLD, SRV_OLD = H.load_baseline()
+ENG = E.CleanVinylEngine
+
+_results = []
+
+
+def report(group: str, ok: bool, text: str) -> None:
+    _results.append((group, ok))
+    print(f"[{'ok' if ok else 'FAIL'}] {group:8s} {text}", flush=True)
+
+
+def _quiet(fn, *a, **k):
+    """Runs fn with the engine's console chatter hidden."""
+    real = sys.stdout
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    try:
+        return fn(*a, **k)
+    finally:
+        sys.stdout.close()
+        sys.stdout = real
+
+
+def _legacy(p: dict) -> dict:
+    """The parameters under which Clean Vinyl Pro 2 must still give the pixels of v3.2.1 (see the header)."""
+    return dict(p, speedMode="quality", smokeOn=False, cycCurve=0, dressSmooth=False)
+
+
+def _same_stats(a: dict, b: dict) -> bool:
+    skip = ("elapsed_ms", "reused_stages")
+    return all(a[k] == b.get(k) for k in a if k not in skip)
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+def check_convert():
+    bad = []
+    u8 = np.arange(256, dtype=np.uint8).reshape(16, 16)
+    u16 = np.arange(65536, dtype=np.uint16).reshape(256, 256)
+    for arr, ps in ((u8, 255.0), (u16, 32768.0)):
+        unit_ref = np.clip(arr.astype(np.float32) * (1.0 / ps), 0.0, 1.0)
+        if not np.array_equal(ENG._to_unit_f32(arr, ps), unit_ref):
+            bad.append(f"_to_unit_f32 {arr.dtype}")
+        if not np.array_equal(ENG._to_analysis_u8(arr, ps), np.clip(unit_ref * 255.0 + 0.5, 0, 255).astype(np.uint8)):
+            bad.append(f"_to_analysis_u8 {arr.dtype}")
+        # the formula the session code used before: (x / ps) * 255 + 0.5
+        if not np.array_equal(ENG._to_analysis_u8(arr, ps), np.clip((arr.astype(np.float32) / ps) * 255.0 + 0.5, 0, 255).astype(np.uint8)):
+            bad.append(f"_to_analysis_u8 (session formula) {arr.dtype}")
+
+    rng = np.random.default_rng(0)
+    for dt, ps in ((np.uint8, 255.0), (np.uint16, 32768.0)):
+        ties = (np.arange(int(ps)) + 0.5) / ps
+        vals = np.concatenate([rng.random(400_000), ties, [-0.5, -1e-9, 0.0, 1.0, 1.0000001, 1.7, 3.0]])
+        for ftype in (np.float32, np.float64):
+            x = vals.astype(ftype).reshape(-1, 1)
+            ref = np.clip(np.round(x * ps), 0, ps).astype(dt)
+            if not np.array_equal(ENG._quantize_unit(x.copy(), ps, dt), ref):
+                bad.append(f"_quantize_unit {np.dtype(ftype).name}->{np.dtype(dt).name}")
+    x = rng.random((300, 7)).astype(np.float64)  # layer mask of a 16-bit document: float64 alpha -> uint8
+    if not np.array_equal(ENG._quantize_unit(x.copy(), 255.0, np.uint8), np.clip(np.round(x * 255.0), 0, 255).astype(np.uint8)):
+        bad.append("_quantize_unit float64->uint8 mask")
+
+    for dt in (np.uint8, np.uint16):
+        rgba = rng.integers(0, 256, (37, 53, 4)).astype(dt)
+        if not np.array_equal(ENG._rgb_planes(rgba), rgba[:, :, :3]):
+            bad.append(f"_rgb_planes {np.dtype(dt).name}")
+        ro = rgba.copy()
+        ro.setflags(write=False)
+        ENG._rgb_planes(ro)
+
+    for trial in range(40):  # 128px cell detection of the heal blend
+        h, w = int(rng.integers(1, 700)), int(rng.integers(1, 900))
+        a = np.zeros((h, w), np.float32)
+        for _ in range(int(rng.integers(0, 6))):
+            a[int(rng.integers(0, h)), int(rng.integers(0, w))] = float(rng.choice([1.0, 0.5, 0.0015, 0.0025]))
+        cells, bbox = ENG._heal_cells(a)
+        ref_cells = [(y, min(h, y + 128), x, min(w, x + 128)) for y in range(0, h, 128) for x in range(0, w, 128)
+                     if (a[y:y + 128, x:x + 128] > 0).any()]
+        ys, xs = np.where(a > 0.002)
+        ref_bbox = (int(ys.min()), int(ys.max()) + 1, int(xs.min()), int(xs.max()) + 1) if ys.size else None
+        if cells != ref_cells or bbox != ref_bbox:
+            bad.append(f"_heal_cells trial {trial}")
+            break
+    report("convert", not bad, "pixel conversions and cell detection match the NumPy formulas" if not bad else f"differences: {bad}")
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+SIZES = [(2000, 1500), (1500, 2000), (1777, 1333), (640, 480), (300, 200), (2600, 1731), (1024, 1024), (129, 257), (3000, 2000)]
+
+
+def _rand_params(rng):
+    p = dict(H.STD)
+    p["speedMode"] = str(rng.choice(["fast", "quality"]))
+    for k, lo, hi in (("spots", 0, 100), ("scuffs", 0, 100), ("blur", 0, 60), ("cycCurve", 0, 80), ("feather", 0, 100),
+                      ("seam", 0, 100), ("edge", 0, 100), ("smoke", 0, 100), ("grain", 0, 100), ("master", 60, 200),
+                      ("dressStrength", 0, 100)):
+        r = rng.random()
+        if k in ("blur", "cycCurve") and r < 0.5:
+            p[k] = 0
+        elif k in ("spots", "scuffs", "grain") and r < 0.12:
+            p[k] = 0
+        elif r < 0.75 or k in ("blur", "cycCurve"):
+            p[k] = int(rng.integers(lo, hi + 1))
+    for k, pr in (("seamOn", 0.8), ("smokeOn", 0.8), ("shadow", 0.8), ("removeStands", 0.3), ("fracFine", 0.85),
+                  ("fracMed", 0.85), ("fracLarge", 0.85), ("dressSmooth", 0.25)):
+        p[k] = bool(rng.random() < pr)
+    p["cleanPasses"] = 2 if rng.random() < 0.25 else 1
+    return p
+
+
+def _mutate(p, rng):
+    p = dict(p)
+    for _ in range(int(rng.integers(1, 4))):
+        k = str(rng.choice(["spots", "scuffs", "blur", "cycCurve", "feather", "seam", "edge", "smoke", "grain", "master",
+                            "seamOn", "smokeOn", "shadow", "removeStands", "fracFine", "fracMed", "fracLarge",
+                            "cleanPasses", "speedMode", "autoFractions", "same", "blur", "cycCurve", "scuffs", "blur",
+                            "feather", "spots"]))
+        if k == "same":
+            continue
+        if k in ("seamOn", "smokeOn", "shadow", "removeStands", "fracFine", "fracMed", "fracLarge", "autoFractions"):
+            p[k] = not bool(p.get(k, False))
+        elif k == "cleanPasses":
+            p[k] = 3 - int(p.get(k, 1))
+        elif k == "speedMode":
+            p[k] = "quality" if p.get(k) == "fast" else "fast"
+        elif k == "master":
+            p[k] = int(rng.choice([60, 100, 100, 130, 200]))
+        elif k in ("blur", "cycCurve"):
+            p[k] = int(rng.choice([0, 0, 10, 25, 40, 70]))
+        else:
+            p[k] = int(rng.integers(0, 101))
+    return p
+
+
+def _rand_selection(rng, w, h, bit16):
+    kind = str(rng.choice(["none", "none", "small", "large", "soft", "empty"]))
+    if kind == "none":
+        return None
+    sel = np.zeros((h, w), np.uint8)
+    if kind == "small":
+        x0, y0 = int(rng.integers(0, int(w * 0.7))), int(rng.integers(int(h * 0.5), int(h * 0.85)))
+        sel[y0:y0 + max(4, h // 8), x0:x0 + max(4, w // 6)] = 255
+    elif kind == "large":
+        sel[h // 10:, : int(w * 0.9)] = 255
+    elif kind == "soft":
+        cv2.circle(sel, (w // 3, int(h * 0.75)), max(6, min(w, h) // 5), 255, -1)
+        sel = cv2.GaussianBlur(sel, (0, 0), max(1.0, min(w, h) / 60))
+    if bit16 and rng.random() < 0.5:
+        sel = sel.astype(np.uint16) * 128
+    return sel
+
+
+def check_process():
+    if E_OLD is None:
+        report("process", True, "SKIPPED - v3.2.1 is not available (no git history here)")
+        return
+    rng = np.random.default_rng(1000)
+    n_cases = 60 if FULL else 14
+    bad = []
+    t_old = t_new = 0.0
+    for ci in range(n_cases):
+        w, h = SIZES[int(rng.integers(0, len(SIZES)))]
+        bit16, rgba, lowkey = bool(rng.random() < 0.4), bool(rng.random() < 0.5), bool(rng.random() < 0.3)
+        img, sil = H.make_studio_image(w, h, n_dust=int(rng.integers(0, 160)), n_hair=int(rng.integers(0, 14)),
+                                       seed=int(rng.integers(0, 10 ** 6)), bit16=bit16, rgba=rgba, lowkey=lowkey)
+        if rng.random() < 0.15:
+            sil = np.zeros_like(sil)  # nobody in the frame
+        params = _legacy(_rand_params(rng))
+        sel = _rand_selection(rng, w, h, bit16)
+        kw = {}
+        custom = str(rng.choice(["none", "none", "none", "fg", "heal", "both"]))
+        if custom in ("fg", "both"):
+            kw["custom_fg_mask"] = (cv2.resize(sil, (w, h)) * 255).astype(np.uint8)
+        if custom in ("heal", "both"):
+            hm = np.zeros((h, w), np.uint8)
+            for _ in range(int(rng.integers(0, 9))):
+                cv2.circle(hm, (int(rng.integers(0, w)), int(rng.integers(0, h))), int(rng.integers(2, max(3, min(w, h) // 10))), 255, -1)
+            kw["custom_heal_mask"] = hm
+        outs = []
+        for mod in (E_OLD, E):
+            eng = H.make_engine(mod, sil)
+            src = img.copy()
+            src.setflags(write=False)  # the server hands over a read-only view of the request body
+            oc = {}
+            t0 = time.perf_counter()
+            res, st = _quiet(eng.process, src, 16 if bit16 else 8, dict(params),
+                             selection_alpha=None if sel is None else sel.copy(), out_cache=oc,
+                             **{k: v.copy() for k, v in kw.items()})
+            dt = time.perf_counter() - t0
+            if mod is E:
+                t_new += dt
+            else:
+                t_old += dt
+            outs.append((res, st, oc, eng.lama_sess.calls))
+        (r0, s0, c0, l0), (r1, s1, c1, l1) = outs
+        same_oc = set(c0) == set(c1) and all(
+            np.array_equal(c0[k], c1[k]) if isinstance(c0[k], np.ndarray) else c0[k] == c1[k] for k in c0)
+        if not (np.array_equal(r0, r1) and _same_stats(s0, s1) and same_oc and l0 == l1):
+            bad.append(f"case {ci}: {w}x{h} {'16' if bit16 else '8'}-bit {'RGBA' if rgba else 'RGB'} {params}")
+    report("process", not bad, f"{n_cases} random one-shot cleans (legacy regime) identical to v3.2.1 "
+                               f"(time {t_old:.1f}s -> {t_new:.1f}s)" if not bad else "DIFFERENT:\n  " + "\n  ".join(bad))
+
+
+def check_stage():
+    rng = np.random.default_rng(2000)
+    bad = []
+    steps = reused = 0
+    for (w, h, bit16, rgba) in ([(2000, 1500, False, False), (1500, 2000, True, True)] + ([(2600, 1731, False, True)] if FULL else [])):
+        img, sil = H.make_studio_image(w, h, seed=w, bit16=bit16, rgba=rgba)
+        fg_raw = np.clip(sil * 255.0, 0, 255).astype(np.uint8)
+        sel = None
+        if rgba:
+            sel = np.zeros((h, w), np.uint8)
+            sel[h // 3:, : int(w * 0.8)] = 255
+        eng = H.make_engine(E, sil)
+        cache: dict = {}
+        p = dict(H.STD, speedMode="fast")
+        for step in range(24 if FULL else 12):
+            if step:
+                p = _mutate(p, rng)
+            p["dressSmooth"] = False
+            a, sa = _quiet(eng.process, img, 16 if bit16 else 8, dict(p), selection_alpha=sel, cached_fg_raw_1024=fg_raw, stage_cache=cache)
+            b, sb = _quiet(eng.process, img, 16 if bit16 else 8, dict(p), selection_alpha=sel, cached_fg_raw_1024=fg_raw)
+            steps += 1
+            reused += len(sa["reused_stages"])
+            if not (np.array_equal(a, b) and _same_stats(sa, sb)):
+                bad.append(f"{w}x{h} step {step} reused={sa['reused_stages']} params={p}")
+        # same parameters again -> everything cached, still identical
+        a, sa = _quiet(eng.process, img, 16 if bit16 else 8, dict(p), selection_alpha=sel, cached_fg_raw_1024=fg_raw, stage_cache=cache)
+        if not np.array_equal(a, b) or "heal" not in sa["reused_stages"]:
+            bad.append(f"{w}x{h} repeat call reused={sa['reused_stages']}")
+    report("stage", not bad, f"{steps} recomputes with the stage cache identical to full recomputes "
+                             f"({reused} stages re-used)" if not bad else "DIFFERENT:\n  " + "\n  ".join(bad))
+
+
+def _count_full_frames(eng):
+    """Counts how many times the engine computes the real, full-size cleaned frame."""
+    counter = {"n": 0}
+    real = eng.process
+
+    def counted(*a, **k):
+        if k.get("analysis") is None and not k.get("analysis_only", False):
+            counter["n"] += 1
+        return real(*a, **k)
+
+    eng.process = counted
+    return counter
+
+
+def check_quick():
+    """
+    The big window after the "light preview" change. Two engines get the same frame and the same actions:
+      A (new way): every slider change only refreshes the preview (quick=True); the real frame is computed at Apply;
+      B (old way): every slider change recomputes the real frame at once.
+    Both must hand Photoshop exactly the same layer.
+    """
+    rng = np.random.default_rng(7100)
+    bad = []
+    n_steps = n_apply = n_quick = 0
+    worst_col = worst_mask = 0.0
+    worst_person = -1.0
+    frames = [(2600, 1800, False, False, False), (1800, 2600, True, True, True)] + ([(3000, 2000, False, True, False)] if FULL else [])
+    for (w, h, bit16, rgba, with_sel) in frames:
+        img, sil = H.make_studio_image(w, h, seed=w + 7, bit16=bit16, rgba=rgba)
+        bd = 16 if bit16 else 8
+        sel = None
+        if with_sel:
+            sel = np.zeros((h, w), np.uint16 if bit16 else np.uint8)
+            sel[h // 3:, : int(w * 0.85)] = 32768 if bit16 else 255
+        A, B = H.make_engine(E, sil), H.make_engine(E, sil)
+        full_a, full_b = _count_full_frames(A), _count_full_frames(B)
+        p = dict(H.STD, speedMode="fast", cycCurve=40, dressSmooth=True, dressStrength=50, autoFractions=True)
+        ra = _quiet(A.start_session, img, bd, dict(p), sel)
+        rb = _quiet(B.start_session, img, bd, dict(p), sel)
+        sa_id, sb_id = ra["session_id"], rb["session_id"]
+        if A._active_session.get("proxy") is None:
+            bad.append(f"{w}x{h}: no reduced copy was prepared for the light preview")
+            continue
+        tag = f"{w}x{h}/{bd}bit"
+
+        def apply_both(label, params_for_a=None):
+            nonlocal n_apply
+            n_apply += 1
+            oa, ma, sta = _quiet(A.apply_session, sa_id, 90.0, True, True, 50.0, None, params_for_a)
+            ob, mb, stb = _quiet(B.apply_session, sb_id, 90.0, True, True, 50.0)
+            if not (np.array_equal(oa, ob) and np.array_equal(ma, mb)):
+                bad.append(f"{tag} {label}: the applied layer differs from the old way")
+            if not np.array_equal(A._active_session["cleaned_base_rgba"], B._active_session["cleaned_base_rgba"]):
+                bad.append(f"{tag} {label}: the real frame after Apply differs from the old way")
+            return sta, stb
+
+        # ---- 1. sliders, brush, eraser, then Apply: same layer as the old way
+        for step in range(14 if FULL else 9):
+            p = _mutate(p, rng)
+            p["dressSmooth"], p["dressStrength"] = True, 50
+            base_before = full_a["n"]
+            qa = _quiet(A.recompute_session, sa_id, dict(p), True, None, True)
+            qb = _quiet(B.recompute_session, sb_id, dict(p), True, None, False)
+            n_steps += 1
+            light = int(p.get("cleanPasses", 1)) < 2
+            if qa["quick"] is not light or qb["quick"] is not False:
+                bad.append(f"{tag} step {step}: answer quick={qa['quick']}/{qb['quick']}, expected {light}/False")
+            if light:
+                n_quick += 1
+                if full_a["n"] != base_before:
+                    bad.append(f"{tag} step {step}: a light refresh computed the real frame")
+                sa, sb = A._active_session, B._active_session
+                col = np.abs(sa["clean_base_small_bgr"].astype(np.int16) - sb["clean_base_small_bgr"].astype(np.int16))
+                msk = np.abs(sa["auto_mask_small_u8"].astype(np.int16) - sb["auto_mask_small_u8"].astype(np.int16))
+                worst_col, worst_mask = max(worst_col, float(col.mean())), max(worst_mask, float(msk.mean()))
+                if col.mean() > 0.6 or np.percentile(col, 99) > 2 or msk.mean() > 3.0:
+                    bad.append(f"{tag} step {step}: light preview is far from the exact one (colour mean {col.mean():.2f}, "
+                               f"p99 {np.percentile(col, 99):.0f}; mask mean {msk.mean():.2f}) params={p}")
+                # The person is not cleaned, so in the preview it must stay as sharp as in the original picture
+                # (the clothing preview shows exactly these pixels). The exact preview is the yardstick.
+                core = cv2.resize(sb["core_mask_u8"], (sa["preview_w"], sa["preview_h"]), interpolation=cv2.INTER_AREA) > 128
+                if np.any(core):
+                    orig_core = sa["orig_small_bgr"].astype(np.int16)[core]
+                    off_a = float(np.abs(sa["clean_base_small_bgr"].astype(np.int16)[core] - orig_core).mean())
+                    off_b = float(np.abs(sb["clean_base_small_bgr"].astype(np.int16)[core] - orig_core).mean())
+                    worst_person = max(worst_person, off_a - off_b)
+                    if off_a > off_b + 0.1:
+                        bad.append(f"{tag} step {step}: the person in the light preview is off by {off_a:.2f} levels (exact preview: {off_b:.2f})")
+            if qa["auto_fractions"] != qb["auto_fractions"]:
+                bad.append(f"{tag} step {step}: automatic fractions differ")
+            if step % 3 == 1:
+                pts = [{"x": float(rng.uniform(0.1, 0.9)), "y": float(rng.uniform(0.1, 0.9)), "norm": 1} for _ in range(int(rng.integers(1, 4)))]
+                erase = bool(rng.random() < 0.5)
+                radius = float(rng.integers(12, 40))
+                for eng_, sid_ in ((A, sa_id), (B, sb_id)):
+                    eng_.edit_session_mask(sid_, "stroke", pts, radius, erase=erase, dress_smooth=True, dress_strength=50.0)
+            if step % 4 == 3:
+                before = full_a["n"]
+                sta, _ = apply_both(f"apply after step {step}")
+                if light and not (sta["recomputed"] is True and full_a["n"] == before + 1):
+                    bad.append(f"{tag} step {step}: Apply after light refreshes must compute the real frame exactly once")
+                before = full_a["n"]
+                sta, _ = apply_both(f"second apply after step {step}")
+                if sta["recomputed"] is not False or full_a["n"] != before:
+                    bad.append(f"{tag} step {step}: a second Apply computed the real frame again")
+
+        # ---- 2. sliders moved with no refresh at all: Apply carries the values
+        for k in range(3):
+            p = _mutate(_mutate(p, rng), rng)
+            p["dressSmooth"], p["dressStrength"] = True, 50
+            _quiet(B.recompute_session, sb_id, dict(p), True, None, False)
+            before = full_a["n"]
+            sta, _ = apply_both(f"apply with new settings #{k}", dict(p))
+            if full_a["n"] - before > 1:
+                bad.append(f"{tag} apply with new settings #{k}: more than one full computation")
+            same = dict(p, dressStrength=77, dressSmooth=False, someUnknownKey=5)
+            before = full_a["n"]
+            sta, _ = apply_both(f"apply with the same settings #{k}", same)
+            if sta["recomputed"] is not False or full_a["n"] != before:
+                bad.append(f"{tag} apply with the same settings #{k}: the real frame was computed again")
+
+        # ---- 3. the cost promise, counted
+        if full_b["n"] <= full_a["n"]:
+            bad.append(f"{tag}: the new way computed the real frame {full_a['n']} times, the old way {full_b['n']} times")
+
+        # ---- 4. "invert + brush" makes the mask the user's own drawing: Apply must use exactly the one on screen
+        p = dict(H.STD, speedMode="fast", spots=88, cycCurve=30)
+        _quiet(A.recompute_session, sa_id, dict(p), False, None, True)
+        A.edit_session_mask(sa_id, "invert")
+        A.edit_session_mask(sa_id, "stroke", [{"x": 0.3, "y": 0.5, "norm": 1}, {"x": 0.5, "y": 0.55, "norm": 1}], 30.0, erase=False)
+        shown = A._compute_effective_mask_small(A._active_session).copy()
+        _, mask_a, sta = _quiet(A.apply_session, sa_id, 100.0, True, False, 0.0)
+        n_apply += 1
+        after = A._compute_effective_mask_small(A._active_session)
+        ref = cv2.resize(shown, (w, h), interpolation=cv2.INTER_LINEAR)
+        if sta["recomputed"] is not True or not np.array_equal(shown, after) or np.abs(mask_a.astype(np.int16) - ref.astype(np.int16)).max() > 1:
+            bad.append(f"{tag}: after invert + brush the applied mask is not the one shown")
+        A.close_session(sa_id)
+        B.close_session(sb_id)
+
+    # ---- 5. where there is no light way, the server says so and does the full recompute
+    img, sil = H.make_studio_image(1500, 1000, seed=5)
+    S = H.make_engine(E, sil)
+    r = _quiet(S.start_session, img, 8, dict(H.STD, speedMode="fast"))
+    q = _quiet(S.recompute_session, r["session_id"], dict(H.STD, speedMode="fast", blur=30), True, None, True)
+    if S._active_session.get("proxy") is not None or q["quick"] is not False or S._active_session.get("base_stale"):
+        bad.append("small frame: must be recomputed in full and say quick=False")
+
+    # ---- 6. Apply notices every setting of the clean, and only those
+    sig = ENG._clean_signature
+    ref = sig(dict(H.STD, speedMode="fast"))
+    for key, val in (("spots", 76), ("scuffs", 64), ("blur", 1), ("cycCurve", 1), ("feather", 61), ("seamOn", False), ("seam", 84),
+                     ("edge", 71), ("smokeOn", False), ("smoke", 81), ("grain", 89), ("shadow", False), ("removeStands", True),
+                     ("master", 101), ("speedMode", "quality"), ("fracFine", False), ("fracMed", False), ("fracLarge", False),
+                     ("cleanPasses", 2)):
+        changed = dict(H.STD, speedMode="fast")
+        changed[key] = val
+        if sig(changed) == ref:
+            bad.append(f"Apply would not notice a change of '{key}'")
+    for key, val in (("dressSmooth", True), ("dressStrength", 99), ("autoFractions", True), ("unknown", 1), ("master", 60), ("spots", 75.0)):
+        changed = dict(H.STD, speedMode="fast")
+        changed[key] = val
+        if sig(changed) != ref:
+            bad.append(f"Apply would recompute for '{key}', which does not change the clean")
+    import inspect
+    read_by_process = set(re.findall(r'params\.get\("(\w+)"', inspect.getsource(ENG.process)))
+    in_signature = set(re.findall(r'(?:p\.get|fl)\("(\w+)"', inspect.getsource(sig)))
+    missing = read_by_process - in_signature - {"dressSmooth", "dressStrength"}
+    if missing or not read_by_process:
+        bad.append(f"settings read by process() but unknown to Apply: {sorted(missing)}")
+
+    report("quick", not bad,
+           f"{n_steps} slider steps ({n_quick} light refreshes) + {n_apply} applies: same layer as full recomputes after every step; "
+           f"a light refresh never computes the real frame, Apply computes it once; light preview differs from the exact one by "
+           f"<= {worst_col:.2f} levels (mask <= {worst_mask:.2f})" if not bad else "DIFFERENT:\n  " + "\n  ".join(bad))
+
+
+# ("dress_s", the clothing mask, is built differently on purpose - see check_dress)
+SESSION_ARRAYS = ["cleaned_base_rgba", "auto_mask_small_u8", "clean_paint_small_bgr", "clean_base_small_bgr", "user_paint_u8",
+                  "user_erase_u8", "core_mask_u8", "orig_small_bgr", "fg_raw_1024", "img_rgba_orig"]
+
+
+def _session_state_diff(eo, en):
+    so, sn = eo._active_session, en._active_session
+    bad = [k for k in SESSION_ARRAYS if (so.get(k) is None) != (sn.get(k) is None) or (so.get(k) is not None and not np.array_equal(so[k], sn[k]))]
+    if bool(so.get("inverted")) != bool(sn.get("inverted")):
+        bad.append("inverted")
+    if so["params"] != sn["params"]:
+        bad.append("params")
+    return bad
+
+
+def _response_diff(ro, rn):
+    bad = []
+    for k in ro:
+        if k in ("mask_png_b64", "session_id"):  # the unused mask PNG is no longer sent
+            continue
+        if k == "stats":
+            if not _same_stats(ro[k], rn[k]):
+                bad.append("stats")
+        elif ro[k] != rn.get(k):
+            bad.append(k)
+    return bad
+
+
+def check_session():
+    if E_OLD is None:
+        report("session", True, "SKIPPED - v3.2.1 is not available (no git history here)")
+        return
+    rng = np.random.default_rng(5000)
+    bad = []
+    n_steps = n_apply = 0
+    t_old = t_new = 0.0
+    for qi in range(8 if FULL else 3):
+        w, h = [(2000, 1500), (1500, 2000), (1777, 1333), (2600, 1731), (900, 700)][int(rng.integers(0, 5))]
+        bit16, rgba, lowkey = bool(rng.random() < 0.4), bool(rng.random() < 0.6), bool(rng.random() < 0.3)
+        img, sil = H.make_studio_image(w, h, n_dust=int(rng.integers(20, 150)), n_hair=int(rng.integers(0, 12)),
+                                       seed=int(rng.integers(0, 10 ** 6)), bit16=bit16, rgba=rgba, lowkey=lowkey)
+        sel = None
+        if rng.random() < 0.3:
+            sel = np.zeros((h, w), np.uint8)
+            sel[h // 3:, : int(w * 0.8)] = 255
+        p = _legacy(dict(H.STD, autoFractions=bool(rng.random() < 0.6)))
+        eo, en = H.make_engine(E_OLD, sil), H.make_engine(E, sil)
+        src = img.copy()
+        src.setflags(write=False)
+        bd = 16 if bit16 else 8
+        t0 = time.perf_counter()
+        ro = _quiet(eo.start_session, src, bd, dict(p), selection_alpha=None if sel is None else sel.copy())
+        t1 = time.perf_counter()
+        rn = _quiet(en.start_session, src, bd, dict(p), selection_alpha=None if sel is None else sel.copy())
+        t_old, t_new = t_old + t1 - t0, t_new + time.perf_counter() - t1
+        d = _response_diff(ro, rn) + _session_state_diff(eo, en)
+        n_steps += 1
+        if d:
+            bad.append(f"sequence {qi} start: {d}")
+        so, sn = ro["session_id"], rn["session_id"]
+        sent = dict(p)
+        for oi in range(18 if FULL else 12):
+            op = str(rng.choice(["recompute", "recompute", "recompute", "paint", "paint", "erase", "fill", "clear",
+                                 "invert", "reset_auto", "dress", "apply", "apply"]))
+            d = []
+            if op == "recompute":
+                sent = _legacy(_mutate(sent, rng))
+                keep = bool(rng.random() < 0.8)
+                t0 = time.perf_counter()
+                ro = _quiet(eo.recompute_session, so, dict(sent), keep)
+                t1 = time.perf_counter()
+                rn = _quiet(en.recompute_session, sn, dict(sent), keep)
+                t_old, t_new = t_old + t1 - t0, t_new + time.perf_counter() - t1
+                d = _response_diff(ro, rn) + _session_state_diff(eo, en)
+            elif op in ("paint", "erase"):
+                pts = [{"x": float(rng.random()), "y": float(rng.random()), "norm": 1} for _ in range(int(rng.integers(1, 6)))]
+                rad, ds = float(rng.integers(4, 60)), False
+                ro = eo.edit_session_mask(so, "stroke", pts, rad, erase=(op == "erase"), dress_smooth=ds, dress_strength=50.0)
+                rn = en.edit_session_mask(sn, "stroke", pts, rad, erase=(op == "erase"), dress_smooth=ds, dress_strength=50.0)
+                d = _response_diff(ro, rn) + _session_state_diff(eo, en)
+            elif op in ("fill", "clear", "invert", "reset_auto"):
+                d = _response_diff(eo.edit_session_mask(so, op), en.edit_session_mask(sn, op)) + _session_state_diff(eo, en)
+            elif op == "dress":
+                val = float(rng.integers(0, 100))
+                d = _response_diff(eo.dress_preview_session(so, False, val), en.dress_preview_session(sn, False, val))
+            else:
+                mk, ds = bool(rng.random() < 0.5), False
+                val, blend = float(rng.integers(10, 100)), float(rng.integers(0, 101))
+                with H.fixed_fast_inpaint(eo):  # v3.2.1 with only the white-patch line corrected
+                    oo, mo, sto = _quiet(eo.apply_session, so, blend, mk, ds, val)
+                on_, mn, stn = _quiet(en.apply_session, sn, blend, mk, ds, val)
+                n_apply += 1
+                if not np.array_equal(oo, on_):
+                    d.append("layer pixels")
+                if (mo is None) != (mn is None) or (mo is not None and not np.array_equal(mo, mn)):
+                    d.append("layer mask")
+                d += [k for k in ("changed_px", "make_mask", "dress_smooth", "blend") if sto[k] != stn[k]]
+                d += _session_state_diff(eo, en)
+            n_steps += 1
+            if d:
+                bad.append(f"sequence {qi} step {oi} ({op}): {d}")
+    report("session", not bad, f"{n_steps} interactive steps ({n_apply} applies, legacy regime) identical to v3.2.1 "
+                               f"(open + recompute time {t_old:.1f}s -> {t_new:.1f}s)" if not bad else "DIFFERENT:\n  " + "\n  ".join(bad))
+
+
+def check_white():
+    """Brush a zone the automatic mask did not cover, press Apply in fast mode: the zone must not turn white."""
+    img, sil = H.make_studio_image(1500, 1000, n_dust=40, n_hair=3, seed=9)
+    counts = {}
+    for name, mod in (("v3.2.1", E_OLD), ("current", E)):
+        if mod is None:
+            continue
+        eng = H.make_engine(mod, sil)
+        p = dict(H.STD, speedMode="fast", spots=0, scuffs=0, seamOn=False)  # empty automatic mask
+        sid = _quiet(eng.start_session, img, 8, dict(p))["session_id"]
+        eng.edit_session_mask(sid, "stroke", [{"x": 0.15, "y": 0.3, "norm": 1}, {"x": 0.3, "y": 0.35, "norm": 1}], 25.0, erase=False)
+        out, _, _ = _quiet(eng.apply_session, sid, 100.0, False, False, 45.0)
+        zone = out[:, :, 3] > 128
+        counts[name] = (int((out[:, :, :3][zone].min(axis=1) >= 250).sum()), int(zone.sum()),
+                        float(out[:, :, :3][zone].mean()), float(img[zone].mean()))
+    white, total, mean_out, mean_src = counts["current"]
+    ok = white == 0 and total > 1000 and abs(mean_out - mean_src) < 12
+    extra = f"; v3.2.1 produced {counts['v3.2.1'][0]} white pixels there" if "v3.2.1" in counts else ""
+    report("white", ok, f"brushed zone after Apply: {white} white pixels of {total}, brightness {mean_src:.0f} -> {mean_out:.0f}{extra}")
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Part 2: what Clean Vinyl Pro 2 does differently
+# ----------------------------------------------------------------------------------------------------------------------
+def _comp(src, out):
+    """What Photoshop shows after the result layer is put over the photo (8-bit frames), as float levels."""
+    a = out[:, :, 3:4].astype(np.float32) / 255.0
+    return src[:, :, :3].astype(np.float32) * (1.0 - a) + out[:, :, :3].astype(np.float32) * a
+
+
+def _step(img, rows, cols, span=12):
+    """Largest change of the mean brightness between rows `span` apart inside a column band: a line across it."""
+    g = img[rows, cols].astype(np.float32).mean(axis=(1, 2))
+    return float(np.abs(g[span:] - g[:-span]).max())
+
+
+def _plain_frame(w, h, seed=0, person=True):
+    """A backdrop without a wall-floor corner (soft lighting only), with the usual 'person' in the middle or empty."""
+    rng = np.random.default_rng(seed)
+    yy = np.linspace(0, 1, h, dtype=np.float32)[:, None]
+    xx = np.linspace(0, 1, w, dtype=np.float32)[None, :]
+    lum = 150.0 * (1.0 - 0.22 * ((xx - 0.5) * 2) ** 2 - 0.15 * ((yy - 0.45) * 2) ** 2) + 25.0 * yy
+    img = np.clip(lum[..., None] * np.float32([1.02, 1.0, 0.97]) + rng.standard_normal((h, w, 3)).astype(np.float32) * 1.8, 0, 255).astype(np.uint8)
+    _, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=1)
+    if not person:
+        return img, np.zeros_like(sil)
+    img[cv2.resize(sil, (w, h)) > 0.5] = (40, 40, 46)
+    return img, sil
+
+
+def check_cyc():
+    bad = []
+    off = dict(H.STD, spots=0, scuffs=0, seamOn=False, blur=0)
+    notes = []
+    for (w, h, mode) in ((1500, 2000, "quality"), (2000, 1500, "fast")):
+        img, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=3)
+        eng = H.make_engine(E, sil)
+        base = _comp(img, _quiet(eng.process, img, 8, dict(off, speedMode=mode, cycCurve=0))[0])
+        rows = slice(int(h * 0.50), int(h * 0.74))  # the corner of this frame is at 0.62 of the height
+        bands = [slice(int(w * 0.04), int(w * 0.24)), slice(int(w * 0.76), int(w * 0.96))]
+        before = [_step(base, rows, b) for b in bands]
+        person = cv2.resize(sil, (w, h)) > 0.9
+        for strength, limit in ((30, 0.75), (60, 0.35), (100, 0.30)):
+            comp = _comp(img, _quiet(eng.process, img, 8, dict(off, speedMode=mode, cycCurve=strength))[0])
+            after = [_step(comp, rows, b) for b in bands]
+            if strength == 60:
+                notes.append(f"{mode}: step {max(before):.1f} -> {max(after):.1f} levels")
+            if max(a / b for a, b in zip(after, before)) > limit:
+                bad.append(f"{w}x{h} {mode} strength {strength}: line step {before} -> {after}")
+            if float(np.abs(comp - base)[person].max()) > 0.0:
+                bad.append(f"{w}x{h} {mode} strength {strength}: the person was changed")
+            far = np.r_[0:int(h * 0.12), int(h * 0.985):h]
+            if float(np.abs(comp - base)[far].max()) > 0.51:
+                bad.append(f"{w}x{h} {mode} strength {strength}: changed far from the corner")
+            if float(np.abs(comp - base).max()) > 40.0:
+                bad.append(f"{w}x{h} {mode} strength {strength}: a pixel moved by {np.abs(comp - base).max():.0f} levels")
+        # the same frame in 16 bit
+        img16 = (img.astype(np.uint16) * 128)
+        out16 = _quiet(eng.process, img16, 16, dict(off, speedMode=mode, cycCurve=60))[0]
+        if out16.dtype != np.uint16 or int(out16[:, :, 3].max()) == 0:
+            bad.append(f"{w}x{h} {mode}: 16-bit frame not processed")
+        # a backdrop without a corner must stay exactly as it is
+        flat, sil2 = _plain_frame(w, h, seed=w)
+        eng2 = H.make_engine(E, sil2)
+        a0 = _comp(flat, _quiet(eng2.process, flat, 8, dict(off, speedMode=mode, cycCurve=0))[0])
+        a1 = _comp(flat, _quiet(eng2.process, flat, 8, dict(off, speedMode=mode, cycCurve=100))[0])
+        if float(np.abs(a1 - a0).max()) > 0.0:
+            bad.append(f"{w}x{h} {mode}: a frame without a corner was changed by {np.abs(a1 - a0).max():.1f} levels")
+    report("cyc", not bad, "cyclorama removes the wall-floor line (" + "; ".join(notes) + "), person untouched, no corner -> no change"
+           if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
+def _garment_frame(w=1400, h=2000, seed=5):
+    """
+    A 'person' in a smooth blue dress with a pair of jeans-like trousers under it. Returns the frame and the
+    separate ingredients, so that every promise of the ironing can be measured on its own.
+    """
+    rng = np.random.default_rng(seed)
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    img = np.full((h, w, 3), 118.0, np.float32)
+    core = np.zeros((h, w), np.uint8)
+    cx = w // 2
+    cv2.ellipse(core, (cx, int(h * 0.15)), (int(w * 0.07), int(h * 0.055)), 0, 0, 360, 255, -1)   # head
+    cv2.rectangle(core, (cx - int(w * 0.22), int(h * 0.20)), (cx + int(w * 0.22), int(h * 0.93)), 255, -1)
+    dress = np.zeros((h, w), bool)
+    dress[int(h * 0.20):int(h * 0.66), cx - int(w * 0.22):cx + int(w * 0.22)] = True
+    denim = np.zeros((h, w), bool)
+    denim[int(h * 0.66):int(h * 0.93), cx - int(w * 0.22):cx + int(w * 0.22)] = True
+    volume = 0.55 + 0.45 * np.cos((xx - cx) / (w * 0.22) * 1.35)            # the roundness of the body
+    wrinkles = np.zeros((h, w), np.float32)
+    for _ in range(70):                                                         # many shallow creases
+        x0, y0 = rng.integers(cx - int(w * 0.20), cx + int(w * 0.20)), rng.integers(int(h * 0.24), int(h * 0.63))
+        ang, length = rng.uniform(0, np.pi), rng.uniform(60, 220)
+        x1, y1 = int(x0 + np.cos(ang) * length), int(y0 + np.sin(ang) * length)
+        layer = np.zeros((h, w), np.float32)
+        cv2.line(layer, (int(x0), int(y0)), (x1, y1), 1.0, int(rng.integers(3, 8)), cv2.LINE_AA)
+        wrinkles += cv2.GaussianBlur(layer, (0, 0), float(rng.uniform(2.0, 4.0))) * float(rng.choice([-1, 1]) * rng.uniform(0.04, 0.08))
+    fold = np.zeros((h, w), np.float32)                                         # one deep fold: part of the shape
+    cv2.line(fold, (cx - int(w * 0.18), int(h * 0.50)), (cx + int(w * 0.12), int(h * 0.30)), 1.0, 9, cv2.LINE_AA)
+    fold = cv2.GaussianBlur(fold, (0, 0), 4.0) * -0.45
+    weave = rng.standard_normal((h, w)).astype(np.float32) * 0.012               # fine texture of the cloth
+    clean_dress = np.float32([70, 125, 190])[None, None, :] * volume[..., None]
+    dress_px = clean_dress * (1.0 + wrinkles + fold + weave)[..., None]
+    img[dress] = dress_px[dress]
+    jeans = np.float32([52, 70, 105])[None, None, :] * (volume * (1.0 + rng.standard_normal((h, w)).astype(np.float32) * 0.14))[..., None]
+    img[denim] = jeans[denim]
+    head = core.astype(bool) & (yy < h * 0.20)
+    img[head] = (205, 160, 135)
+    img += rng.standard_normal((h, w, 3)).astype(np.float32) * 1.5
+    img_u8 = np.clip(img, 0, 255).astype(np.uint8)
+    return img_u8, core, dict(dress=dress, denim=denim, head=head, wrinkles=wrinkles, fold=fold, clean=clean_dress)
+
+
+def check_dress():
+    bad = []
+    img, core, g = _garment_frame()
+    h, w = img.shape[:2]
+    sc = 1024.0 / max(h, w)
+    small = cv2.resize(img, (int(round(w * sc)), int(round(h * sc))), interpolation=cv2.INTER_AREA)
+    mask = ENG._build_dress_mask_small(small, core, max_dim=1024, tex_rms=ENG._fabric_texture_small(img))
+    m_full = cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR)
+    inner = cv2.erode(g["dress"].astype(np.uint8), np.ones((61, 61), np.uint8)) > 0
+    inner_denim = cv2.erode(g["denim"].astype(np.uint8), np.ones((61, 61), np.uint8)) > 0
+    if float(m_full[inner].mean()) < 0.9:
+        bad.append(f"smooth cloth is not in the clothing mask ({m_full[inner].mean():.2f})")
+    if float(m_full[inner_denim].mean()) > 0.15:
+        bad.append(f"denim is in the clothing mask ({m_full[inner_denim].mean():.2f})")
+    outside = cv2.dilate(core, np.ones((9, 9), np.uint8)) == 0       # the backdrop
+    head_in = cv2.erode(g["head"].astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
+    if float(m_full[head_in].max()) > 0.05 or float(m_full[outside].max()) > 0.0:
+        bad.append("head or backdrop is in the clothing mask")
+
+    f0 = img.astype(np.float32) / 255.0
+    same, alpha0 = ENG._smooth_dress_fabric(f0.copy(), mask, 0.0)
+    if not np.array_equal(same, f0) or float(alpha0.max()) != 0.0:
+        bad.append("strength 0 changed the picture")
+
+    def amount(image, field, where):
+        """How much of a known streak pattern is present in the picture (1 = as drawn, 0 = gone)."""
+        resid = np.log(image[:, :, 1] + 0.02) - np.log(g["clean"][:, :, 1] / 255.0 + 0.02)
+        f = np.log1p(field)
+        resid = resid - cv2.GaussianBlur(resid, (0, 0), 25)
+        f = f - cv2.GaussianBlur(f, (0, 0), 25)
+        return float((resid[where] * f[where]).sum() / (f[where] * f[where]).sum())
+
+    near_fold = cv2.dilate((np.abs(g["fold"]) > 0.02).astype(np.uint8), np.ones((41, 41), np.uint8)) > 0
+    crease_zone = inner & ~near_fold
+    fold_zone = inner & (np.abs(g["fold"]) > 0.05)
+    notes = []
+    prev = amount(f0, g["wrinkles"], crease_zone)
+    for strength, max_left in ((40, 0.80), (80, 0.55), (120, 0.45)):
+        out, alpha = ENG._smooth_dress_fabric(f0.copy(), mask, float(strength))
+        left = amount(out, g["wrinkles"], crease_zone) / amount(f0, g["wrinkles"], crease_zone)
+        fold_left = amount(out, g["fold"], fold_zone) / amount(f0, g["fold"], fold_zone)
+        notes.append(f"{strength}: creases x{left:.2f}, deep fold x{fold_left:.2f}")
+        if left > max_left:
+            bad.append(f"strength {strength}: {left:.2f} of the creases left (limit {max_left})")
+        if left > prev + 0.02:
+            bad.append(f"strength {strength} irons less than a weaker setting")
+        prev = left
+        if fold_left < 0.70:
+            bad.append(f"strength {strength}: the deep fold was flattened to {fold_left:.2f}")
+        diff = (out - f0) * 255.0
+        # volume and light: the broad picture of the garment stays
+        broad = np.abs(cv2.GaussianBlur(diff, (0, 0), 45))[inner].max()
+        if broad > 1.5:
+            bad.append(f"strength {strength}: broad brightness of the garment moved by {broad:.1f} levels")
+        # colour: all three channels get the same factor
+        ratio = (out[inner] + 0.02) / (f0[inner] + 0.02)
+        if float(np.abs(ratio - ratio[:, 1:2]).max()) > 1e-4:
+            bad.append(f"strength {strength}: the colour changed")
+        # fine texture and grain stay
+        hp = lambda x: x[:, :, 1] - cv2.GaussianBlur(x[:, :, 1], (0, 0), 1.2)
+        tex = float(hp(out)[crease_zone].std() / hp(f0)[crease_zone].std())
+        if not 0.95 < tex < 1.05:
+            bad.append(f"strength {strength}: fine texture x{tex:.2f}")
+        # everything that is not smooth cloth stays exactly
+        if float(np.abs(diff)[core == 0].max()) > 0.0 or float(np.abs(diff)[g["head"]].max()) > 0.0:
+            bad.append(f"strength {strength}: backdrop or head changed "
+                       f"({np.abs(diff)[core == 0].max():.2f} / {np.abs(diff)[g['head']].max():.2f} levels)")
+        if float(np.abs(diff)[inner_denim].mean()) > 0.15:
+            bad.append(f"strength {strength}: denim changed by {np.abs(diff)[inner_denim].mean():.2f} levels on average")
+        if float(alpha[np.abs(diff).max(axis=2) > 1.0].min(initial=1.0)) < 0.15:
+            bad.append(f"strength {strength}: a changed pixel is not covered by the layer alpha")
+    # the live preview (small copy) and the full-size result must look alike
+    prev_small = cv2.resize(img, (w * 1080 // h, 1080), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+    out_small, _ = ENG._smooth_dress_fabric(prev_small.copy(), mask, 80.0, fast_mode=True)
+    out_full, _ = ENG._smooth_dress_fabric(f0.copy(), mask, 80.0)
+    d_small = (out_small - prev_small)[:, :, 1]
+    d_full = cv2.resize((out_full - f0)[:, :, 1], (d_small.shape[1], d_small.shape[0]), interpolation=cv2.INTER_AREA)
+    sel = cv2.resize(crease_zone.astype(np.uint8), (d_small.shape[1], d_small.shape[0])) > 0
+    corr = float(np.corrcoef(d_small[sel], d_full[sel])[0, 1])
+    if corr < 0.75:
+        bad.append(f"preview and full-size ironing disagree (correlation {corr:.2f})")
+    report("dress", not bad, "clothing: " + "; ".join(notes) + f"; volume, colour, texture, denim, head, backdrop kept; preview~final {corr:.2f}"
+           if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
+def check_speed():
+    bad = []
+    n = 0
+    for (w, h, seed) in ((1500, 2000, 11), (2000, 1500, 12)) + (((2600, 1731, 13),) if FULL else ()):
+        img, sil = H.make_studio_image(w, h, n_dust=140, n_hair=10, seed=seed, lowkey=(seed == 12))
+        marks = {}
+        for mode in ("fast", "quality"):
+            eng = H.make_engine(E, sil)
+            oc = {}
+            _, st = _quiet(eng.process, img, 8, dict(H.STD, speedMode=mode), out_cache=oc)
+            marks[mode] = (oc["heal_mask_full"] > 0, st["seam_px"], st["spot_px"])
+        n += 1
+        if not np.array_equal(marks["fast"][0], marks["quality"][0]) or marks["fast"][1:] != marks["quality"][1:]:
+            bad.append(f"{w}x{h}: fast marks {int(marks['fast'][0].sum())} px, quality {int(marks['quality'][0].sum())} px")
+        if int(marks["fast"][0].sum()) < 500:
+            bad.append(f"{w}x{h}: almost nothing was found on a dusty frame")
+        # the green preview shows the very same marks
+        eng = H.make_engine(E, sil)
+        green, _ = _quiet(eng.preview_action_mask, img, 8, dict(H.STD, speedMode="fast"))
+        heal = marks["quality"][0]
+        missed = int((heal & (green == 0)).sum())
+        extra = int(((green > 0) & (cv2.dilate(heal.astype(np.uint8), np.ones((3, 3), np.uint8)) == 0)).sum())
+        if missed or extra:
+            bad.append(f"{w}x{h}: green preview differs from the cleaning ({missed} px not shown, {extra} px shown but not cleaned)")
+    report("speed", not bad, f"{n} frames: both speed modes and the green preview mark the same defects" if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
+def check_smoke():
+    bad = []
+    w, h = 1500, 2000
+    rng = np.random.default_rng(21)
+    img, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=21)
+    # soft wisps, like real smoke (hard-edged noise would be taken for cables and stands by both versions)
+    wisps = cv2.GaussianBlur(rng.standard_normal((h, w)).astype(np.float32), (0, 0), 10.0)
+    wisps *= 6.0 / float(wisps.std())
+    cloud = np.zeros((h, w), np.float32)
+    cv2.ellipse(cloud, (int(w * 0.17), int(h * 0.30)), (int(w * 0.13), int(h * 0.16)), 0, 0, 360, 1.0, -1)
+    cloud = cv2.GaussianBlur(cloud, (0, 0), 25)
+    smoky = np.clip(img.astype(np.float32) + (wisps * cloud)[..., None], 0, 255).astype(np.uint8)
+
+    def smoke_map(mod, image, silhouette):
+        eng = H.make_engine(mod, silhouette)
+        fg, corem = eng._clean_fg_mask(np.clip(silhouette * 255, 0, 255).astype(np.uint8), w, h, 70.0)
+        sm = eng._compute_protection_maps_small(image, fg, corem, 80.0, True, True)[2]
+        return cv2.resize(sm, (w, h), interpolation=cv2.INTER_LINEAR) > 100, fg
+
+    new_plain, fg = smoke_map(E, img, sil)
+    # the strip of backdrop right next to the person, above the floor shadow (a shadow is structure of its own)
+    near = (cv2.dilate((fg > 22).astype(np.uint8), np.ones((121, 121), np.uint8)) > 0) & (fg < 8)
+    near[int(h * 0.60):] = False
+    ring_new = float(new_plain[near].mean())
+    if ring_new > 0.03:
+        bad.append(f"no smoke in the frame, yet {ring_new * 100:.0f}% of the backdrop next to the person is 'smoke'")
+    new_smoky, _ = smoke_map(E, smoky, sil)
+    in_cloud = cloud > 0.6
+    got = float(new_smoky[in_cloud].mean())
+    if got < 0.8:
+        bad.append(f"only {got * 100:.0f}% of a real smoke cloud is protected")
+    note = f"ring around the person {ring_new * 100:.1f}%, smoke cloud protected {got * 100:.0f}%"
+    if E_OLD is not None:
+        old_plain, _ = smoke_map(E_OLD, img, sil)
+        old_smoky, _ = smoke_map(E_OLD, smoky, sil)
+        note += f" (v3.2.1: ring {old_plain[near].mean() * 100:.0f}%, cloud {old_smoky[in_cloud].mean() * 100:.0f}%)"
+        if got < 0.9 * float(old_smoky[in_cloud].mean()):
+            bad.append("smoke is protected worse than in v3.2.1")
+        # a frame with smoke and nobody in it: nothing may differ from v3.2.1
+        bare, nobody = _plain_frame(w, h, seed=22, person=False)
+        bare = np.clip(bare.astype(np.float32) + (wisps * cloud)[..., None], 0, 255).astype(np.uint8)
+        a, _ = smoke_map(E, bare, nobody)
+        b, _ = smoke_map(E_OLD, bare, nobody)
+        if float(a[in_cloud].mean()) < 0.8 or float((a != b).mean()) > 0.0005:
+            bad.append(f"frame without people: smoke map differs from v3.2.1 on {(a != b).mean() * 100:.2f}% of the pixels")
+    report("smoke", not bad, note if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
+def check_empty():
+    bad = []
+    w, h = 1500, 2000
+    img, sil = H.make_studio_image(w, h, n_dust=30, n_hair=2, seed=31)
+    blob = np.zeros((1024, 1024), np.float32)   # what a matting network answers on an empty backdrop: a faint blob
+    cv2.circle(blob, (500, 620), 110, 0.03, -1)
+    blob = cv2.GaussianBlur(blob, (0, 0), 20)
+    eng = H.make_engine(E, blob)
+    fg, corem = eng._clean_fg_mask(eng._predict_fg_raw(img), w, h, 70.0)
+    if int(fg.max()) != 0 or int(corem.max()) != 0:
+        bad.append(f"a faint blob became a person (mask up to {int(fg.max())})")
+    note = "empty backdrop -> no person"
+    if E_OLD is not None:
+        eo = H.make_engine(E_OLD, blob)
+        fo, _ = eo._clean_fg_mask(eo._predict_fg_raw(img), w, h, 70.0)
+        note += f" (v3.2.1 invented one covering {(fo > 128).mean() * 100:.1f}% of the frame)"
+        # a real person is found exactly as before, logits included
+        for name, m in (("0..1 mask", sil), ("logits", (sil - 0.5) * 16.0), ("weak but real 0..0.8", sil * 0.8)):
+            a = H.make_engine(E, m)._predict_fg_raw(img)
+            b = H.make_engine(E_OLD, m)._predict_fg_raw(img)
+            if not np.array_equal(a, b):
+                bad.append(f"a real person ({name}) is outlined differently from v3.2.1")
+    report("empty", not bad, note if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
+def check_format():
+    bad = []
+    notes = []
+
+    def run(name, image, sil, bit=8, expect=None):
+        hh, ww = image.shape[:2]
+        eng = H.make_engine(E, sil)
+        full = np.dstack([image, np.full((hh, ww), 255 if bit == 8 else 32768, image.dtype)])
+        full.setflags(write=False)
+        out, info = _quiet(eng.extend_canvas, full, bit, {})
+        if expect is not None:
+            if out is not None or info.get("reason") != expect:
+                bad.append(f"{name}: expected '{expect}', got {info}")
+            return None, info
+        if out is None:
+            bad.append(f"{name}: nothing was added ({info})")
+            return None, info
+        nw, nh, L, T = info["new_w"], info["new_h"], info["left"], info["top"]
+        ratio = min(nw, nh) / max(nw, nh)
+        if abs(ratio - 5 / 7) > 2.5 / max(nw, nh) or out.shape != (nh, nw, 4) or out.dtype != image.dtype:
+            bad.append(f"{name}: size {nw}x{nh}, ratio {ratio:.4f}")
+        if (L > 0) == (T > 0) or info["right"] != L or info["bottom"] != T or (nw - ww, nh - hh) != (2 * L, 2 * T):
+            bad.append(f"{name}: strips {info}")
+        opaque = np.full((nh, nw), 255 if bit == 8 else 32768, image.dtype)
+        opaque[T:T + hh, L:L + ww] = 0
+        if not np.array_equal(out[:, :, 3], opaque):
+            bad.append(f"{name}: the layer is not 'opaque strips, transparent over the photo'")
+        return out, info
+
+    w, h = 1000, 1500
+    img, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=41)
+    out, info = run("portrait 2:3", img, sil)
+    if out is not None:
+        L = info["left"]
+        k = 255.0
+        for side, strip, edge in (("left", out[:, :L, :3][:, ::-1], img[:, :L]), ("right", out[:, L + w:, :3], img[:, ::-1][:, :L])):
+            strip, edge = strip.astype(np.float32), edge.astype(np.float32)
+            seam = float(np.abs(strip[:, :4].mean(axis=(1, 2)) - edge[:, :4].mean(axis=(1, 2))).mean())
+            if seam > 1.2:
+                bad.append(f"portrait {side}: brightness jumps by {seam:.1f} levels at the old edge")
+            hp = lambda x: x[:, :, 1] - cv2.GaussianBlur(x[:, :, 1], (0, 0), 1.5)
+            grain = float(hp(strip).std() / hp(edge).std())
+            if not 0.85 < grain < 1.2:
+                bad.append(f"portrait {side}: grain of the new strip x{grain:.2f}")
+            # the wall-floor line and the lighting carry on: each row of the strip resembles the row next to it
+            rows_new, rows_old = strip.mean(axis=(1, 2)), edge[:, :24].mean(axis=(1, 2))
+            drift = float(np.abs(cv2.blur(rows_new[:, None], (1, 31)) - cv2.blur(rows_old[:, None], (1, 31))).max())
+            if drift > 6.0:
+                bad.append(f"portrait {side}: rows of the strip drift from the photo by {drift:.1f} levels")
+            notes.append(f"{side} seam {seam:.1f} lv, grain x{grain:.2f}")
+        if info["subject_at_edge"]:
+            bad.append("portrait: person reported at the edge, but stands in the middle")
+        out16, info16 = run("portrait 2:3, 16 bit", (img.astype(np.uint16) * 128), sil, bit=16)
+        if out16 is not None:
+            d16 = float(np.abs(out16[:, :L, :3].astype(np.float32) / 128.0 - out[:, :L, :3]).mean())
+            if d16 > 1.0:
+                bad.append(f"16-bit strips differ from the 8-bit ones by {d16:.2f} levels")
+    land = np.ascontiguousarray(np.rot90(img))
+    out_l, info_l = run("landscape 3:2", land, np.ascontiguousarray(np.rot90(sil)))
+    if out_l is not None and (info_l["top"] == 0 or info_l["new_w"] != land.shape[1]):
+        bad.append(f"landscape: {info_l}")
+    run("portrait 4:5 (grows up and down)", np.ascontiguousarray(img[150:1400]), np.zeros_like(sil))
+    run("already 5:7", cv2.resize(img, (1000, 1400)), sil, expect="already")
+    run("panorama", np.ascontiguousarray(img[:300]), sil, expect="too_far")
+    # a person cut by the frame edge cannot be continued: the caller is told, and no half-person is mirrored
+    cut = np.ascontiguousarray(img[:, int(w * 0.42):])
+    sil_cut = cv2.resize(cv2.resize(sil, (w, h))[:, int(w * 0.42):], (1024, 1024))
+    out_c, info_c = run("person at the edge", cut, sil_cut)
+    if out_c is not None:
+        if not info_c["subject_at_edge"]:
+            bad.append("person at the edge was not reported")
+        strip = out_c[:, :info_c["left"], :3].astype(np.float32)
+        dark = float((strip.mean(axis=2) < 60).mean())
+        if dark > 0.02:
+            bad.append(f"the cut person was mirrored into the new strip ({dark * 100:.0f}% dark pixels)")
+    report("format", not bad, "format 5:7: " + "; ".join(notes) + "; 8/16 bit, portrait/landscape, 'already 5:7' and 'person at the edge' handled"
+           if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
+def check_gpu():
+    CUDA, DML, CPU = "CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"
+
+    def run(avail, behaviour, algo="HEURISTIC", allow_dml=True, n=2):
+        calls, cpu_calls = [], []
+
+        def session(path, sess_options=None, providers=None):
+            opt = None
+            for prov in providers:
+                if isinstance(prov, tuple) and prov[0] == CUDA:
+                    opt = prov[1].get("cudnn_conv_algo_search", "")
+            calls.append(opt)
+            active = behaviour(opt)
+            return types.SimpleNamespace(get_providers=lambda: list(active))
+
+        fake = types.SimpleNamespace(
+            SessionOptions=lambda: types.SimpleNamespace(),
+            GraphOptimizationLevel=types.SimpleNamespace(ORT_ENABLE_ALL=99),
+            get_available_providers=lambda: list(avail),
+            InferenceSession=session,
+        )
+        eng = H.make_engine(E, np.zeros((1024, 1024), np.float32))
+        eng._cudnn_algo = algo
+        eng.gpu_error = ""
+        eng._preload_ort_cuda = lambda: None
+        eng._create_cpu_session = lambda path: (cpu_calls.append(path) or ("CPU_SESSION", CPU))
+        real, E.ort = E.ort, fake
+        try:
+            outs = [_quiet(eng._create_session, "m.onnx", allow_dml=allow_dml) for _ in range(n)]
+        finally:
+            E.ort = real
+        return [o[1] for o in outs], calls, cpu_calls, eng
+
+    def boom():
+        raise RuntimeError("unknown option")
+
+    bad = []
+    act, calls, cpu, eng = run([CUDA, CPU], lambda a: [CUDA, CPU])
+    if calls != ["HEURISTIC", "HEURISTIC"] or act != [CUDA, CUDA]:
+        bad.append("option accepted")
+    act, calls, cpu, eng = run([CUDA, CPU], lambda a: boom() if a else [CUDA, CPU])
+    if calls != ["HEURISTIC", "", ""] or act != [CUDA, CUDA] or eng.gpu_error:
+        bad.append("option rejected with an error")
+    act, calls, cpu, eng = run([CUDA, CPU], lambda a: [CPU] if a else [CUDA, CPU])
+    if calls != ["HEURISTIC", "", ""] or act != [CUDA, CUDA] or eng.gpu_error:
+        bad.append("option rejected silently (CPU fallback inside ONNX Runtime)")
+    act, calls, cpu, eng = run([CUDA, CPU], lambda a: [CPU])
+    if act != [CPU, CPU] or "CUDAExecutionProvider" not in eng.gpu_error:
+        bad.append("CUDA broken")
+    act, calls, cpu, eng = run([CUDA, DML, CPU], lambda a: [DML, CPU])
+    if act != [DML, DML]:
+        bad.append("CUDA broken, DirectML available")
+    act, calls, cpu, eng = run([CUDA, CPU], lambda a: boom(), n=1)
+    if act != [CPU] or cpu != ["m.onnx"]:
+        bad.append("everything fails")
+    act, calls, cpu, eng = run([DML, CPU], lambda a: [DML, CPU])
+    if calls != [None, None]:
+        bad.append("DirectML only")
+    act, calls, cpu, eng = run([CUDA, CPU], lambda a: [CUDA, CPU], algo="", n=1)
+    if calls != [""]:
+        bad.append("EXHAUSTIVE override")
+    report("gpu", not bad, "cuDNN option: accepted -> used; rejected / broken CUDA -> previous behaviour" if not bad else f"wrong: {bad}")
+
+
+def check_server():
+    srv = H.load_server()
+    bad = []
+    f = srv._idle_unload_from_settings
+    for data, exp in (({}, 120.0), ({"schemaVersion": 4, "idleUnloadSec": 30}, 120.0), ({"idleUnloadSec": 30}, 120.0),
+                      ({"schemaVersion": 4, "idleUnloadSec": 300}, 300.0), ({"schemaVersion": 4, "idleUnloadSec": 0}, 0.0),
+                      ({"schemaVersion": 5, "idleUnloadSec": 30}, 30.0), ({"schemaVersion": 5, "idleUnloadSec": 120}, 120.0),
+                      ({"schemaVersion": "x", "idleUnloadSec": 30}, 120.0), ({"schemaVersion": 4, "idleUnloadSec": -5}, 0.0)):
+        if f(data) != exp:
+            bad.append(f"idle unload {data} -> {f(data)} (expected {exp})")
+    if E.DEFAULT_IDLE_UNLOAD_SEC != 120.0:
+        bad.append("default idle unload is not 120 s")
+
+    rng = np.random.default_rng(4)
+    for dt in (np.uint8, np.uint16):
+        for pad in (0, 1, 2, 3):
+            arr = rng.integers(0, 255, (5, 7, 3)).astype(dt)
+            raw = b"x" * pad + arr.tobytes() + b"tail"
+            got = srv._packet_array(raw, pad, arr.shape, dt)
+            if got is None or not np.array_equal(got, arr):
+                bad.append(f"_packet_array {np.dtype(dt).name} offset {pad}")
+            if srv._packet_array(raw, pad, (5, 7, 4), dt) is not None and len(raw) - pad < 5 * 7 * 4 * np.dtype(dt).itemsize:
+                bad.append("_packet_array accepted a short body")
+    # One version number in three places: a mismatch makes start_gpu_server.bat restart the server on every launch
+    root = H.APP_DIR
+    old_root = os.path.join(H.REPO_ROOT, "CleanVinylPro")
+
+    def text(*parts):
+        with open(os.path.join(*parts), encoding="utf-8") as fh:
+            return fh.read()
+
+    bat_versions = set(re.findall(r"get\('version'\)=='([^']+)'", text(root, "start_gpu_server.bat")))
+    manifest = json.loads(text(root, "uxp-plugin", "manifest.json"))
+    if bat_versions != {srv.APP_VERSION} or manifest["version"] != srv.APP_VERSION:
+        bad.append(f"version mismatch: server {srv.APP_VERSION}, start_gpu_server.bat {sorted(bat_versions)}, manifest {manifest['version']}")
+    # ...and the same number wherever the user reads it: window titles of the .bat files, the first lines of the instruction
+    shown = {bat: set(re.findall(r"\bv(\d+\.\d+\.\d+)", text(root, bat))) for bat in sorted(os.listdir(root)) if bat.endswith(".bat")}
+    wrong = {bat: sorted(v) for bat, v in shown.items() if v - {srv.APP_VERSION}}
+    manual = next(f for f in os.listdir(root) if f.endswith(".txt"))
+    if wrong or f"(v{srv.APP_VERSION})" not in "".join(text(root, manual).splitlines(True)[:3]) \
+            or f"v{srv.APP_VERSION}" not in text(root, "install_windows.bat"):
+        bad.append(f"version shown to the user differs from {srv.APP_VERSION}: {wrong or manual}")
+    # the AI models are taken from the folder named in folders.ini, never from a fixed place
+    import cvpaths
+    if srv.MODELS_DIR != cvpaths.resolve_models_dir() or "MODELS_DIR = cvpaths.resolve_models_dir()" not in text(root, "server", "server.py"):
+        bad.append("server.py does not take the models folder from folders.ini")
+
+    # Clean Vinyl Pro 2 must be able to run next to the original program: nothing they register may coincide
+    port = str(srv.APP_PORT)
+    plugin_js = text(root, "uxp-plugin", "main.js")
+    launcher = text(root, "server", "setup_launcher.py")
+    scheme = manifest["requiredPermissions"]["launchProcess"]["schemes"][0]
+    for where, ok in (
+        ("manifest network port", all(d.endswith(":" + port) for d in manifest["requiredPermissions"]["network"]["domains"])),
+        ("main.js server address", f'"http://127.0.0.1:{port}"' in plugin_js and f"{scheme}://start" in plugin_js),
+        ("main.js checks who answers", f'info.app !== "{srv.APP_ID}"' in plugin_js),
+        ("start_gpu_server.bat port", f"127.0.0.1:{port}/health" in text(root, "start_gpu_server.bat")),
+        ("launcher url scheme", f"Software\\Classes\\{scheme}\"" in launcher),
+        ("data folder", srv._resolve_user_data_dir.__code__.co_consts.count("CleanVinylPro2") == 1),
+    ):
+        if not ok:
+            bad.append(f"identity: {where}")
+    if os.path.isdir(old_root):
+        old_manifest = json.loads(text(old_root, "uxp-plugin", "manifest.json"))
+        old_launcher = text(old_root, "server", "setup_launcher.py")
+        old_port = old_manifest["requiredPermissions"]["network"]["domains"][0].rsplit(":", 1)[1]
+        task = re.search(r'"/TN", "([^"]+)"', launcher).group(1)
+        clashes = [name for name, same in (
+            ("plugin id", manifest["id"] == old_manifest["id"]),
+            ("panel id", manifest["entrypoints"][0]["id"] == old_manifest["entrypoints"][0]["id"]),
+            ("plugin name", manifest["name"] == old_manifest["name"]),
+            ("port", port == old_port),
+            ("url scheme", scheme in old_manifest["requiredPermissions"]["launchProcess"]["schemes"]),
+            ("scheduled task", f'"{task}"' in old_launcher),
+            ("registry key", f"Software\\Classes\\{scheme}\"" in old_launcher),
+            ("data folder", 'os.path.join(appdata, "CleanVinylPro2")' not in launcher),
+            ("layer name", "Чистий вініл 2 (AI)" not in plugin_js or '"Чистий вініл (AI)"' in plugin_js),
+        ) if same]
+        for bat in sorted(f for f in os.listdir(root) if f.endswith(".bat")):
+            if old_port in text(root, bat).replace("на " + old_port, ""):
+                clashes.append(f"{bat} mentions port {old_port}")
+        if clashes:
+            bad.append(f"shared with the original program: {clashes}")
+
+    resp = srv._binary_response({"ok": True, "текст": "ї"}, np.arange(6, dtype=np.uint16).reshape(2, 3), None, np.array([7, 8], np.uint8))
+    n = struct.unpack_from("<I", resp.body, 0)[0]
+    if json.loads(resp.body[4:4 + n].decode("utf-8")) != {"ok": True, "текст": "ї"} or resp.body[4 + n:] != np.arange(6, dtype=np.uint16).tobytes() + b"\x07\x08":
+        bad.append("_binary_response layout")
+    report("server", not bad, f"settings migration, packet parsing, version {srv.APP_VERSION} everywhere, nothing shared with the original program (port {srv.APP_PORT})"
+           if not bad else f"wrong: {bad}")
+
+
+def _http_quick_round_trip(client, srv, packet, split, bad) -> int:
+    """The requests exactly as the plugin sends them after the 'light preview' change. Returns how many were made."""
+    w, h = 1800, 2600
+    img, sil = H.make_studio_image(w, h, n_dust=60, n_hair=6, seed=77)
+    keep = srv.ENGINE
+    n = 0
+    try:
+        srv.ENGINE = H.make_engine(E, sil)
+        p = dict(H.STD, speedMode="fast", cycCurve=40, autoFractions=False)
+        meta = {"width": w, "height": h, "channels": 3, "bitDepth": 8, "hasSelection": False, "jobId": "s", "params": p}
+        r = client.post("/session/start", content=packet(meta, img)); n += 1
+        sid = r.json()["session_id"]
+        p1 = dict(p, spots=90)
+        r = client.post("/session/recompute", json=dict(session_id=sid, params=p1, preserve_edits=True, quick=True)); n += 1
+        if r.status_code != 200 or r.json().get("quick") is not True or not r.json().get("comp_jpg_b64"):
+            bad.append("/session/recompute with quick=true must refresh only the preview and say quick=true")
+        r = client.post("/session/recompute", json=dict(session_id=sid, params=p1, preserve_edits=True, jobId="j")); n += 1
+        if r.status_code != 200 or r.json().get("quick") is not False:
+            bad.append("/session/recompute without quick must stay a full recompute and say quick=false")
+        p2 = dict(p, spots=90, blur=25, cycCurve=70)
+        body = dict(session_id=sid, blend=100, makeMask=False, dressSmooth=False, dressStrength=45, jobId="a")
+        r_new = client.post("/session/apply", json=dict(body, params=p2)); n += 1
+        client.post("/session/recompute", json=dict(session_id=sid, params=p2, preserve_edits=True, jobId="j")); n += 1
+        r_ref = client.post("/session/apply", json=body); n += 1
+        if r_new.status_code != 200 or r_ref.status_code != 200:
+            bad.append(f"/session/apply with settings: status {r_new.status_code}/{r_ref.status_code}")
+        else:
+            (m_new, px_new), (m_ref, px_ref) = split(r_new.content), split(r_ref.content)
+            if px_new != px_ref or len(px_new) != w * h * 4:
+                bad.append("/session/apply with settings: the layer differs from 'full recompute, then apply'")
+            if m_new["stats"].get("dress_smooth") is not False or m_new != m_ref:
+                bad.append("/session/apply with settings: the answer header differs from 'full recompute, then apply'")
+        client.post("/session/close", json=dict(session_id=sid))
+    finally:
+        srv.ENGINE = keep
+    return n
+
+
+def check_http():
+    if SRV_OLD is None:
+        report("http", True, "SKIPPED - v3.2.1 is not available (no git history here)")
+        return
+    try:
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            from fastapi.testclient import TestClient
+    except Exception as exc:
+        report("http", True, f"SKIPPED - FastAPI test client is not available ({exc}); install it with: pip install httpx")
+        return
+    srv = H.load_server()
+
+    def packet(meta, *arrays):
+        mb = json.dumps(meta).encode("utf-8")
+        return struct.pack("<I", len(mb)) + mb + b"".join(np.ascontiguousarray(a).tobytes() for a in arrays)
+
+    def split(body):
+        n = struct.unpack_from("<I", body, 0)[0]
+        meta = json.loads(body[4:4 + n].decode("utf-8"))
+        # ("recomputed" is new: Apply says whether it had to compute the real frame itself)
+        meta["stats"] = {k: v for k, v in meta.get("stats", {}).items() if k not in ("elapsed_ms", "reused_stages", "recomputed")}
+        return meta, body[4 + n:]
+
+    def norm(d):
+        # ("quick" is new: a recompute says whether it only refreshed the preview)
+        d = {k: v for k, v in d.items() if k not in ("session_id", "mask_png_b64", "quick")}
+        if "stats" in d:
+            d["stats"] = {k: v for k, v in d["stats"].items() if k not in ("elapsed_ms", "reused_stages")}
+        return d
+
+    bad = []
+    n = 0
+    cases = [(1203, 901, True, False, 1), (901, 1203, False, True, 2)] + ([(1400, 1000, False, False, 0), (1000, 1400, True, True, 0)] if FULL else [])
+    real_out = sys.stdout
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    real_err, sys.stderr = sys.stderr, sys.stdout  # the "session expired" case prints a traceback on purpose
+    try:
+        for (w, h, bit16, rgba, pad) in cases:
+            img, sil = H.make_studio_image(w, h, n_dust=60, n_hair=6, seed=w + h, bit16=bit16, rgba=rgba)
+            SRV_OLD.ENGINE, SRV_OLD.ENGINE_ERROR = H.make_engine(E_OLD, sil), None
+            srv.ENGINE, srv.ENGINE_ERROR = H.make_engine(E, sil), None
+            bd = 16 if bit16 else 8
+            sel = np.zeros((h, w), np.uint16 if bit16 else np.uint8)
+            sel[h // 2:, : w // 2] = 32768 if bit16 else 255
+            heal = np.zeros((h // 2, w // 2), np.uint8)
+            heal[h // 3:h // 3 + 20, w // 5:w // 5 + 40] = 255
+            prot = (np.clip(cv2.resize(sil, (w, h)), 0, 1) * 255).astype(np.uint8)
+            with TestClient(SRV_OLD.app) as co, TestClient(srv.app) as cn:
+                def both(path, **kw):
+                    return co.post(path, **kw), cn.post(path, **kw)
+
+                def binary_same(name, ro, rn):
+                    nonlocal n
+                    n += 1
+                    if not (ro.status_code == rn.status_code == 200 and split(ro.content) == split(rn.content)):
+                        bad.append(f"{w}x{h} {name}")
+
+                for mode in ("quality",):
+                    meta = {"width": w, "height": h, "channels": img.shape[2], "bitDepth": bd,
+                            "params": _legacy(H.STD), "jobId": "j", "note": "x" * pad}
+                    binary_same(f"/process {mode}", *both("/process", content=packet(meta, img)))
+                    binary_same(f"/process {mode} selection", *both("/process", content=packet(dict(meta, hasSelection=True, selectionBitDepth=bd), img, sel)))
+                    binary_same(f"/process {mode} custom masks", *both("/process", content=packet(
+                        dict(meta, hasCustomProtect=True, hasCustomHeal=True, healMaskWidth=w // 2, healMaskHeight=h // 2), img, prot, heal)))
+                    binary_same(f"/process {mode} selection missing", *both("/process", content=packet(dict(meta, hasSelection=True), img)))
+                # (the green "action" preview now shows the thorough search in both speed modes - see check_speed)
+                binary_same("/preview-mask protection", *both("/preview-mask", content=packet(dict(meta, maskType="protection"), img)))
+                rn = cn.post("/preview-mask", content=packet(dict(meta, maskType="action"), img))
+                n += 1
+                if rn.status_code != 200 or len(split(rn.content)[1]) != w * h:
+                    bad.append(f"{w}x{h} /preview-mask action")
+                ro, rn = both("/process", content=packet(meta, img)[:-1000])
+                n += 1
+                if not (ro.status_code == rn.status_code == 400 and ro.json() == rn.json()):
+                    bad.append(f"{w}x{h} truncated body")
+
+                for mode in ("quality",):
+                    p = _legacy(dict(H.STD, autoFractions=True))
+                    meta = {"width": w, "height": h, "channels": img.shape[2], "bitDepth": bd, "params": p, "note": "x" * pad}
+                    ro, rn = both("/session/start", content=packet(meta, img))
+                    n += 1
+                    if not (ro.status_code == rn.status_code == 200 and norm(ro.json()) == norm(rn.json())):
+                        bad.append(f"{w}x{h} /session/start {mode}")
+                        continue
+                    so, sn = ro.json()["session_id"], rn.json()["session_id"]
+                    steps = [
+                        ("recompute", dict(params=dict(p, blur=30), preserve_edits=True)),
+                        ("mask-edit", dict(op="stroke", points=[{"x": 0.2, "y": 0.8, "norm": 1}, {"x": 0.4, "y": 0.7, "norm": 1}], radius_px=20, erase=False)),
+                        ("mask-edit", dict(op="stroke", points=[{"x": 0.6, "y": 0.6, "norm": 1}], radius_px=30, erase=True, dressSmooth=False, dressStrength=60)),
+                        ("recompute", dict(params=dict(p, blur=30, scuffs=90), preserve_edits=True)),
+                        ("dress-preview", dict(dressSmooth=False, dressStrength=70)),
+                        ("mask-edit", dict(op="invert")),
+                        ("recompute", dict(params=dict(p, spots=50, autoFractions=False, fracMed=False), preserve_edits=False)),
+                        ("mask-edit", dict(op="stroke", points=[{"x": 0.3, "y": 0.85, "norm": 1}], radius_px=40, erase=False)),
+                    ]
+                    for i, (ep, payload) in enumerate(steps):
+                        ro = co.post(f"/session/{ep}", json=dict(payload, session_id=so))
+                        rn = cn.post(f"/session/{ep}", json=dict(payload, session_id=sn))
+                        n += 1
+                        if not (ro.status_code == rn.status_code == 200 and norm(ro.json()) == norm(rn.json())):
+                            bad.append(f"{w}x{h} /session/{ep} #{i} {mode}")
+                    for mk, ds in ((False, False), (True, False)):
+                        payload = dict(blend=80, makeMask=mk, dressSmooth=ds, dressStrength=55)
+                        with H.fixed_fast_inpaint(SRV_OLD.ENGINE):
+                            ro = co.post("/session/apply", json=dict(payload, session_id=so))
+                        rn = cn.post("/session/apply", json=dict(payload, session_id=sn))
+                        binary_same(f"/session/apply {mode} mask={mk}", ro, rn)
+                    ro = co.post("/session/recompute", json=dict(session_id="nope", params=p))
+                    rn = cn.post("/session/recompute", json=dict(session_id="nope", params=p))
+                    n += 1
+                    if not (ro.status_code == rn.status_code == 500 and ro.json() == rn.json()):
+                        bad.append(f"{w}x{h} expired session answer")
+                    co.post("/session/close", json=dict(session_id=so))
+                    cn.post("/session/close", json=dict(session_id=sn))
+
+                # ---- what only Clean Vinyl Pro 2 has ----
+                n += 1
+                hl = cn.get("/health").json()
+                if hl.get("app") != srv.APP_ID or hl.get("version") != srv.APP_VERSION or hl.get("models_dir") != srv.MODELS_DIR:
+                    bad.append("/health does not name this program and its models folder")
+                # clothing + cyclorama through the whole interactive round trip
+                p2 = dict(H.STD, speedMode="fast", cycCurve=60, dressSmooth=True, dressStrength=60)
+                r = cn.post("/session/start", content=packet({"width": w, "height": h, "channels": img.shape[2], "bitDepth": bd, "params": p2}, img))
+                n += 1
+                if r.status_code != 200:
+                    bad.append(f"{w}x{h} /session/start with clothing + cyclorama")
+                else:
+                    sid = r.json()["session_id"]
+                    for ep, payload in (("recompute", dict(params=dict(p2, cycCurve=100), preserve_edits=True)),
+                                        ("dress-preview", dict(dressSmooth=True, dressStrength=90))):
+                        n += 1
+                        if cn.post(f"/session/{ep}", json=dict(payload, session_id=sid)).status_code != 200:
+                            bad.append(f"{w}x{h} /session/{ep} (new features)")
+                    r = cn.post("/session/apply", json=dict(session_id=sid, blend=100, makeMask=False, dressSmooth=True, dressStrength=60))
+                    n += 1
+                    if r.status_code != 200 or len(split(r.content)[1]) != w * h * 4 * (2 if bit16 else 1):
+                        bad.append(f"{w}x{h} /session/apply (new features)")
+                    cn.post("/session/close", json=dict(session_id=sid))
+                # light preview: "quick" in /session/recompute, the current settings inside /session/apply
+                if (w, h) == cases[0][:2]:
+                    n += _http_quick_round_trip(cn, srv, packet, split, bad)
+                # format 5:7
+                r = cn.post("/extend-canvas", content=packet({"width": w, "height": h, "channels": img.shape[2], "bitDepth": bd,
+                                                              "params": {"ratioShort": 5, "ratioLong": 7}, "jobId": "f"}, img))
+                n += 1
+                plan = ENG._extension_plan(w, h)
+                if r.status_code != 200:
+                    bad.append(f"{w}x{h} /extend-canvas status {r.status_code}")
+                elif (plan["new_w"], plan["new_h"]) == (w, h):
+                    # this test frame already is 5:7: nothing to add, the answer is plain JSON
+                    if r.json().get("unchanged") is not True:
+                        bad.append(f"{w}x{h} /extend-canvas on a frame that already is 5:7 (first request)")
+                else:
+                    m5, body = split(r.content)
+                    if (m5["width"], m5["height"], m5["left"], m5["top"]) != (plan["new_w"], plan["new_h"], plan["left"], plan["top"]) \
+                            or len(body) != plan["new_w"] * plan["new_h"] * 4 * (2 if bit16 else 1):
+                        bad.append(f"{w}x{h} /extend-canvas answer")
+                    ext = np.frombuffer(body, np.uint16 if bit16 else np.uint8).reshape(plan["new_h"], plan["new_w"], 4)
+                    again = cn.post("/extend-canvas", content=packet({"width": plan["new_w"], "height": plan["new_h"], "channels": 4, "bitDepth": bd,
+                                                                      "params": {}}, ext))
+                    n += 1
+                    if again.status_code != 200 or again.json().get("unchanged") is not True:
+                        bad.append(f"{w}x{h} /extend-canvas on a frame that already is 5:7")
+    finally:
+        sys.stdout.close()
+        sys.stdout, sys.stderr = real_out, real_err
+    report("http", not bad, f"{n} HTTP requests: legacy regime answered identically to the v3.2.1 server, new endpoints answer correctly" if not bad else f"DIFFERENT: {bad}")
+
+
+def check_plugin():
+    root = H.REPO_ROOT
+    r = subprocess.run([sys.executable, os.path.join(root, "tools", "build_ccx.py"), "--check"], capture_output=True, text=True)
+    report("plugin", r.returncode == 0, r.stdout.strip().splitlines()[0] if r.stdout.strip() else "build_ccx.py --check failed")
+    # the one file people download: same content as the folder, .bat files with CRLF (cmd.exe needs them)
+    r = subprocess.run([sys.executable, os.path.join(root, "tools", "build_zip.py"), "--check"], capture_output=True, text=True)
+    report("plugin", r.returncode == 0, r.stdout.strip().splitlines()[0] if r.returncode == 0 and r.stdout.strip()
+           else "build_zip.py --check: " + " | ".join((r.stdout + r.stderr).strip().splitlines()[:12]))
+    node = shutil.which("node")
+    if not node:
+        report("plugin", True, "settings migration test SKIPPED - Node.js is not installed")
+        return
+    r = subprocess.run([node, os.path.join(root, "tests", "plugin_settings.test.js")], capture_output=True, text=True)
+    last = (r.stdout.strip().splitlines() or ["no output"])[-1]
+    report("plugin", r.returncode == 0, last if r.returncode == 0 else r.stdout + r.stderr)
+    # the big window: when the plugin asks the server for what (prints SKIPPED by itself when jsdom is missing)
+    r = subprocess.run([node, os.path.join(root, "tests", "plugin_preview.test.js")], capture_output=True, text=True)
+    last = (r.stdout.strip().splitlines() or ["no output"])[-1]
+    report("plugin", r.returncode == 0, last if r.returncode == 0 else r.stdout + r.stderr)
+
+
+GROUPS = [("convert", check_convert), ("process", check_process), ("stage", check_stage), ("quick", check_quick),
+          ("session", check_session),
+          ("white", check_white), ("gpu", check_gpu),
+          ("cyc", check_cyc), ("dress", check_dress), ("speed", check_speed), ("smoke", check_smoke), ("empty", check_empty),
+          ("format", check_format),
+          ("server", check_server), ("http", check_http),
+          ("folders", lambda: IC.check_folders(report)), ("install", lambda: IC.check_install(report)),
+          ("bat", lambda: IC.check_bat(report)), ("plugin", check_plugin)]
+
+
+def main() -> int:
+    t0 = time.perf_counter()
+    print(f"Clean Vinyl Pro 2 self-checks ({'full' if FULL else 'quick'} run); NumPy {np.__version__}, OpenCV {cv2.__version__}; "
+          f"baseline v3.2.1: {'available' if E_OLD is not None else 'NOT available'}", flush=True)
+    for name, fn in GROUPS:
+        if ONLY and not any(word in name for word in ONLY):
+            continue
+        try:
+            fn()
+        except Exception as exc:  # a crashed check is a failed check
+            import traceback
+            traceback.print_exc()
+            report(name, False, f"crashed: {type(exc).__name__}: {exc}")
+    failed = [g for g, ok in _results if not ok]
+    print(f"\n{'ALL CHECKS PASSED' if not failed else 'FAILED: ' + ', '.join(sorted(set(failed)))} "
+          f"({len(_results)} results, {time.perf_counter() - t0:.0f} s)")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

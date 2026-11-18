@@ -1,0 +1,8 @@
+# Base packages of the local server.
+# onnxruntime is NOT listed on purpose: install_windows.bat picks the right GPU build for the installed
+# NVIDIA driver (onnxruntime-gpu[cuda,cudnn] for CUDA 12 or 13) and engine.py installs it on first start if missing.
+fastapi>=0.115.0
+uvicorn>=0.32.0
+numpy>=1.26.0
+opencv-python-headless>=4.10.0
+Pillow>=10.4.0

@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <title>Чистий Вініл Pro 2</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- ================================================================ -->
+  <!-- КОМПАКТНА ПАНЕЛЬ У PHOTOSHOP                                     -->
+  <!-- ================================================================ -->
+  <div class="panel-root" id="panelRoot">
+    <div class="plugin-header">
+      <div class="plugin-brand">
+        <div class="brand-icon">
+          <img src="icons/ui/brand.png" class="ui-icon ui-icon-sm" alt="" />
+        </div>
+        <div class="brand-title">Чистий Вініл Pro 2</div>
+      </div>
+
+      <div class="header-right">
+        <div role="button" tabindex="0" class="gpu-pill loading" id="gpuStatusBtn" title="Натисніть для перевірки стану GPU-сервера">
+          <span class="gpu-dot"></span>
+          <span id="gpuStatusText">Перевірка...</span>
+        </div>
+        <div role="button" tabindex="0" class="play-srv-btn" id="btnPlayServer" title="Запустити локальний GPU-сервер" style="display:none">▶</div>
+      </div>
+    </div>
+
+    <!-- Зрозуміла червона помилка для першого запуску або збою запуску -->
+    <div class="server-error-card" id="serverErrorCard">
+      <div class="err-head">❌ ERROR: GPU-сервер не запущено</div>
+      <div class="err-body" id="serverErrorBody">
+        Не вдалося підключитися до локального сервера (порт 18746).<br/>
+        <b>Що зробити:</b><br/>
+        1. Відкрийте папку: <span class="err-path" id="errInstallPath">CleanVinylPro2</span><br/>
+        2. Клацніть правою кнопкою по <b>start_gpu_server.bat</b> → <b>«Запуск від імені адміністратора»</b>.<br/>
+        <span class="err-note">(Якщо запускаєте програму вперше на цьому ПК — спершу запустіть <b>install_windows.bat</b> від імені адміністратора.)</span>
+      </div>
+      <div class="err-actions">
+        <div role="button" tabindex="0" class="err-btn-retry" id="btnRetryPlay">▶ Спробувати запуск</div>
+        <div role="button" tabindex="0" class="err-btn-check" id="btnRecheckServer">↻ Перевірити</div>
+      </div>
+    </div>
+
+    <!-- Невелике інформаційне сповіщення (наприклад, CPU fallback) -->
+    <div class="status-banner" id="statusBanner">
+      <div id="statusBannerText"></div>
+    </div>
+
+    <div class="panel-body">
+      <div class="panel-hero-card">
+        <div class="hero-desc">
+          Натисніть кнопку нижче — відкриється інтерактивне вікно (як у Retouch4me), де AI знайде людину й дефекти, а ви зможете підтерти зайве та застосувати чистий шар.
+        </div>
+
+        <div role="button" tabindex="0" class="btn-primary btn-launch-workspace" id="btnRun">
+          Очистити фон
+        </div>
+
+        <div class="btn-row">
+          <div role="button" tabindex="0" class="btn-sec" id="btnSelection" title="Швидко очистити лише всередині активного виділення Ласо (L)">У виділенні</div>
+          <div role="button" tabindex="0" class="btn-sec" id="btnCompare" title="Перемикає видимість створеного шару у Photoshop">До / Після</div>
+        </div>
+
+        <div class="btn-row">
+          <div role="button" tabindex="0" class="btn-sec" id="btnFormat57" title="Робить кадр форматом 5:7 під друк: полотно розширюється з двох боків, а фон студії добудовується. Нічого не обрізається. Краще робити ПІСЛЯ очищення фону.">Формат 5:7 (добудувати фон)</div>
+        </div>
+
+        <div class="panel-progress" id="panelProgressBox">
+          <div class="progress-text">
+            <span id="panelProgressStage">Читання фото...</span>
+            <span id="panelProgressPct">0%</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="panelProgressFill"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-tools-row">
+        <div role="button" tabindex="0" class="mini-util-btn" id="btnQuickUnload" title="Вивантажити AI-моделі з відеопам’яті (VRAM) зараз">🧹 Звільнити VRAM</div>
+        <div role="button" tabindex="0" class="mini-util-btn" id="btnPanelHelp" title="Коротка інструкція користувача">? Довідка</div>
+      </div>
+
+      <div class="panel-help-box" id="panelHelpBox">
+        <b>Як працювати:</b><br/>
+        1. Відкрийте RGB-фото (8 або 16 біт) і натисніть <b>«Очистити фон»</b>.<br/>
+        2. У новому вікні AI сам знайде дефекти. Одразу активна <b>Гумка (E)</b> — просто стирайте зайве зелене.<br/>
+        3. Затисніть мишку <b>поза фото</b> — побачите чистий результат без червоного/зеленого.<br/>
+        4. Натисніть <b>«Застосувати»</b> — у Photoshop одразу створиться новий шар.<br/>
+        5. <b>«Формат 5:7»</b> — за потреби розширює кадр під друк і добудовує фон з боків (окремим шаром).
+      </div>
+
+      <div class="footer-status" id="footerStatus"></div>
+    </div>
+  </div>
+
+  <!-- ================================================================ -->
+  <!-- ВЕЛИКЕ ІНТЕРАКТИВНЕ ВІКНО (У СТИЛІ RETOUCH4ME CLEAN BACKDROP)    -->
+  <!-- ================================================================ -->
+  <dialog id="retouchModal" class="r4m-dialog">
+    <div class="r4m-shell" id="r4mShell">
+
+      <!-- ВЕРХНЯ ПАНЕЛЬ -->
+      <div class="r4m-topbar">
+        <div class="r4m-top-left">
+          <!-- До / Після (тільки іконка без слів) -->
+          <div role="button" tabindex="0" class="r4m-icon-btn" id="dlgBtnBeforeAfter" data-tip="До / Після — перемикає між оригіналом (ДО) і робочим переглядом">
+            <img src="icons/ui/before_after.png" class="ui-icon" alt="" />
+          </div>
+
+          <!-- Автомаска (чекбокс + назва) -->
+          <label class="r4m-check-pill" id="dlgWrapAutoMask" data-tip="Автомаска — показувати яскраво-зелені зони очищення на червоному фоні">
+            <input type="checkbox" id="dlgChkAutoMask" checked />
+            <span>Автомаска</span>
+          </label>
+
+          <!-- Повзунок Змішування (0-100%) -->
+          <div class="r4m-blend-box" data-tip="Змішування (Blend 0–100%) — плавно регулює силу ефекту наживо">
+            <span class="r4m-blend-lbl">Змішування: <b id="dlgValBlend">100</b></span>
+            <div class="cv-slider r4m-blend-slider" id="dlgSlBlend" data-value="100" data-max="100">
+              <div class="cv-slider-track"><div class="cv-slider-fill"></div></div>
+              <div class="cv-slider-thumb"></div>
+            </div>
+          </div>
+
+          <!-- Рівняти одяг: іконка сукні (без слів) + галочка -->
+          <label class="r4m-dress-pill" id="dlgWrapDress" data-tip="Рівняти одяг — розгладжує різкі складки та блиски на сукнях (не чіпає шкіру й волосся). Без галочки повзунок одягу неактивний">
+            <img src="icons/ui/dress.png" class="ui-icon" alt="" />
+            <input type="checkbox" id="dlgChkDress" />
+          </label>
+
+          <!-- Захист диму: іконка диму (без слів) + галочка -->
+          <label class="r4m-smoke-pill active" id="dlgWrapSmoke" data-tip="Захист диму — зберігає студійний дим та атмосферний туман. Якщо галочку знято, повзунок диму вимикається">
+            <img src="icons/ui/smoke.png" class="ui-icon" alt="" />
+            <input type="checkbox" id="dlgChkSmoke" checked />
+          </label>
+        </div>
+
+        <div class="r4m-top-right">
+          <!-- Пресети (розгортається, всередині × і ✎) -->
+          <div class="r4m-popover-anchor">
+            <div role="button" tabindex="0" class="r4m-presets-btn" id="dlgBtnPresets" data-tip="Пресети — вибір готового профілю, збереження (+), редагування (✎) або видалення (×)">
+              <span class="preset-dot" id="dlgActivePresetDot"></span>
+              <span id="dlgActivePresetName">Студія (Стандарт)</span>
+              <span class="caret">▾</span>
+            </div>
+
+            <div class="r4m-popover r4m-presets-popover" id="dlgPresetsPopover">
+              <div class="pop-head">
+                <span>Пресети</span>
+                <div class="pop-head-btns">
+                  <div role="button" tabindex="0" class="pop-sm-btn" id="dlgBtnAddPreset" data-tip="Зберегти поточні налаштування як новий пресет">+</div>
+                  <div role="button" tabindex="0" class="pop-sm-btn" id="dlgBtnEditPresets" data-tip="Режим редагування: переставити порядок або видалити (×)">✎</div>
+                </div>
+              </div>
+              <div class="add-preset-form" id="dlgAddPresetForm">
+                <input type="text" class="add-preset-input" id="dlgNewPresetName" placeholder="Назва пресета..." maxlength="28" />
+                <div role="button" tabindex="0" class="small-save-btn" id="dlgBtnSaveNewPreset">ОК</div>
+                <div role="button" tabindex="0" class="small-cancel-btn" id="dlgBtnCancelNewPreset">×</div>
+              </div>
+              <div class="dlg-presets-list" id="dlgPresetsList"></div>
+              <div role="button" tabindex="0" class="restore-presets-btn" id="dlgBtnRestorePresets" style="display:none">↺ Повернути видалені стандартні</div>
+            </div>
+          </div>
+
+          <!-- Шестигранник (тонкі налаштування, тільки малюнок без слів) -->
+          <div class="r4m-popover-anchor">
+            <div role="button" tabindex="0" class="r4m-icon-btn" id="dlgBtnGear" data-tip="Тонкі налаштування — пил, сліди, циклорама, шов, захист диму, одяг, стійки та VRAM">
+              <img src="icons/ui/gear.png" class="ui-icon" alt="" />
+            </div>
+
+            <div class="r4m-popover r4m-gear-popover" id="dlgGearPopover">
+              <div class="pop-head">
+                <span>Тонкі налаштування та VRAM</span>
+                <div role="button" tabindex="0" class="pop-sm-btn" id="dlgBtnCloseGear">×</div>
+              </div>
+              <div class="gear-live-note">Перегляд оновлюється сам, щойно відпустите повзунок, — без повного перерахунку (крім режиму «2× Подвійна»). Повний розрахунок робиться один раз: коли натиснете «Застосувати».</div>
+              <div class="gear-scroll">
+                <div class="g-row" data-tip="Пил, крихти та волосся — ➕ вправо (75–100%): забирає дрібніший пил і волосинки на дальньому плані; ➖ вліво (30–60%): делікатно для ближніх портретів. Забагато (120%+) може чіпати дрібні деталі біля взуття, замало (<30%) залишає крихти.">
+                  <div class="ctrl-label-line"><span>Пил, крихти та волосся</span><span class="ctrl-val" id="gValSpots">75%</span></div>
+                  <div class="cv-slider" id="gSlSpots" data-value="75"><div class="cv-slider-track"><div class="cv-slider-fill"></div></div><div class="cv-slider-thumb"></div></div>
+                </div>
+                <div class="g-row" data-tip="Сліди взуття та розводи — ➕ вправо (70–95%): сильніше вирівнює брудні плями та потертості на дальньому плані; ➖ вліво (30–60%): краще для ближніх кадрів і темного фону (Low-Key). Забагато (110%+) згладить світлотінь, замало — лишить сліди підошов.">
+                  <div class="ctrl-label-line"><span>Сліди взуття та розводи</span><span class="ctrl-val" id="gValScuffs">65%</span></div>
+                  <div class="cv-slider" id="gSlScuffs" data-value="65"><div class="cv-slider-track"><div class="cv-slider-fill"></div></div><div class="cv-slider-thumb"></div></div>
+                </div>
+                <div class="g-row" data-tip="Розмиття фону — ➕ вправо (25–65%): згладжує хвилі й м’ятість вінілу на дальньому плані; ➖ вліво (0–25%): оптимально для ближнього плану та темного ключа, щоб зберегти живий світловий перехід. Забагато (80%+) робить фон занадто «пластиковим».">
+                  <div class="ctrl-label-line"><span>Розмиття фону</span><span class="ctrl-val" id="gValBlur">0%</span></div>
+                  <div class="cv-slider" id="gSlBlur" data-value="0"><div class="cv-slider-track"><div class="cv-slider-fill"></div></div><div class="cv-slider-thumb"></div></div>
+                </div>
+                <div class="g-row" data-tip="Циклорама (прибирання лінії кута) — 60–100%: лінія стику стіна–підлога зникає і стає плавним переходом (що більше значення, то ширший і м’якший перехід); 20–40%: лінія лише м’якшає. Людей, одяг і тіні під ногами не чіпає. Якщо кута в кадрі немає — нічого не змінює.">
+                  <div class="ctrl-label-line"><span>Циклорама (заокруглення кута)</span><span class="ctrl-val" id="gValCyc">0%</span></div>
+                  <div class="cv-slider" id="gSlCyc" data-value="0"><div class="cv-slider-track"><div class="cv-slider-fill"></div></div><div class="cv-slider-thumb"></div></div>
+                </div>
+                <div class="g-row" data-tip="М’якість переходу біля моделі — ➕ вправо (65–95%): плавне стикування біля волосся й одягу на ближньому плані; ➖ вліво (30–55%): чистить ближче до взуття на дальньому плані. Забагато (95%+) лишає недочищений ореол 1–2 см, замало (<25%) може дати різку межу.">
+                  <div class="ctrl-label-line"><span>М’якість переходу біля моделі</span><span class="ctrl-val" id="gValFeather">60%</span></div>
+                  <div class="cv-slider" id="gSlFeather" data-value="60"><div class="cv-slider-track"><div class="cv-slider-fill"></div></div><div class="cv-slider-thumb"></div></div>
+                </div>
+                <div class="g-row" data-tip="Шов з’єднання вінілу — ➕ вправо (75–100%): забирає навіть слабкий стик/скотч на підлозі на дальніх планах; ➖ вліво (30–60%): прибирає лише явну лінію стику. На ближньому плані без підлоги або при складках тканини на підлозі краще вимкнути.">
+                  <div class="ctrl-label-line">
+                    <span>Шов з’єднання вінілу</span>
+                    <div class="ctrl-right-group"><div role="button" tabindex="0" class="toggle-pill on" id="gBtnSeam">Увімк.</div><span class="ctrl-val" id="gValSeam">85%</span></div>
+                  </div>
+                  <div class="cv-slider" id="gSlSeam" data-value="85"><div class="cv-slider-track"><div class="cv-slider-fill"></div></div><div class="cv-slider-thumb"></div></div>
+                </div>
+                <div class="g-row" data-tip="Захист моделі та країв — ➕ вправо (75–95%): сильніше оберігає тонке волосся, фату та краї одягу (краще для ближніх кадрів); ➖ вліво (45–65%): дозволяє чистити ближче до туфель на дальньому плані. При <40% може під’їдати край одягу, при >92% — лишає сміття біля ніг.">
+                  <div class="ctrl-label-line"><span>Захист моделі та країв</span><span class="ctrl-val" id="gValEdge">70%</span></div>
+                  <div class="cv-slider" id="gSlEdge" data-value="70"><div class="cv-slider-track"><div class="cv-slider-fill"></div></div><div class="cv-slider-thumb"></div></div>
+                </div>
+                <div class="g-row" data-tip="Захист диму — ➕ вправо (75–100%): береже навіть ледь помітний серпанок диму; ➖ вліво (30–60%): захищає тільки густий дим. Забагато (95–100%) без диму може прийняти світлі розводи за дим. Якщо диму немає — зніміть галочку диму зверху!">
+                  <div class="ctrl-label-line">
+                    <span>Захист диму</span>
+                    <div class="ctrl-right-group"><div role="button" tabindex="0" class="toggle-pill on" id="gBtnSmoke">Увімк.</div><span class="ctrl-val" id="gValSmoke">80%</span></div>
+                  </div>
+                  <div class="cv-slider" id="gSlSmoke" data-value="80"><div class="cv-slider-track"><div class="cv-slider-fill"></div></div><div class="cv-slider-thumb"></div></div>
+                </div>
+                <div class="g-row" data-tip="Збереження текстури вінілу — ➕ вправо (80–100%): підмішує природне зерно вінілу на зачищені місця, щоб не було «мильних латок»; ➖ вліво (30–60%): м’якша поверхня (для ближнього боке чи шумних ISO). Забагато (100%+) на ідеально гладкому 8-біт фото дасть зернистість.">
+                  <div class="ctrl-label-line"><span>Збереження текстури вінілу</span><span class="ctrl-val" id="gValGrain">90%</span></div>
+                  <div class="cv-slider" id="gSlGrain" data-value="90"><div class="cv-slider-track"><div class="cv-slider-fill"></div></div><div class="cv-slider-thumb"></div></div>
+                </div>
+                <div class="g-row" data-tip="Сила рівняння одягу — прибирає саме зморшки й заломи на гладкій тканині: 30–50% дрібні зморшки, 60–90% помітні заломи. Об’єм, колір і фактура тканини, глибокі складки, джинс, мереживо, шкіра й волосся залишаються як були. Активний лише коли стоїть галочка сукні зверху.">
+                  <div class="ctrl-label-line">
+                    <span>Сила рівняння одягу</span>
+                    <div class="ctrl-right-group"><div role="button" tabindex="0" class="toggle-pill" id="gBtnDress">Вимк.</div><span class="ctrl-val" id="gValDress">45%</span></div>
+                  </div>
+                  <div class="cv-slider" id="gSlDress" data-value="45"><div class="cv-slider-track"><div class="cv-slider-fill"></div></div><div class="cv-slider-thumb"></div></div>
+                </div>
+                <div class="g-row" data-tip="Посилення чистки (Турбо) — ➕ вправо (120–200%): подвійна потужність для сильно затоптаного вінілу на дальньому плані; ➖ вліво (100%): стандартний делікатний режим для ближніх кадрів і темного фону. Забагато (170–200%) може надмірно вигладити фактуру фону.">
+                  <div class="ctrl-label-line"><span>Посилення чистки (Турбо)</span><span class="ctrl-val" id="gValTurbo">100%</span></div>
+                  <div class="cv-slider" id="gSlTurbo" data-value="100" data-max="200"><div class="cv-slider-track"><div class="cv-slider-fill"></div></div><div class="cv-slider-thumb"></div></div>
+                </div>
+
+                <label class="ps-check" data-tip="Зберігати тіні під моделлю — захищає природні падаючі й контактні тіні від висвітлення. Зніміть лише якщо хочете частково розчинити тіні на світлому фоні."><input type="checkbox" id="gChkShadow" checked /><span>Зберігати тіні під моделлю</span></label>
+                <label class="ps-check remove-mode" data-tip="Прибирати стійки, кабелі й прилади (AI) — стирає студійні штативи, дроти та софтбокси по краях кадру. Якщо прилади потрібні в кадрі — залиште вимкненим."><input type="checkbox" id="gChkRemoveStands" /><span>Прибирати стійки, кабелі й прилади (AI)</span></label>
+
+                <div class="g-passes-row" data-tip="Проходи чистки (1× / 2×) — 2× робить повторну додаткову чистку поверх результату 1-го проходу для дуже брудного вінілу. Для звичайних кадрів краще 1×; у Photoshop ви також завжди можете застосувати шар і запустити плагін вдруге.">
+                  <span>Проходи чистки:</span>
+                  <div class="idle-pills-row passes-pills" id="gPassPills">
+                    <div role="button" tabindex="0" class="idle-pill active" id="gPass1" data-pass="1">1× Стандарт</div>
+                    <div role="button" tabindex="0" class="idle-pill" id="gPass2" data-pass="2">2× Подвійна</div>
+                  </div>
+                </div>
+
+                <div role="button" tabindex="0" class="btn-primary gear-apply-btn" id="gBtnRecompute" data-tip="Точний перегляд — необов’язкова кнопка. Перегляд і так оновлюється сам після кожної зміни (швидко, на зменшеній копії кадру). Ця кнопка рахує весь кадр повністю й показує точно те, що буде в шарі. Потрібна з 2× проходом або якщо хочете перевірити результат ще до «Застосувати».">↻ Точний перегляд (повний розрахунок)</div>
+                <div role="button" tabindex="0" class="btn-sec gear-save-btn" id="gBtnSavePreset">💾 Зберегти зміни у поточний пресет</div>
+
+                <div class="g-vram-box">
+                  <div class="g-vram-lbl">Автовивантаження моделей із VRAM:</div>
+                  <div class="idle-pills-row" id="gIdlePills">
+                    <div role="button" tabindex="0" class="idle-pill" data-sec="30">30 с</div>
+                    <div role="button" tabindex="0" class="idle-pill active" data-sec="120">2 хв</div>
+                    <div role="button" tabindex="0" class="idle-pill" data-sec="300">5 хв</div>
+                    <div role="button" tabindex="0" class="idle-pill" data-sec="0">Тримати</div>
+                  </div>
+                </div>
+              </div>
+              <div class="gear-tip-box" id="gTipBox">💡 Наведіть на повзунок або потягніть його — тут з’явиться порада (+ / − та ближній/дальній план)</div>
+            </div>
+          </div>
+
+          <!-- Make Mask -->
+          <label class="r4m-check-pill" data-tip="Make Mask — створити у Photoshop непрозорий шар разом із редагованою білою маскою шару">
+            <input type="checkbox" id="dlgChkMakeMask" />
+            <span>Make Mask</span>
+          </label>
+
+          <!-- Маленька кнопка Інфо (без слів) -->
+          <div class="r4m-popover-anchor">
+            <div role="button" tabindex="0" class="r4m-icon-btn r4m-info-btn" id="dlgBtnInfo" data-tip="Як користуватися плагіном — коротка підказка">i</div>
+            <div class="r4m-popover r4m-info-popover" id="dlgInfoPopover">
+              <div class="pop-head"><span>Як користуватися</span><div role="button" tabindex="0" class="pop-sm-btn" id="dlgBtnCloseInfo">×</div></div>
+              <div class="info-text">
+                • <b>При старті</b> одразу ввімкнена <b>Гумка (E)</b> — просто зітріть зайве зелене з одягу, взуття або тіней.<br/>
+                • <b>Пензель (B)</b> — домалюйте зелене там, де треба дочистити.<br/>
+                • <b>Ctrl + Клік</b> по Пензлю — залити всю маску; по Гумці — очистити всю маску.<br/>
+                • <b>Натисніть і тримайте поза фото</b> — миттєво сховає червоне/зелене, щоб побачити чисте фото.<br/>
+                • <b>Колесо миші</b> — зум; <b>[ / ]</b> — розмір пензля; <b>Пробіл + мишка</b> — рух фото.<br/>
+                • <b>Повзунки в налаштуваннях</b> — перегляд оновлюється сам, щойно відпустите повзунок. Повний розрахунок робиться один раз — під час <b>Застосувати</b>.
+              </div>
+            </div>
+          </div>
+
+          <!-- Закрити (хрестик) -->
+          <div role="button" tabindex="0" class="r4m-icon-btn r4m-close-x" id="dlgBtnCloseX" data-tip="Закрити вікно без збереження змін у Photoshop">✕</div>
+        </div>
+      </div>
+
+      <!-- ОСНОВНА РОБОЧА ОБЛАСТЬ: ЛІВІ ІНСТРУМЕНТИ + КАНВА -->
+      <div class="r4m-main">
+        <div class="r4m-leftbar">
+          <!-- Pan & Zoom -->
+          <div role="button" tabindex="0" class="r4m-tool-btn" id="dlgToolPan" data-tip="Переміщення (Pan & Zoom) — перетягування фото в наближенні (або Пробіл + мишка)">
+            <img src="icons/ui/pan.png" class="ui-icon" alt="" />
+          </div>
+
+          <!-- Brush (Ctrl+Click fill) -->
+          <div role="button" tabindex="0" class="r4m-tool-btn" id="dlgToolBrush" data-tip="Пензель (B) — домалювати зелену зону очищення. Ctrl + Клік = залити всю маску">
+            <img src="icons/ui/brush.png" class="ui-icon" alt="" />
+          </div>
+
+          <!-- Eraser (Default on start! Ctrl+Click clear) -->
+          <div role="button" tabindex="0" class="r4m-tool-btn eraser-active" id="dlgToolEraser" data-tip="Гумка (E) — стерти зайве зелене, щоб не чіпати ділянку. Ctrl + Клік = стерти всю маску">
+            <img src="icons/ui/eraser.png" class="ui-icon" alt="" />
+          </div>
+
+          <!-- Invert Mask (тільки іконка без слів) -->
+          <div role="button" tabindex="0" class="r4m-tool-btn" id="dlgToolInvert" data-tip="Інверсія маски — міняє місцями зелену зону очищення та захищений фон">
+            <img src="icons/ui/invert.png" class="ui-icon" alt="" />
+          </div>
+
+          <div class="r4m-tool-sep"></div>
+
+          <!-- Розмір пензля / гумки -->
+          <div class="r4m-size-box" data-tip="Розмір пензля/гумки (гарячі клавіші [ і ])">
+            <div role="button" tabindex="0" class="size-step-btn" id="dlgBrushSmaller" data-tip="Зменшити розмір пензля ([)">−</div>
+            <div class="size-badge" id="dlgBrushSizeVal">28</div>
+            <div role="button" tabindex="0" class="size-step-btn" id="dlgBrushBigger" data-tip="Збільшити розмір пензля (])">+</div>
+          </div>
+        </div>
+
+        <!-- В’юпорт із фотографією (Тільки надійні JPEG <img> + HTML cursor/dots!) -->
+        <div class="r4m-viewport" id="dlgViewport">
+          <div class="r4m-stage" id="dlgStage">
+            <img id="dlgOrigImg" class="stage-layer" alt="" />
+            <img id="dlgCompImg" class="stage-layer" alt="" />
+            <img id="dlgOverlayImg" class="stage-layer" alt="" />
+            <div id="dlgStrokeDots" class="stage-dots"></div>
+            <div id="dlgBrushCursor" class="brush-cursor"></div>
+          </div>
+
+          <!-- Індикатор режиму До / Чисте фото -->
+          <div class="r4m-mode-badge" id="dlgModeBadge"></div>
+
+          <!-- Стан перегляду: «оновлюю» після зміни повзунків (без вікна прогресу) або «ще зі старими значеннями» -->
+          <div class="r4m-preview-badge" id="dlgPreviewBadge"></div>
+
+          <!-- Прогрес під час сканування (з таймером і щоразу різною порадою!) -->
+          <div class="r4m-progress-overlay" id="dlgProgressOverlay">
+            <div class="r4m-prog-card">
+              <div class="r4m-prog-title" id="dlgProgStage">Progress</div>
+              <div class="r4m-prog-row">
+                <div class="r4m-prog-track"><div class="r4m-prog-fill" id="dlgProgFill"></div></div>
+                <span class="r4m-prog-pct" id="dlgProgPct">0%</span>
+                <div role="button" tabindex="0" class="r4m-prog-cancel" id="dlgBtnCancelScan">Скасувати</div>
+              </div>
+              <div class="r4m-prog-meta">
+                <span class="r4m-prog-timer" id="dlgProgTimer">⏱ Час: 0.0 с</span>
+              </div>
+              <div class="r4m-prog-tip" id="dlgProgTip">💡 Порада: після сканування одразу активна Гумка (E).</div>
+            </div>
+          </div>
+
+          <!-- Спливаюча підказка українською при наведенні на будь-яку кнопку -->
+          <div class="r4m-tooltip" id="dlgTooltip"></div>
+        </div>
+      </div>
+
+      <!-- НИЖНЯ ПАНЕЛЬ: 3 ФРАКЦІЇ + АВТО + ЗУМ + ЗАСТОСУВАТИ/ЗАКРИТИ -->
+      <div class="r4m-bottombar">
+        <div class="r4m-bot-left">
+          <div role="button" tabindex="0" class="r4m-frac-btn active" id="dlgFracFine" data-tip="Дрібна фракція — дрібний пил, крихти, ворсинки та тонке волосся">
+            <img src="icons/ui/frac_fine.png" class="ui-icon ui-icon-frac" alt="" />
+          </div>
+          <div role="button" tabindex="0" class="r4m-frac-btn active" id="dlgFracMed" data-tip="Середня фракція — середні плями, потертості та сліди взуття">
+            <img src="icons/ui/frac_med.png" class="ui-icon ui-icon-frac" alt="" />
+          </div>
+          <div role="button" tabindex="0" class="r4m-frac-btn active" id="dlgFracLarge" data-tip="Велика фракція — великі розводи, шов з’єднання вінілу та стійки">
+            <img src="icons/ui/frac_large.png" class="ui-icon ui-icon-frac" alt="" />
+          </div>
+          <div role="button" tabindex="0" class="r4m-frac-btn r4m-auto-btn active" id="dlgFracAuto" data-tip="Авто-фракції — AI автоматично підбирає, які розміри дефектів чистити на цьому фото">
+            <img src="icons/ui/frac_auto.png" class="ui-icon-auto" alt="" />
+            <span class="auto-txt">AUTO</span>
+          </div>
+
+          <div role="button" tabindex="0" class="r4m-speed-btn" id="dlgSpeedPill" data-tip="Режим швидкості. Обидва режими знаходять ОДНАКОВІ дефекти — різниця лише в тому, чим їх закрити: ⚡ Швидкий — швидка заливка; ✦ Якісний — повна AI-заливка LaMa (акуратніша на великих ділянках, але довша). Перемикання одразу перераховує кадр повністю — інакше різницю не побачити.">⚡ Швидкий</div>
+        </div>
+
+        <div class="r4m-bot-center">
+          <div role="button" tabindex="0" class="r4m-zoom-btn" id="dlgZoomOut" data-tip="Віддалити перегляд">−</div>
+          <div role="button" tabindex="0" class="r4m-zoom-val" id="dlgZoomLabel" data-tip="Натисніть, щоб вписати фото у вікно">100%</div>
+          <div role="button" tabindex="0" class="r4m-zoom-btn" id="dlgZoomIn" data-tip="Наблизити перегляд">+</div>
+        </div>
+
+        <div class="r4m-bot-right">
+          <span class="r4m-hover-status" id="dlgHoverHint">Наведіть курсор на кнопку для підказки</span>
+          <div role="button" tabindex="0" class="r4m-apply-btn" id="dlgBtnApply" data-tip="Створити новий очищений шар у Photoshop. Саме тут один раз виконується повний розрахунок — для значень, що зараз стоять на повзунках.">Застосувати</div>
+          <div role="button" tabindex="0" class="r4m-cancel-btn" id="dlgBtnCancel" data-tip="Закрити вікно без змін у документі">Закрити</div>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="main.js"></script>
+</body>
+</html>
