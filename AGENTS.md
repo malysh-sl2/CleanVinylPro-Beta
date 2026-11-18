@@ -152,12 +152,14 @@ _Last updated: 2026-11-18, by the agent of the first session, after releasing 4.
   near the feet and the wall-floor line, and to protect dirt next to the feet as "smoke". 4.4.0 answers that.
   His wording of that message is not preserved here; whether «шов» in it meant the floor joint or the wall-floor
   line was not confirmed with him (4.4.0 treats both). **He has not reported on 4.4.0 yet.**
-- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (30 results; 46 scenarios of
+- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (30 results; 43 scenarios of
   the panel test and 25 cases of the settings test among them) on 2026-11-18, with NumPy 2.4.6 and OpenCV
-  5.1.0, set up as in section 4. Deliberate defects for what is new in 4.4.0: 25 put into the engine and 15
-  into `main.js`; the checks caught 38. The two that pass are second lines of defence (the layer alpha keeps
-  the person out even when the stain stage does not; the soft end of the tone layers matters for under 0.1 %
-  of the pixels).
+  5.1.0, set up as in section 4. Deliberate defects for what is new in 4.4.0: 26 put into the engine and 15
+  into `main.js`; the checks caught 39. The two that pass are second lines of defence (the layer alpha keeps
+  the person out even when the stain stage does not; the gradual end of the tone layers matters only on a frame
+  of extreme contrast). The full run also caught a real mistake made on the way: the selection rule of the
+  corner was missing on the "everything is remembered" shortcut of `process`, so the light preview bent a corner
+  that Apply left alone - any rule about what a run does must be applied on that shortcut too.
 - **What 4.4.0 gives on his three frames** (measured with stand-in networks, section 4): the joint is repaired
   on both sides on all three; the wall-floor line is gone on the two frames that get «Дальній план» and is
   softened by the seam repair on the dark one («Темний ключ» keeps `cycCurve` 0, as his own retouch keeps the
@@ -217,7 +219,9 @@ _Last updated: 2026-11-18, by the agent of the first session, after releasing 4.
   loses 85 %, one of 2.4 % loses 70 %, one of 4 % half, one of 6 % a fifth; from 10 % up it is taken for light
   and stays. A small soft shadow is evened like a stain of its size (a drawn one of 8 % of the height kept
   80 % of its depth); contact shadows and large shadows stay. On a dark backdrop the tolerance is a third of
-  the one on a light backdrop, so less is evened there (a drawn test: 67 % left against 42 %).
+  the one on a light backdrop, so less is evened there (a drawn test: 65 % left against 40 %). A stain inside
+  a small dark corner (a soft shadow of under half a percent of the frame) has less of its own tone around it:
+  42 % of it was left where 7 % was left on the open floor.
 - The seam search takes the straight lower edge of a silhouette for a line when it is level and long (seen
   only on a drawn frame with a rectangular "dress"); it was so in v3.2.1 too.
 - The clothing tool is delicate: deep folds stay, near-black clothes are not touched.

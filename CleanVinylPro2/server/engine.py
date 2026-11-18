@@ -1981,24 +1981,28 @@ class CleanVinylEngine:
         of a real edge - a shadow, a hem, a prop - has a different guide value and takes no part, so edges stay.
         The guide axis is cut into a few layers and the space is handled on a reduced grid: the cost does not grow
         with the reach. Returns (averaged values, how much backdrop of the same tone was found around each pixel).
-        The layers cover practically every backdrop pixel (the core of a cast shadow included, so a stain inside a
-        shadow is evened with the shadow around it). A pixel whose guide value is beyond the last layer is changed
-        less and less, down to nothing one layer further - gradually, because a sharp limit there shows in the photo
-        as a ragged patch next to the person.
+        The layers cover every tone the backdrop has - the darkest corner of a shadow and a dark spot inside it
+        included. (Covering "nearly all" of them was not enough: the darkest half percent stayed untouched while
+        everything around it was evened, and showed as specks and ragged patches.) Only on a frame of extreme
+        contrast the far ends are left out: there a pixel is changed less and less, down to nothing one layer
+        further - gradually, a sharp limit would be a visible border.
+        The layers sit at fixed tones (multiples of the layer step), so they are the same for the frame and for its
+        reduced copy in the light preview.
         """
         h, w = guide.shape
         picked = guide[valid > 0.5]
         conf = np.zeros((h, w), np.float32)
         if picked.size < 64:
             return values.copy(), conf
-        lo, hi = (float(v) for v in np.percentile(picked, (0.05, 99.95)))
         step = 0.8 * sigma_r
-        max_layers = 40
-        if (hi - lo) / step + 1 > max_layers:
-            # a very contrasty frame: keep the layers as fine as they are and cover the tones the backdrop mostly has
-            mid, half = float(np.median(picked)), 0.5 * (max_layers - 1) * step
-            lo, hi = max(lo, mid - half), min(hi, mid + half)
-        n_layers = int(max(2, np.ceil((hi - lo) / step) + 1))
+        max_layers = 48
+        k_lo, k_hi = int(np.floor(float(picked.min()) / step)), int(np.ceil(float(picked.max()) / step))
+        if k_hi - k_lo + 1 > max_layers:
+            # a frame of extreme contrast: keep the layers as fine as they are, around the tone the backdrop mostly has
+            k_mid = int(round(float(np.median(picked)) / step))
+            k_lo, k_hi = max(k_lo, k_mid - max_layers // 2), min(k_hi, k_mid + max_layers // 2 - 1)
+        k_hi = max(k_hi, k_lo + 1)
+        lo, n_layers = k_lo * step, k_hi - k_lo + 1
         shrink = max(1, int(round(sigma_s / 3.0)))
         gw, gh = max(4, int(round(w / shrink))), max(4, int(round(h / shrink)))
         sigma_g = max(0.8, sigma_s / shrink)
@@ -2043,7 +2047,6 @@ class CleanVinylEngine:
         surface with a stain on it either. Where such a shape changes across the reach by more than a stain may
         differ, the backdrop is left as it is: an edge-keeping average flattens the two shoulders of the bend and so
         sharpens it into a line. (A steady gradient, however steep, has no shoulders and is evened as usual.)
-        The same holds where only a small part of the backdrop around a pixel has its tone.
         What cannot be told apart: a soft shadow no bigger than a stain. It is evened in proportion to its size
         (about a fifth of the depth for a soft shadow of 8% of the frame height); contact and large shadows stay.
         The correction is computed at this working size and added to the full frame, so the fine grain of the
@@ -2065,10 +2068,10 @@ class CleanVinylEngine:
         flat[..., 0] -= light
         guide = flat[..., 0] / dark_tol
         evened, conf = self._even_by_tone(guide, flat, valid, sigma_s, sigma_r)
-        # share of the backdrop within reach that has the tone of the pixel: ~1 on an even surface
-        similar = conf / np.maximum(cv2.GaussianBlur(valid, (0, 0), sigma_s), 0.02)
-        even_w = np.clip((similar - 0.18) / 0.30, 0.0, 1.0)
-        even_w = even_w * even_w * (3.0 - 2.0 * even_w)
+        # A pixel with next to no backdrop of its tone within reach has nothing to be evened with (the average
+        # would be a guess from a few pixels). The bar is low on purpose: a stain inside a small dark corner has
+        # only that corner to be evened with, and must still go.
+        even_w = np.clip(conf / 0.03, 0.0, 1.0)
         # the shapes of light that the wide estimate above could not follow (larger than a stain, narrower than 6%):
         # how much they change across the reach (L*), against what a stain may differ by
         bend = self._blur_valid(flat[..., 0], valid, 1.5 * sigma_s)
@@ -3026,6 +3029,16 @@ class CleanVinylEngine:
             k_scuffs = (k_cyc, scuffs_eff)
             k_blur = (k_scuffs, blur_str, (boost if blur_str > 0 else 0.0), (feather_str if blur_str > 0 else 0.0))
 
+            def corner_of_this_run(line, fg_u8):
+                """
+                The corner the tools of this run work with. "Clean inside the selection" with only a part of the
+                corner selected: bending the line there and leaving it outside would break it at the border of the
+                selection. The corner is a matter of the whole frame: then it stays, as with the slider at 0.
+                """
+                if line is not None and selection_alpha is not None and not self._selection_holds_line(selection_alpha, line, fg_u8):
+                    return None
+                return line
+
             if analysis_only and sc is not None:
                 r_fg, r_maps, r_det, r_cor = sc.get("fg"), sc.get("maps"), sc.get("detect"), sc.get("corner")
                 cor_ok = cyc_str <= 0 or (r_cor is not None and r_cor[0] == k_corner)
@@ -3038,7 +3051,8 @@ class CleanVinylEngine:
                         "smoke_s": r_maps[1][2], "shadow_s": r_maps[1][3], "smoke_info": r_maps[1][4],
                         "heal_mask": r_det[1][0], "seam_px": r_det[1][1], "spot_px": r_det[1][2],
                         "grain_sigma": float(r_det[1][3]), "reused_stages": ["fg", "maps", "detect"],
-                        "corner_line": r_cor[1][0] if cyc_str > 0 else None,
+                        "corner_line": (corner_of_this_run(r_cor[1][0], r_fg[1][1] if remove_stands else r_fg[1][0])
+                                        if cyc_str > 0 else None),
                     }
 
             hit_heal = _sc_get("heal", k_heal) if not analysis_only else None
@@ -3136,12 +3150,7 @@ class CleanVinylEngine:
                             else:
                                 corner_line = self._corner_line_of_frame(img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_s)
                                 _sc_put("corner", k_corner, (corner_line,))
-                            if (corner_line is not None and selection_alpha is not None
-                                    and not self._selection_holds_line(selection_alpha, corner_line, eff_fg_for_spots)):
-                                # "Clean inside the selection" with only a part of the corner selected: bending the
-                                # line there and leaving it outside would break it at the border of the selection.
-                                # The corner is a matter of the whole frame: here it stays, as with the slider at 0.
-                                corner_line = None
+                            corner_line = corner_of_this_run(corner_line, eff_fg_for_spots)
                     else:
                         stand_remove_s = np.zeros((1, 1), dtype=np.uint8)
 

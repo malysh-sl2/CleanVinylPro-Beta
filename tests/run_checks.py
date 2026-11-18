@@ -1402,6 +1402,48 @@ def check_stains():
     if climb(p1) > 1.04 * climb(p0):
         bad.append(f"the steepest spot of a lamp's rim became steeper: {climb(p0):.2f} -> {climb(p1):.2f} levels over {2 * k} rows")
 
+    # the darkest corner of the backdrop (a small soft shadow, under half a percent of the frame) is a backdrop like
+    # any other: stains in it are evened too. (Left out of the tone range, it stayed as an untouched ragged patch.)
+    rng = np.random.default_rng(11)
+    yy = np.linspace(0, 1, h, dtype=np.float32)[:, None]
+    xx = np.linspace(0, 1, w, dtype=np.float32)[None, :]
+    lum = np.broadcast_to(150.0 * (1.0 - 0.22 * ((xx - 0.5) * 2) ** 2 - 0.15 * ((yy - 0.45) * 2) ** 2) + 25.0 * yy, (h, w)).astype(np.float32).copy()
+    patch = np.zeros((h, w), np.float32)
+    cv2.ellipse(patch, (int(w * 0.24), int(h * 0.80)), (int(w * 0.05), int(h * 0.02)), 0, 0, 360, 1.0, -1)
+    patch = cv2.GaussianBlur(patch, (0, 0), 10)
+    spots = np.zeros((h, w), np.float32)
+    for i in range(60):
+        if i < 3:    # three small spots inside the patch, apart from one another: dark, light, dark
+            sx, sy, sign = int(w * (0.24 + 0.03 * (i - 1))), int(h * 0.80), (-1.0, 1.0, -1.0)[i]
+        else:
+            sx, sy, sign = int(rng.uniform(0.04, 0.96) * w), int(rng.uniform(0.66, 0.97) * h), float(rng.choice([-1, 1]))
+            if abs(sx - 0.24 * w) < 0.09 * w and abs(sy - 0.80 * h) < 0.05 * h:
+                continue
+        blob = np.zeros((h, w), np.float32)
+        cv2.circle(blob, (sx, sy), 9, 1.0, -1)
+        spots += cv2.GaussianBlur(blob, (0, 0), 3.5) * sign * float(rng.uniform(4.0, 5.5))
+    noise = rng.standard_normal((h, w, 3)).astype(np.float32) * 1.8
+    person = cv2.resize(sil, (w, h)) > 0.5
+    frames = []
+    for with_spots in (True, False):
+        f = (lum - 14.0 * patch + (spots if with_spots else 0.0))[..., None] * np.float32([1.02, 1.0, 0.97]) + noise
+        f[person] = np.float32([40, 40, 46])
+        frames.append(np.clip(f, 0, 255).astype(np.uint8))
+    out = cleaned(frames[0], sil, speedMode="fast", scuffs=65)
+    S = cv2.GaussianBlur(spots, (0, 0), 2.0)
+    R = cv2.GaussianBlur(out.mean(axis=2) - frames[1].astype(np.float32).mean(axis=2), (0, 0), 2.0)
+    Rp = cv2.GaussianBlur(cleaned(frames[1], sil, speedMode="fast", scuffs=65).mean(axis=2) - frames[1].astype(np.float32).mean(axis=2), (0, 0), 2.0)
+    in_patch = (patch > 0.6) & (np.abs(S) > 1.2) & ~person
+    elsewhere = (patch < 0.02) & (np.abs(S) > 1.2) & ~(cv2.dilate(person.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0)
+    # (what the stage does to the shadow itself is taken out: only the stains are asked about)
+    left_in = float(((R - Rp)[in_patch] * S[in_patch]).sum() / (S[in_patch] ** 2).sum())
+    left_out = float(((R - Rp)[elsewhere] * S[elsewhere]).sum() / (S[elsewhere] ** 2).sum())
+    # (inside such a patch a stain has less of its own tone around it, so more of it is left than on the open floor;
+    #  what must not happen is that it is left as it was)
+    if left_in > 0.60:
+        bad.append(f"stains inside the darkest small patch of the backdrop: {left_in * 100:.0f}% left (elsewhere {left_out * 100:.0f}%)")
+    notes.append(f"inside a small dark patch {left_in * 100:.0f}% (around it {left_out * 100:.0f}%)")
+
     if E_OLD is not None:
         ro = _stain_numbers(cleaned(stained, sil, engine=E_OLD, speedMode="fast", scuffs=65), stained, clean, g)
         notes.append(f"v3.2.1 left {ro['left'] * 100:.0f}% (next to the person {ro['near'] * 100:.0f}%)")
@@ -2100,11 +2142,13 @@ def check_http():
                         bad.append(f"{w}x{h} /session/start {mode}")
                         continue
                     so, sn = ro.json()["session_id"], rn.json()["session_id"]
+                    # (the window is compared in its legacy regime: no stage that works on the whole backdrop - see
+                    #  _legacy_window; "Сліди взуття та розводи" and the blur used to be among these steps)
                     steps = [
-                        ("recompute", dict(params=dict(p, blur=30), preserve_edits=True)),
+                        ("recompute", dict(params=dict(p, spots=85), preserve_edits=True)),
                         ("mask-edit", dict(op="stroke", points=[{"x": 0.2, "y": 0.8, "norm": 1}, {"x": 0.4, "y": 0.7, "norm": 1}], radius_px=20, erase=False)),
                         ("mask-edit", dict(op="stroke", points=[{"x": 0.6, "y": 0.6, "norm": 1}], radius_px=30, erase=True, dressSmooth=False, dressStrength=60)),
-                        ("recompute", dict(params=dict(p, blur=30, scuffs=90), preserve_edits=True)),
+                        ("recompute", dict(params=dict(p, spots=85, grain=60, edge=80), preserve_edits=True)),
                         ("dress-preview", dict(dressSmooth=False, dressStrength=70)),
                         ("mask-edit", dict(op="invert")),
                         ("recompute", dict(params=dict(p, spots=50, autoFractions=False, fracMed=False), preserve_edits=False)),
