@@ -230,6 +230,11 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   are harmless; leave them.
 - `pkill -f "server/server.py"` also kills the shell that runs it. Use `pkill -f "serve[r]/serve[r].py"`.
 - `gh repo view --json visibility` is invalid; use `isPrivate`.
+- `gh pr edit` fails here with a GraphQL error about "Projects (classic)". Change the title or the text of a
+  pull request through the API instead:
+  `gh api -X PATCH repos/malysh-sl2/CleanVinylPro-Beta/pulls/<number> -f title="..." -F body=@file.md`.
+- Running the real `server.py` from the working copy (for an end-to-end try) leaves `server/presets.json` in
+  the program folder. Delete it before you build or commit.
 
 ## 5. What the owner can send you
 
