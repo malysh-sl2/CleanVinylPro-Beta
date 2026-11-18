@@ -8,7 +8,9 @@ Self-checks of the Clean Vinyl Pro 2 server (folder CleanVinylPro2). No AI model
 
 Part 1 - what was NOT meant to change still gives the pixels of the original program (folder CleanVinylPro,
 v3.2.1). These comparisons run in the "legacy regime": quality mode, smoke protection off, cyclorama 0, clothing
-off - the four places where Clean Vinyl Pro 2 works differently on purpose:
+off, stains 0, floor-joint pieces judged one by one - the places where Clean Vinyl Pro 2 works differently on
+purpose. (In the interactive window also: background blur 0. With the backdrop blurred the layer covers the whole
+backdrop; the window now shows that in two greens and repairs a brush stroke there - see `mask`.)
   convert   fast pixel conversions give the same numbers as the plain NumPy formulas (all 8/16-bit values)
   process   one-shot clean: current engine == v3.2.1 engine, pixel for pixel
   session   interactive window (open / sliders / brush / apply): current engine == v3.2.1
@@ -28,6 +30,12 @@ Part 2 - what Clean Vinyl Pro 2 does differently, each with its own measurable p
   format    format 5:7: size, seamless join, nothing drawn over the photo, 8/16 bit, both orientations
   scene     automatic preset: the frame is recognised (whole figure / cut at the waist or knees / close-up / dark
             backdrop) and the window opens exactly as if the suitable preset had been chosen by hand
+  stains    stains and shoe marks: evened next to the person as well as away from it; shadows, props, the light,
+            the person and a clean frame stay as they are
+  seam      the joint of two backdrop sheets: removed on both sides of the person, short pieces and dark lines
+            included; two different lines are not joined; works together with the wall-floor corner
+  mask      the whole backdrop is evened: the mask view tells "found and repaired" from "evened", the brush
+            repairs what it paints, the eraser leaves alone what it erases
 
 Part 3 - the program around the engine:
   server    settings migration, binary packets, one version everywhere, and no name / port shared with the
@@ -97,7 +105,17 @@ def _quiet(fn, *a, **k):
 
 def _legacy(p: dict) -> dict:
     """The parameters under which Clean Vinyl Pro 2 must still give the pixels of v3.2.1 (see the header)."""
-    return dict(p, speedMode="quality", smokeOn=False, cycCurve=0, dressSmooth=False)
+    return dict(p, speedMode="quality", smokeOn=False, cycCurve=0, dressSmooth=False, scuffs=0, seamJoin=False)
+
+
+def _legacy_window(p: dict) -> dict:
+    """
+    The legacy regime for the interactive window: also without the background blur. With any stage that works on
+    the whole backdrop the layer covers the whole backdrop; the window then shows what was found and repaired apart
+    from what is only evened, and repairs a brush stroke there - on purpose, see check_mask. (The blur itself is
+    still compared with v3.2.1 by the one-shot checks.)
+    """
+    return dict(_legacy(p), blur=0)
 
 
 def _same_stats(a: dict, b: dict) -> bool:
@@ -187,10 +205,11 @@ def _mutate(p, rng):
         k = str(rng.choice(["spots", "scuffs", "blur", "cycCurve", "feather", "seam", "edge", "smoke", "grain", "master",
                             "seamOn", "smokeOn", "shadow", "removeStands", "fracFine", "fracMed", "fracLarge",
                             "cleanPasses", "speedMode", "autoFractions", "same", "blur", "cycCurve", "scuffs", "blur",
-                            "feather", "spots"]))
+                            "feather", "spots", "smokeAuto", "seamJoin", "cycCurve", "scuffs"]))
         if k == "same":
             continue
-        if k in ("seamOn", "smokeOn", "shadow", "removeStands", "fracFine", "fracMed", "fracLarge", "autoFractions"):
+        if k in ("seamOn", "smokeOn", "shadow", "removeStands", "fracFine", "fracMed", "fracLarge", "autoFractions",
+                 "smokeAuto", "seamJoin"):
             p[k] = not bool(p.get(k, False))
         elif k == "cleanPasses":
             p[k] = 3 - int(p.get(k, 1))
@@ -266,7 +285,8 @@ def check_process():
                 t_old += dt
             outs.append((res, st, oc, eng.lama_sess.calls))
         (r0, s0, c0, l0), (r1, s1, c1, l1) = outs
-        same_oc = set(c0) == set(c1) and all(
+        # (the current engine may hand over more than v3.2.1 did; what v3.2.1 handed over must be the same)
+        same_oc = set(c0) <= set(c1) and all(
             np.array_equal(c0[k], c1[k]) if isinstance(c0[k], np.ndarray) else c0[k] == c1[k] for k in c0)
         if not (np.array_equal(r0, r1) and _same_stats(s0, s1) and same_oc and l0 == l1):
             bad.append(f"case {ci}: {w}x{h} {'16' if bit16 else '8'}-bit {'RGBA' if rgba else 'RGB'} {params}")
@@ -528,7 +548,7 @@ def check_session():
         if rng.random() < 0.3:
             sel = np.zeros((h, w), np.uint8)
             sel[h // 3:, : int(w * 0.8)] = 255
-        p = _legacy(dict(H.STD, autoFractions=bool(rng.random() < 0.6)))
+        p = _legacy_window(dict(H.STD, autoFractions=bool(rng.random() < 0.6)))
         eo, en = H.make_engine(E_OLD, sil), H.make_engine(E, sil)
         src = img.copy()
         src.setflags(write=False)
@@ -549,7 +569,7 @@ def check_session():
                                  "invert", "reset_auto", "dress", "apply", "apply"]))
             d = []
             if op == "recompute":
-                sent = _legacy(_mutate(sent, rng))
+                sent = _legacy_window(_mutate(sent, rng))
                 keep = bool(rng.random() < 0.8)
                 t0 = time.perf_counter()
                 ro = _quiet(eo.recompute_session, so, dict(sent), keep)
@@ -676,8 +696,30 @@ def check_cyc():
         a1 = _comp(flat, _quiet(eng2.process, flat, 8, dict(off, speedMode=mode, cycCurve=100))[0])
         if float(np.abs(a1 - a0).max()) > 0.0:
             bad.append(f"{w}x{h} {mode}: a frame without a corner was changed by {np.abs(a1 - a0).max():.1f} levels")
-    report("cyc", not bad, "cyclorama removes the wall-floor line (" + "; ".join(notes) + "), person untouched, no corner -> no change"
-           if not bad else "wrong:\n  " + "\n  ".join(bad))
+    # "Clean inside the selection": the corner goes only when the selection holds the whole line. A selection that
+    # holds a part of it must leave the corner alone - a line bent on one side of the selection border only is worse.
+    w, h = 1500, 2000
+    img, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=3)
+    rows = slice(int(h * 0.50), int(h * 0.74))
+    left, right = slice(int(w * 0.04), int(w * 0.24)), slice(int(w * 0.76), int(w * 0.96))
+    whole = np.zeros((h, w), np.uint8)
+    whole[int(h * 0.30):int(h * 0.95)] = 255             # all of the line, most of the frame
+    part = np.zeros((h, w), np.uint8)
+    part[int(h * 0.30):int(h * 0.95), : int(w * 0.40)] = 255  # only its left end
+    eng = H.make_engine(E, sil)
+    p60 = dict(off, speedMode="fast", cycCurve=60)
+    c_whole = _comp(img, _quiet(eng.process, img, 8, dict(p60), selection_alpha=whole)[0])
+    out_part, st_part = _quiet(eng.process, img, 8, dict(p60), selection_alpha=part)
+    c_part = _comp(img, out_part)
+    before = [_step(img, rows, b) for b in (left, right)]
+    after_whole = [_step(c_whole, rows, b) for b in (left, right)]
+    after_part = [_step(c_part, rows, b) for b in (left, right)]
+    if max(a / b for a, b in zip(after_whole, before)) > 0.40:
+        bad.append(f"a selection that holds the whole corner: line step {before} -> {after_whole}")
+    if min(a / b for a, b in zip(after_part, before)) < 0.95 or st_part.get("corner_row") is not None or int(out_part[:, :, 3].max()) != 0:
+        bad.append(f"a selection that holds a part of the corner must leave it alone: line step {before} -> {after_part}, corner_row {st_part.get('corner_row')}")
+    report("cyc", not bad, "cyclorama removes the wall-floor line (" + "; ".join(notes) + "), person untouched, no corner -> no change; "
+                           "inside a selection only when it holds the whole line" if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
 def _garment_frame(w=1400, h=2000, seed=5):
@@ -878,6 +920,54 @@ def check_smoke():
         b, _ = smoke_map(E_OLD, bare, nobody)
         if float(a[in_cloud].mean()) < 0.8 or float((a != b).mean()) > 0.0005:
             bad.append(f"frame without people: smoke map differs from v3.2.1 on {(a != b).mean() * 100:.2f}% of the pixels")
+
+    # The automatic mode ("smokeAuto", asked for by the plugin): smoke is protected only when the frame has smoke.
+    # A dirty floor gives small mottled patches that look like thin smoke; protecting them keeps exactly the dirt.
+    dirt = np.zeros((h, w), np.float32)
+    cv2.ellipse(dirt, (int(w * 0.30), int(h * 0.93)), (int(w * 0.06), int(h * 0.022)), 0, 0, 360, 1.0, -1)
+    cv2.ellipse(dirt, (int(w * 0.72), int(h * 0.95)), (int(w * 0.055), int(h * 0.020)), 0, 0, 360, 1.0, -1)
+    dirt = cv2.GaussianBlur(dirt, (0, 0), 12)
+    dirty = np.clip(img.astype(np.float32) + (wisps * dirt)[..., None], 0, 255).astype(np.uint8)
+
+    def texture(a, zone):
+        g = a.astype(np.float32).mean(axis=2)
+        band = cv2.GaussianBlur(g, (0, 0), 4.0) - cv2.GaussianBlur(g, (0, 0), 20.0)
+        return float(np.sqrt((band[zone > 0.6] ** 2).mean()))
+
+    def cleaned(frame, zone, **over):
+        eng = H.make_engine(E, sil)
+        out, stats = _quiet(eng.process, frame, 8, dict(H.STD, spots=0, seamOn=False, speedMode="fast", **over))
+        return stats.get("smoke") or {}, texture(_comp(frame, out), zone) / texture(frame, zone)
+
+    sm, kept = cleaned(dirty, dirt, smokeAuto=True)
+    if sm.get("found") is not False or sm.get("protected") != 0.0 or sm.get("on") is not True or sm.get("auto") is not True or kept > 0.7:
+        bad.append(f"dirty floor, automatic mode: {sm}, {kept * 100:.0f}% of the dirt left")
+    note += f"; automatic mode: dirty patches are cleaned ({kept * 100:.0f}% left"
+    sm, kept = cleaned(dirty, dirt)
+    if not (sm.get("protected", 0) > 0.01) or sm.get("auto") is not False or kept < 0.95:
+        bad.append(f"dirty floor without the automatic mode must behave as before (everything smoke-like kept): {sm}, {kept * 100:.0f}% left")
+    note += f", without it {kept * 100:.0f}%)"
+    sm, kept = cleaned(dirty, dirt, smokeAuto=True, smoke=ENG.SMOKE_ALWAYS_FROM)
+    if not (sm.get("protected", 0) > 0.01) or sm.get("auto") is not False or kept < 0.95:
+        bad.append(f"slider at {ENG.SMOKE_ALWAYS_FROM:.0f}: smoke must be protected without asking for evidence: {sm}, {kept * 100:.0f}% left")
+    sm, kept = cleaned(smoky, cloud, smokeAuto=True)
+    if sm.get("found") is not True or not (sm.get("protected", 0) > 0.05) or kept < 0.95:
+        bad.append(f"a real cloud, automatic mode: {sm}, {kept * 100:.0f}% of its texture left")
+    note += f", a real cloud is kept ({kept * 100:.0f}%)"
+    sm, kept = cleaned(smoky, cloud, smokeAuto=True, smokeOn=False)
+    if sm.get("on") is not False or sm.get("found") is not True or sm.get("protected") != 0.0 or kept > 0.8:
+        bad.append(f"a real cloud, protection off: {sm}, {kept * 100:.0f}% of its texture left")
+    # the window says what it saw: with the first scan and with every refresh
+    eng = H.make_engine(E, sil)
+    win = dict(H.STD, speedMode="fast", smokeAuto=True)
+    r1 = _quiet(eng.start_session, smoky, 8, dict(win))
+    r2 = _quiet(eng.recompute_session, r1["session_id"], dict(win, smokeOn=False), True, None, True)
+    r3 = _quiet(eng.recompute_session, r1["session_id"], dict(win, smokeOn=False), True, None, False)
+    s1, s2, s3 = r1.get("smoke") or {}, r2.get("smoke") or {}, r3.get("smoke") or {}
+    if s1.get("found") is not True or not (s1.get("protected", 0) > 0.05) or r1["scene"].get("smoke") != s1 or r1["stats"].get("smoke") != s1:
+        bad.append(f"the window must say that smoke was found and protected: {s1}")
+    if s2.get("on") is not False or s2.get("protected") != 0.0 or s2.get("found") is not True or s3 != s2:
+        bad.append(f"after the protection is switched off the window must say so (light and full refresh alike): {s2} / {s3}")
     report("smoke", not bad, note if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
@@ -1052,10 +1142,15 @@ def check_scene():
         if r1["scene"]["applied"] != used or r1["comp_jpg_b64"] != r2["comp_jpg_b64"] or e1._active_session["params"] != e2._active_session["params"]:
             bad.append(f"sets {sorted(presets)}: used '{r1['scene']['applied']}', expected '{used}'")
 
-    # 4. "how much of the frame is green": reported after every step and equal to the mask on screen
+    # 4. "how much of the frame was found and repaired" (the bright green of the mask; the plugin's notes are built
+    #    on it): reported after every step and equal to the mask on screen. More about the two greens: check_mask.
     e1, r1 = opened(img, sil, None)
     sid = r1["session_id"]
-    share = lambda: float(np.count_nonzero(e1._compute_effective_mask_small(e1._active_session) > 127)) / (r1["preview_w"] * r1["preview_h"])  # noqa: E731
+
+    def share():
+        s = e1._active_session
+        return float(np.count_nonzero(e1._compute_marked_mask_small(s, e1._compute_effective_mask_small(s)) > 127)) / (r1["preview_w"] * r1["preview_h"])
+
     if not (0.0 < r1["mask_share"] < 0.5) or abs(r1["mask_share"] - share()) > 1e-4:
         bad.append(f"mask_share after the scan: {r1.get('mask_share')} vs {share():.5f}")
     r2 = _quiet(e1.recompute_session, sid, dict(asked, spots=95), True, None, True)
@@ -1104,6 +1199,536 @@ def check_scene():
     report("scene", not bad, f"{n_frames} silhouettes framed right (whole figure / waist / close-up, both orientations, 1-2 people); dark key by the "
                              f"backdrop (limit {limit:.0f}); opening with the automatic preset == opening with that preset by hand, layer included{note}"
            if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Stains, smears and shoe marks ("Сліди взуття та розводи")
+# ----------------------------------------------------------------------------------------------------------------------
+def _stained_frame(w, h, seed=4, dark=False):
+    """
+    A lit backdrop with the usual 'person', a contact shadow under the feet, a soft cast shadow, a red ball and a
+    strip of yellow tape - and stains over the floor (soft spots of 0.8-2.4% of the frame height, a third of them
+    right next to the legs). dark=True: a low-key backdrop with the pool of a lamp on the floor.
+    Returns (frame with the stains, the same frame without them, silhouette, what was drawn where).
+    """
+    rng = np.random.default_rng(seed)
+    yy = np.linspace(0, 1, h, dtype=np.float32)[:, None]
+    xx = np.linspace(0, 1, w, dtype=np.float32)[None, :]
+    if dark:
+        lum = 26.0 * (1.0 - 0.25 * ((xx - 0.5) * 2) ** 2) + 6.0 * yy
+        pool = np.exp(-(((xx - 0.27) / 0.20) ** 2 + ((yy - 0.84) / 0.06) ** 2) * 1.2)
+        lum = lum + 70.0 * pool
+    else:
+        lum = 150.0 * (1.0 - 0.22 * ((xx - 0.5) * 2) ** 2 - 0.15 * ((yy - 0.45) * 2) ** 2) + 25.0 * yy
+        pool = np.zeros((h, w), np.float32)
+    lum = np.broadcast_to(lum, (h, w)).astype(np.float32).copy()
+    pool = np.broadcast_to(pool, (h, w)).astype(np.float32)
+    _, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=1)
+    person = cv2.resize(sil, (w, h)) > 0.5
+    cx = w // 2
+    small = (max(8, h // 8), max(8, w // 8))
+    sh = np.zeros(small, np.float32)
+    cv2.ellipse(sh, (cx // 8 + 30, int(h * 0.905) // 8), (max(1, int(w * 0.11) // 8), max(1, int(h * 0.022) // 8)), 0, 0, 360, 1.0, -1)
+    contact = cv2.resize(cv2.GaussianBlur(sh, (0, 0), 6), (w, h))
+    cs = np.zeros(small, np.float32)
+    cv2.ellipse(cs, (int(w * 0.76) // 8, int(h * 0.76) // 8), (max(1, int(w * 0.11) // 8), max(1, int(h * 0.04) // 8)), -18, 0, 360, 1.0, -1)
+    cast = cv2.resize(cv2.GaussianBlur(cs, (0, 0), 5), (w, h))
+    lit = lum * (1.0 - 0.38 * contact) * (1.0 - 0.14 * cast)
+
+    st = np.zeros((h, w), np.float32)
+    for i in range(170):
+        r = int(rng.uniform(0.004, 0.012) * h)
+        if i % 3 == 0:    # next to the legs and the feet
+            px = int(cx + rng.choice([-1, 1]) * rng.uniform(0.055, 0.15) * w)
+            py = int(rng.uniform(0.74, 0.97) * h)
+        else:
+            px, py = int(rng.uniform(0.03, 0.97) * w), int(rng.uniform(0.66, 0.98) * h)
+        y0, y1, x0, x1 = max(0, py - 4 * r), min(h, py + 4 * r), max(0, px - 4 * r), min(w, px + 4 * r)
+        blob = np.zeros((y1 - y0, x1 - x0), np.float32)
+        cv2.ellipse(blob, (px - x0, py - y0), (int(r * rng.uniform(1.0, 2.2)), r), float(rng.uniform(0, 180)), 0, 360, 1.0, -1)
+        st[y0:y1, x0:x1] += cv2.GaussianBlur(blob, (0, 0), max(1.0, r * 0.35)) * float(rng.choice([-1, -1, -1, 1]) * rng.uniform(3.5, 6.5))
+    st *= 0.40 if dark else 1.0
+    noise = rng.standard_normal((h, w, 3)).astype(np.float32) * (1.2 if dark else 1.8)
+    ball = (np.arange(w)[None, :] - int(w * 0.16)) ** 2 + (np.arange(h)[:, None] - int(h * 0.74)) ** 2 <= (0.035 * w) ** 2
+    tape = np.zeros((h, w), bool)
+    tape[int(h * 0.940):int(h * 0.940) + max(4, h // 200), int(w * 0.62):int(w * 0.92)] = True
+    st[cv2.dilate((ball | tape).astype(np.uint8), np.ones((int(0.03 * h) | 1,) * 2, np.uint8)) > 0] = 0.0  # (measured on their own)
+
+    def paint(l):
+        img = l[..., None] * np.float32([1.02, 1.0, 0.97]) + noise
+        img[ball] = np.float32([190, 40, 40]) + noise[ball]
+        img[tape] = l[tape][:, None] * np.float32([1.16, 1.02, 0.52]) + noise[tape]
+        img[person] = np.float32([40, 40, 46]) + noise[person] * 0.5
+        return np.clip(img, 0, 255).astype(np.uint8)
+
+    return paint(lit + st), paint(lit), sil, dict(person=person, stains=st, contact=contact, cast=cast, ball=ball, tape=tape, pool=pool)
+
+
+def _stain_numbers(c, stained, clean, g, dark=False):
+    """
+    `c`: the cleaned frame (float levels). Returns what is left of the stains (all of them / those within 4% of the
+    frame height from the person / those farther than 10%), how deep the two shadows still are, and what happened to
+    the person, the ball, the tape and the light.
+    """
+    h, w = stained.shape[:2]
+    gray = lambda im: im.astype(np.float32).mean(axis=2)  # noqa: E731
+    S = cv2.GaussianBlur(g["stains"], (0, 0), 2.0)
+    R = cv2.GaussianBlur(gray(c) - gray(clean), (0, 0), 2.0)
+    person = g["person"]
+    bg = ~(cv2.dilate(person.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0)
+    sel = bg & (np.abs(S) > (0.5 if dark else 1.2))
+    dist = cv2.distanceTransform((~person).astype(np.uint8), cv2.DIST_L2, 5)
+    left = lambda m: float((R[m] * S[m]).sum() / max(1e-6, float((S[m] ** 2).sum())))  # noqa: E731
+    d0, d1 = gray(clean), gray(c)
+    quiet_bg = bg & (np.abs(S) < 0.2)
+    rows, cols = np.arange(h)[:, None], np.arange(w)[None, :]
+    con = quiet_bg & (g["contact"] > 0.5)
+    con_ref = quiet_bg & (g["contact"] < 0.02) & (g["cast"] < 0.02) & (np.abs(rows - int(h * 0.905)) < 0.03 * h) & (np.abs(cols - w // 2) < 0.30 * w)
+    cst = quiet_bg & (g["cast"] > 0.6)
+    cst_ref = quiet_bg & (g["cast"] < 0.03) & (g["contact"] < 0.02) & (cv2.dilate((g["cast"] > 0.2).astype(np.uint8), np.ones((int(0.12 * w) | 1,) * 2, np.uint8)) > 0)
+    depth = lambda a, inside, ref: float(np.median(a[ref]) - np.median(a[inside]))  # noqa: E731
+    ball_core = cv2.erode(g["ball"].astype(np.uint8), np.ones((15, 15), np.uint8)) > 0
+    lab_b = lambda im: cv2.cvtColor(np.clip(im, 0, 255).astype(np.uint8), cv2.COLOR_RGB2LAB)[..., 2].astype(np.float32)  # noqa: E731
+    beside = np.roll(g["tape"], -4 * max(4, h // 200), axis=0)
+    tape_colour = lambda im: float(lab_b(im)[g["tape"]].mean() - lab_b(im)[beside].mean())  # noqa: E731
+    changed = np.abs(c - stained.astype(np.float32))
+    inside = cv2.erode(person.astype(np.uint8), np.ones((7, 7), np.uint8)) > 0  # (the outline itself is a soft edge)
+    return dict(
+        left=left(sel), near=left(sel & (dist < 0.04 * h)), far=left(sel & (dist > 0.10 * h)),
+        contact=depth(d1, con, con_ref) / depth(d0, con, con_ref), cast=depth(d1, cst, cst_ref) / depth(d0, cst, cst_ref),
+        person=float(changed[inside].max()), ball=float(changed[ball_core].mean()),
+        tape=tape_colour(c) / tape_colour(stained),
+        light=float(np.abs(cv2.GaussianBlur(d1 - gray(stained), (0, 0), 0.05 * h))[bg].max()),
+    )
+
+
+def check_stains():
+    """
+    "Сліди взуття та розводи": stains of the floor are evened - next to the person as well as away from it - while
+    shadows, props, the light and the person stay.
+    """
+    bad, notes = [], []
+    only = dict(H.STD, spots=0, seamOn=False, blur=0, cycCurve=0, smokeAuto=True)  # nothing but the stain stage works
+
+    def cleaned(frame, sil, engine=E, bit16=False, **over):
+        eng = H.make_engine(engine, sil)
+        if not bit16:
+            return _comp(frame, _quiet(eng.process, frame, 8, dict(only, **over))[0])
+        out = _quiet(eng.process, frame.astype(np.uint16) * 128, 16, dict(only, **over))[0]
+        if out.dtype != np.uint16:
+            bad.append("16-bit frame: the answer is not 16-bit")
+        out = out.astype(np.float32) / 128.0
+        a = out[:, :, 3:4] / 255.0
+        return frame.astype(np.float32) * (1.0 - a) + out[:, :, :3] * a
+
+    grad = lambda a: np.hypot(cv2.Sobel(a, cv2.CV_32F, 1, 0, ksize=3), cv2.Sobel(a, cv2.CV_32F, 0, 1, ksize=3)) / 8.0  # noqa: E731
+    by_strength = {}
+    for (w, h, mode) in ((1500, 2000, "quality"), (1500, 2000, "fast"), (2000, 1500, "fast")):
+        stained, clean, sil, g = _stained_frame(w, h)
+        r = _stain_numbers(cleaned(stained, sil, speedMode=mode, scuffs=65), stained, clean, g)
+        tag = f"{w}x{h} {mode}"
+        if mode == "fast" and w < h:
+            by_strength[65] = r["left"]
+            notes.append(f"stains left {r['left'] * 100:.0f}% (next to the person {r['near'] * 100:.0f}%), contact shadow {r['contact'] * 100:.0f}%, "
+                         f"soft cast shadow {r['cast'] * 100:.0f}%")
+        if r["left"] > 0.55 or r["far"] > 0.55:
+            bad.append(f"{tag}: {r['left'] * 100:.0f}% of the stains are left (away from the person {r['far'] * 100:.0f}%)")
+        if r["near"] > 0.60 or r["near"] > r["far"] + 0.15:
+            bad.append(f"{tag}: next to the person {r['near'] * 100:.0f}% of the stains are left, away from it {r['far'] * 100:.0f}%")
+        if r["contact"] < 0.85:
+            bad.append(f"{tag}: the contact shadow under the feet kept {r['contact'] * 100:.0f}% of its depth")
+        if r["cast"] < 0.62:
+            bad.append(f"{tag}: the soft cast shadow kept {r['cast'] * 100:.0f}% of its depth")
+        if r["person"] > 0.01:
+            bad.append(f"{tag}: the person was changed by {r['person']:.3f} levels")
+        if r["ball"] > 1.0 or r["tape"] < 0.75:
+            bad.append(f"{tag}: the red ball moved by {r['ball']:.2f} levels, the yellow tape kept {r['tape'] * 100:.0f}% of its colour")
+        if r["light"] > 2.0:
+            bad.append(f"{tag}: the light itself moved by {r['light']:.2f} levels")
+        # a frame with no stains on it stays as it is: nothing is drawn where there is nothing to even
+        # (the two shadows are measured above, on their own)
+        c0 = cleaned(clean, sil, speedMode=mode, scuffs=65)
+        bg = (~(cv2.dilate(g["person"].astype(np.uint8), np.ones((31, 31), np.uint8)) > 0) & (g["contact"] < 0.02) & (g["cast"] < 0.02)
+              & ~(cv2.dilate((g["ball"] | g["tape"]).astype(np.uint8), np.ones((61, 61), np.uint8)) > 0))
+        a0, a1 = cv2.GaussianBlur(clean.astype(np.float32).mean(axis=2), (0, 0), 3.0), cv2.GaussianBlur(c0.mean(axis=2), (0, 0), 3.0)
+        drawn = float(np.percentile((grad(a1) - grad(a0))[bg], 99.9))
+        moved = float(np.abs(cv2.GaussianBlur(a1 - a0, (0, 0), 6.0))[bg].max())
+        if drawn > 0.10 or moved > 2.5:
+            bad.append(f"{tag}: a frame without stains got new edges ({drawn:.3f} levels/px) or moved by {moved:.2f} levels")
+
+    w, h = 1500, 2000
+    stained, clean, sil, g = _stained_frame(w, h)
+    for strength in (30, 100):
+        by_strength[strength] = _stain_numbers(cleaned(stained, sil, speedMode="fast", scuffs=strength), stained, clean, g)["left"]
+    if not (by_strength[30] > by_strength[65] + 0.05 > by_strength[100] + 0.10):
+        bad.append(f"the slider does not grade the effect: stains left at 30 / 65 / 100 = " + " / ".join(f"{by_strength[k] * 100:.0f}%" for k in (30, 65, 100)))
+    if float(np.abs(cleaned(stained, sil, speedMode="fast", scuffs=0) - stained.astype(np.float32)).max()) > 0.0:
+        bad.append("slider at 0: the frame was changed")
+    r16 = _stain_numbers(cleaned(stained, sil, bit16=True, speedMode="fast", scuffs=65), stained, clean, g)
+    if abs(r16["left"] - by_strength[65]) > 0.03 or r16["person"] > 0.51:
+        bad.append(f"16-bit frame: stains left {r16['left'] * 100:.0f}% (8-bit: {by_strength[65] * 100:.0f}%), person moved by {r16['person']:.2f}")
+
+    # a low-key backdrop with a lamp's pool on the floor: stains go, the pool keeps its shape and its rim
+    dstained, dclean, dsil, dg = _stained_frame(w, h, dark=True)
+    cd = cleaned(dstained, dsil, speedMode="fast", scuffs=55)
+    rd = _stain_numbers(cd, dstained, dclean, dg, dark=True)
+    notes.append(f"dark backdrop: stains left {rd['left'] * 100:.0f}%")
+    if rd["left"] > 0.82 or rd["near"] > 0.85 or rd["person"] > 0.01 or rd["contact"] < 0.85:
+        bad.append(f"dark backdrop: stains left {rd['left'] * 100:.0f}% (next to the person {rd['near'] * 100:.0f}%), "
+                   f"contact shadow {rd['contact'] * 100:.0f}%, person moved by {rd['person']:.3f}")
+    bgd = ~(cv2.dilate(dg["person"].astype(np.uint8), np.ones((31, 31), np.uint8)) > 0)
+    rim = bgd & (dg["pool"] > 0.2) & (dg["pool"] < 0.8) & (np.abs(dg["stains"]) < 0.1)
+    b0, b1 = cv2.GaussianBlur(dclean.astype(np.float32).mean(axis=2), (0, 0), 4.0), cv2.GaussianBlur(cd.mean(axis=2), (0, 0), 4.0)
+    rim_sharper = float(np.median(grad(b1)[rim]) / max(1e-6, float(np.median(grad(b0)[rim]))))
+    core = bgd & (dg["pool"] > 0.9)
+    pool_kept = float((np.median(b1[core]) - np.median(b1[bgd & (dg["pool"] < 0.02) & (np.arange(h)[:, None] > 0.70 * h)]))
+                      / (np.median(b0[core]) - np.median(b0[bgd & (dg["pool"] < 0.02) & (np.arange(h)[:, None] > 0.70 * h)])))
+    if not (0.93 <= rim_sharper <= 1.07) or not (0.97 <= pool_kept <= 1.03):
+        bad.append(f"dark backdrop: the rim of the lamp's pool became x{rim_sharper:.2f} as steep, the pool kept {pool_kept * 100:.0f}% of its light")
+
+    # the rim of a lamp's pool with one slightly steeper spot in it (a repaired seam leaves such a spot): an
+    # edge-keeping average flattens both shoulders of the spot and so draws a line there; it must be left alone
+    rng = np.random.default_rng(5)
+    yy = np.linspace(0, 1, h, dtype=np.float32)[:, None]
+    t = np.clip((yy - 0.69) / 0.11, 0.0, 1.0)
+    lum = 11.0 + 50.0 * (t * t * (3 - 2 * t)) + 2.5 / (1.0 + np.exp(-(yy - 0.745) * h / 5.0))
+    rim_img = np.clip(np.broadcast_to(lum, (h, w))[..., None] * np.float32([0.9, 0.95, 1.15]) + rng.standard_normal((h, w, 3)).astype(np.float32) * 1.2, 0, 255).astype(np.uint8)
+    rim_img[cv2.resize(sil, (w, h)) > 0.5] = (20, 20, 24)
+    rim_out = cleaned(rim_img, sil, speedMode="fast", scuffs=55)
+    prof = lambda a: a[:, int(w * 0.04):int(w * 0.30)].astype(np.float32).mean(axis=(1, 2))  # noqa: E731
+    p0, p1 = prof(rim_img), prof(rim_out)
+    k, rows = int(0.004 * h), np.arange(int(0.70 * h), int(0.79 * h))
+    climb = lambda q: float(max(q[r + k] - q[r - k] for r in rows))  # noqa: E731
+    if climb(p1) > 1.04 * climb(p0):
+        bad.append(f"the steepest spot of a lamp's rim became steeper: {climb(p0):.2f} -> {climb(p1):.2f} levels over {2 * k} rows")
+
+    if E_OLD is not None:
+        ro = _stain_numbers(cleaned(stained, sil, engine=E_OLD, speedMode="fast", scuffs=65), stained, clean, g)
+        notes.append(f"v3.2.1 left {ro['left'] * 100:.0f}% (next to the person {ro['near'] * 100:.0f}%)")
+    report("stains", not bad, "; ".join(notes) + "; person, ball, tape and light kept, a clean frame stays clean, 8/16 bit" if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# The joint of two backdrop sheets ("Шов з’єднання вінілу"), alone and together with the wall-floor corner
+# ----------------------------------------------------------------------------------------------------------------------
+def _joint_frame(w, h, left=(0.0, 0.18), right=(0.83, 1.0), y_left=0.80, y_right=0.80, corner=False, seed=7, dark=10.0, weak_left=1.0):
+    """
+    A floor with the joint of two backdrop sheets (a hair-thin dark line with a faint rim), seen only as two pieces:
+    a wide silhouette - a long dress with a train that leaves the frame - hides the middle. `left` / `right`: the
+    visible part of the line on each side (shares of the width); `y_left` / `y_right`: its height on each side
+    (different values = two different lines); `dark`: how dark the line is (levels). corner=True adds the
+    wall-floor corner at 0.62 of the height. Returns (frame, silhouette 1024, mask of the drawn joint).
+    """
+    rng = np.random.default_rng(seed)
+    yy = np.linspace(0, 1, h, dtype=np.float32)[:, None]
+    xx = np.linspace(0, 1, w, dtype=np.float32)[None, :]
+    if corner:
+        t = 1.0 / (1.0 + np.exp(-np.clip((yy - 0.62) * 220.0, -50, 50)))
+        lum = (150.0 * (1 - t) + 172.0 * t) * (1.0 - 0.22 * (((xx - 0.5) * 2) ** 2) - 0.10 * (((yy - 0.45) * 2) ** 2))
+    else:
+        lum = 150.0 * (1.0 - 0.22 * ((xx - 0.5) * 2) ** 2 - 0.15 * ((yy - 0.45) * 2) ** 2) + 25.0 * yy
+    lum = np.broadcast_to(lum, (h, w)).astype(np.float32).copy()
+    joint = np.zeros((h, w), bool)
+    for (x0, x1), yj, k in ((left, y_left, weak_left), (right, y_right, 1.0)):
+        ys, xa, xb = int(h * yj), int(w * x0), int(w * x1)
+        if xb > xa:
+            lum[max(0, ys - 3):ys + 4, xa:xb] -= 0.2 * dark * k
+            lum[ys:ys + 2, xa:xb] -= dark * k
+            joint[ys:ys + 2, xa:xb] = True
+    img = np.clip(lum[..., None] * np.float32([1.02, 1.0, 0.97]) + rng.standard_normal((h, w, 3)).astype(np.float32) * 1.8, 0, 255).astype(np.uint8)
+    sil = np.zeros((h, w), np.uint8)
+    cx = w // 2
+    cv2.ellipse(sil, (cx, int(h * 0.20)), (int(w * 0.035), int(h * 0.07)), 0, 0, 360, 255, -1)
+    xl, xr = int(w * (left[1] + 0.02)) if left[1] > left[0] else int(w * 0.20), int(w * (right[0] - 0.02)) if right[1] > right[0] else int(w * 0.81)
+    dress = np.array([[cx - int(w * 0.05), int(h * 0.26)], [cx + int(w * 0.05), int(h * 0.26)], [xr, int(h * 0.74)], [xr, h], [xl, h], [xl, int(h * 0.74)]], np.int32)
+    cv2.fillPoly(sil, [dress], 255)
+    img[sil > 0] = (40, 40, 46)
+    joint &= sil == 0
+    return img, cv2.resize(sil, (1024, 1024), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0, joint
+
+
+def _joint_sides(img, joint, heal):
+    """Per side (left, right half of the frame): how dark the joint is against the floor above and below it (levels),
+    and which share of it the repair mask covers."""
+    g = img.astype(np.float32).mean(axis=2)
+    w = img.shape[1]
+    out = []
+    for cols in (slice(0, w // 2), slice(w // 2, w)):
+        m = joint[:, cols]
+        if not m.any():
+            out.append((0.0, 0.0))
+            continue
+        ys, xs = np.nonzero(m)
+        yc, x0, x1 = int(ys.min()), int(xs.min()) + 20, int(xs.max()) - 20
+        band = g[:, cols][:, x0:x1]
+        dark = float((band[yc - 14:yc - 10].mean() + band[yc + 11:yc + 15].mean()) / 2 - band[yc:yc + 1].mean())
+        out.append((dark, float((heal[:, cols][m] > 0).mean()) if heal is not None else 0.0))
+    return out
+
+
+def check_seam():
+    """
+    The joint of two sheets is removed on BOTH sides of the person, however short the visible pieces are and however
+    dark the line is; two different lines are not taken for one; the wall-floor corner and the joint do not get in
+    each other's way.
+    """
+    bad, notes = [], []
+    base = dict(H.STD, spots=0, scuffs=0, blur=0, cycCurve=0, smokeAuto=True)
+
+    def run(w=1500, h=2000, mode="fast", engine=E, frame=None, **over):
+        img, sil, joint = _joint_frame(w, h, **(frame or {}))
+        oc = {}
+        eng = H.make_engine(engine, sil)
+        out, stats = _quiet(eng.process, img, 8, dict(base, speedMode=mode, **over), out_cache=oc)
+        comp = _comp(img, out)
+        before, after = _joint_sides(img, joint, oc.get("heal_mask_full")), _joint_sides(comp, joint, oc.get("heal_mask_full"))
+        return dict(stats=stats, before=[b[0] for b in before], after=[a[0] for a in after], cover=[a[1] for a in after], img=img, comp=comp, sil=sil)
+
+    def both_gone(r):
+        return min(r["cover"]) >= 0.9 and max(a / b for a, b in zip(r["after"], r["before"])) <= 0.25
+
+    def untouched(r, sides=(0, 1)):
+        return all(r["cover"][s] == 0.0 and abs(r["after"][s] - r["before"][s]) < 0.3 for s in sides)
+
+    # 1. two short pieces of one line (18% and 17% of the width): judged one by one neither is long enough
+    for (w, h, mode) in ((1500, 2000, "fast"), (1500, 2000, "quality"), (2000, 1500, "fast")):
+        r = run(w, h, mode)
+        if not both_gone(r):
+            bad.append(f"{w}x{h} {mode}: two short pieces of one joint: covered {r['cover']}, line {r['before']} -> {r['after']} levels")
+        if mode == "fast" and w < h:
+            notes.append(f"pieces of 18% + 17% of the width: line {r['before'][0]:.0f}/{r['before'][1]:.0f} -> {r['after'][0]:.1f}/{r['after'][1]:.1f} levels")
+        if not untouched(run(w, h, mode, seamJoin=False)):
+            bad.append(f"{w}x{h} {mode}: with seamJoin off the pieces must be judged one by one, as the original program did")
+    # 2. what must NOT be joined or taken
+    r = run(frame=dict(y_right=0.87))
+    if not untouched(r):
+        bad.append(f"two short lines at different heights were taken for one joint: covered {r['cover']}")
+    r = run(frame=dict(left=(0.0, 0.15), right=(1.0, 1.0)))
+    if not untouched(r, sides=(0,)):
+        bad.append(f"one short piece alone (15% of the width) was taken for a joint: covered {r['cover']}")
+    if run(seamOn=False)["stats"]["seam_px"] != 0:
+        bad.append("the tool is switched off, yet a seam was marked")
+    # 3. a long piece on one side and a short one on the other: the short side is not forgotten
+    r = run(frame=dict(left=(0.0, 0.40), right=(0.90, 1.0)))
+    if not both_gone(r):
+        bad.append(f"a long piece and a short one: covered {r['cover']}, line {r['before']} -> {r['after']} levels")
+    r = run(frame=dict(weak_left=0.5))
+    if not both_gone(r):
+        bad.append(f"one side twice fainter than the other: covered {r['cover']}, line {r['before']} -> {r['after']} levels")
+    # 4. however visible the joint is: a faint one and a really dark one (the dark one used to be left in the photo)
+    for dark in (2.5, 30.0):
+        r = run(frame=dict(left=(0.0, 0.30), right=(0.72, 1.0), dark=dark))
+        if min(r["cover"]) < 0.9:
+            bad.append(f"a joint {dark:.1f} levels dark: covered {r['cover']}")
+    # 5. together with the wall-floor corner: the corner is found where it is, the joint is repaired on both sides
+    for cyc in (0, 65):
+        r = run(frame=dict(corner=True), cycCurve=cyc)
+        row = r["stats"].get("corner_row")
+        if not both_gone(r):
+            bad.append(f"corner + joint, cyclorama {cyc}: joint covered {r['cover']}, line {r['before']} -> {r['after']} levels")
+        if cyc and (row is None or abs(row - 0.62) > 0.012):
+            bad.append(f"corner + joint: the corner was looked for at {row} of the height, it is at 0.62")
+        if cyc:
+            h, w = r["img"].shape[:2]
+            rows = slice(int(h * 0.50), int(h * 0.74))
+            for name, cols in (("left", slice(int(w * 0.02), int(w * 0.16))), ("right", slice(int(w * 0.86), int(w * 0.98)))):
+                s0, s1 = _step(r["img"], rows, cols), _step(r["comp"], rows, cols)
+                if s1 > 0.40 * s0:
+                    bad.append(f"corner + joint: the corner line on the {name} went from {s0:.1f} to {s1:.1f} levels only")
+            notes.append(f"with the corner: found at {row:.3f} of the height (drawn at 0.620), joint and corner both removed")
+    # A corner with a hair-thin dark crease in it. With the corner tool on, the seam search leaves that strip alone:
+    # a strip repaired there blurs the corner and gets in the way of the tool. With the tool off the crease is a
+    # line like any other and is repaired.
+    w, h = 1500, 2000
+    rng = np.random.default_rng(9)
+    yy = np.linspace(0, 1, h, dtype=np.float32)[:, None]
+    xx = np.linspace(0, 1, w, dtype=np.float32)[None, :]
+    floor = (yy >= 0.62).astype(np.float32)
+    lum = (150.0 * (1 - floor) + 172.0 * floor) * (1.0 - 0.22 * (((xx - 0.5) * 2) ** 2) - 0.10 * (((yy - 0.45) * 2) ** 2))
+    lum = np.broadcast_to(lum, (h, w)).astype(np.float32).copy()
+    lum[int(h * 0.62) - 1:int(h * 0.62) + 1] -= 8.0
+    creased = np.clip(cv2.GaussianBlur(lum, (0, 0), 0.8)[..., None] * np.float32([1.02, 1.0, 0.97]) + rng.standard_normal((h, w, 3)).astype(np.float32) * 1.8, 0, 255).astype(np.uint8)
+    _, sil_std = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=1)
+    creased[cv2.resize(sil_std, (w, h)) > 0.5] = (40, 40, 46)
+    strip = slice(int(h * (0.62 - 0.012)), int(h * (0.62 + 0.012)))
+    rows_c = slice(int(h * 0.50), int(h * 0.74))
+    for cyc in (0, 65):
+        oc = {}
+        out, stats = _quiet(H.make_engine(E, sil_std).process, creased, 8, dict(base, speedMode="fast", cycCurve=cyc), out_cache=oc)
+        marked = int((oc["heal_mask_full"][strip] > 0).sum())
+        comp = _comp(creased, out)
+        kept = max(_step(comp, rows_c, b) / _step(creased, rows_c, b) for b in (slice(int(w * 0.04), int(w * 0.24)), slice(int(w * 0.76), int(w * 0.96))))
+        if cyc and (marked != 0 or kept > 0.35 or stats.get("corner_row") is None):
+            bad.append(f"corner with a crease, cyclorama {cyc}: {marked} px marked for repair inside the corner strip, line kept {kept * 100:.0f}%, corner at {stats.get('corner_row')}")
+        if not cyc and marked < 0.5 * w * 4:
+            bad.append(f"corner with a crease, cyclorama off: the crease must be repaired as a line, {marked} px marked")
+
+    # a floor joint without any corner in the frame is not a corner (it used to be taken for one and smeared)
+    r = run(cycCurve=65)
+    if r["stats"].get("corner_row") is not None or not both_gone(r):
+        bad.append(f"a joint in a frame without a corner: 'corner' at {r['stats'].get('corner_row')}, joint covered {r['cover']}")
+    report("seam", not bad, "; ".join(notes) + "; two different lines and a lone short piece are left alone; faint and dark joints alike"
+           if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# The "Маска" view and the brush when the whole backdrop is evened
+# ----------------------------------------------------------------------------------------------------------------------
+def check_mask():
+    """
+    With the stain / blur / corner stages on, the layer covers the whole backdrop. The mask view must still tell
+    what was found and repaired (bright green) from what is only evened (pale green), "mask_share" must count the
+    former, and the brush and the eraser must keep working.
+    """
+    bad = []
+    w, h = 1500, 2000
+    img, sil = H.make_studio_image(w, h, n_dust=60, n_hair=4, seed=77)
+    speck = (int(w * 0.25), int(h * 0.35))          # a mark on the wall that the search is not allowed to take (see `quiet`)
+    cv2.circle(img, speck, 7, tuple(int(v) - 45 for v in img[speck[1], speck[0]]), -1, lineType=cv2.LINE_AA)
+    on = dict(H.STD, speedMode="fast", smokeAuto=True)   # "Сліди взуття та розводи" 65: the whole backdrop is evened
+    off = dict(on, scuffs=0, blur=0, cycCurve=0)          # only what the search finds is repaired
+
+    def opened(params, image=img):
+        eng = H.make_engine(E, sil)
+        return eng, _quiet(eng.start_session, image, 8, dict(params))
+
+    def jpg(b64):
+        import base64
+        return cv2.imdecode(np.frombuffer(base64.b64decode(b64), np.uint8), cv2.IMREAD_COLOR).astype(np.float32)
+
+    def counted(eng):
+        s = eng._active_session
+        eff = eng._compute_effective_mask_small(s)
+        return (float(np.count_nonzero(eng._compute_marked_mask_small(s, eff) > 127)) / eff.size, float(np.count_nonzero(eff > 127)) / eff.size)
+
+    def agrees(eng, r):
+        mk, ly = counted(eng)
+        return abs(r["mask_share"] - mk) <= 1e-4 and abs(r["layer_share"] - ly) <= 1e-4
+
+    # 1. the two numbers
+    e_on, r_on = opened(on)
+    e_off, r_off = opened(off)
+    if not agrees(e_on, r_on) or not agrees(e_off, r_off):
+        bad.append("mask_share / layer_share differ from the masks on screen")
+    if abs(r_off["mask_share"] - r_off["layer_share"]) > 1e-9:
+        bad.append(f"nothing but repairs: the two shares must be the same, got {r_off['mask_share']} / {r_off['layer_share']}")
+    if not (r_on["layer_share"] > 0.6 and 0.0 < r_on["mask_share"] < 0.25):
+        bad.append(f"backdrop evened: layer_share {r_on['layer_share']}, mask_share {r_on['mask_share']}")
+    if abs(r_on["mask_share"] - r_off["mask_share"]) > 0.35 * r_off["mask_share"] + 0.002:
+        bad.append(f"the repaired share must not depend on the evening of the backdrop: {r_off['mask_share']} without it, {r_on['mask_share']} with it")
+
+    # 2. the picture: bright green = repaired, pale green = evened, red = left alone
+    s = e_on._active_session
+    layer, marked = s["auto_mask_small_u8"], s["repair_mask_small_u8"]
+    ov, cp = jpg(r_on["overlay_jpg_b64"]), jpg(r_on["comp_jpg_b64"])
+    green = lambda a: a[..., 1] - 0.5 * (a[..., 0] + a[..., 2])  # noqa: E731  (BGR)
+    red = lambda a: a[..., 2] - 0.5 * (a[..., 0] + a[..., 1])    # noqa: E731
+    k = np.ones((5, 5), np.uint8)
+    z_marked = cv2.erode((marked > 200).astype(np.uint8), k) > 0
+    z_evened = (cv2.erode((layer > 200).astype(np.uint8), k) > 0) & ~(cv2.dilate((marked > 20).astype(np.uint8), k) > 0)
+    z_alone = cv2.erode((layer < 20).astype(np.uint8), k) > 0
+    if min(int(z_marked.sum()), int(z_evened.sum()), int(z_alone.sum())) < 200:
+        bad.append(f"the test frame has too little of one zone: repaired {z_marked.sum()}, evened {z_evened.sum()}, untouched {z_alone.sum()} px")
+    else:
+        g_m, g_e, g_a = (float(np.median((green(ov) - green(cp))[z])) for z in (z_marked, z_evened, z_alone))
+        r_a, r_e = float(np.median((red(ov) - red(cp))[z_alone])), float(np.median((red(ov) - red(cp))[z_evened]))
+        if not (g_m > 60.0 and 8.0 < g_e < 0.6 * g_m and g_a < 6.0 and r_a > 12.0 and r_e < 4.0):
+            bad.append(f"mask colours: repaired +{g_m:.0f} green, evened +{g_e:.0f} green ({r_e:+.0f} red), untouched +{g_a:.0f} green {r_a:+.0f} red")
+    # (without the evening the picture is the old one: everything in the layer is bright green)
+    s0 = e_off._active_session
+    if s0["repair_mask_small_u8"] is not s0["auto_mask_small_u8"]:
+        bad.append("nothing but repairs: the layer and the repaired zones must be one and the same mask")
+
+    # 3. the brush: a mark that the search left in the evened backdrop is repaired when it is painted over
+    quiet = dict(on, spots=0, seamOn=False)                 # the search takes nothing; the backdrop is still evened
+    px, py = speck[0] / w, speck[1] / h
+    contrast = lambda a: float(np.median(a[speck[1] - 20:speck[1] + 21, speck[0] - 20:speck[0] + 21].mean(axis=2))  # noqa: E731
+                               - a[speck[1] - 3:speck[1] + 4, speck[0] - 3:speck[0] + 4].mean())
+    layers = {}
+    for name, stroke in (("left", False), ("painted", True)):
+        eng, r = opened(quiet)
+        if stroke:
+            rs = eng.edit_session_mask(r["session_id"], "stroke", [{"x": px, "y": py, "norm": 1}], 14.0, erase=False, dress_smooth=False, dress_strength=45.0)
+            if not agrees(eng, rs) or rs["mask_share"] <= r["mask_share"]:
+                bad.append(f"a brush stroke must add to the repaired share: {r['mask_share']} -> {rs.get('mask_share')}")
+        out = _quiet(eng.apply_session, r["session_id"], 100.0, False, False, 45.0)[0]
+        layers[name] = _comp(img, out)
+    c_src, c_left, c_painted = contrast(img.astype(np.float32)), contrast(layers["left"]), contrast(layers["painted"])
+    if c_left < 0.7 * c_src:
+        bad.append(f"the test mark was removed without the brush ({c_src:.0f} -> {c_left:.0f} levels): nothing to prove")
+    if c_painted > 0.3 * c_src:
+        bad.append(f"a mark painted over with the brush is still there after Apply: {c_src:.0f} -> {c_painted:.0f} levels")
+    far = np.ones((h, w), bool)
+    far[speck[1] - 150:speck[1] + 151, speck[0] - 150:speck[0] + 151] = False
+    if float(np.abs(layers["painted"] - layers["left"])[far].max()) > 0.0:
+        bad.append("the brush stroke changed the layer away from the stroke")
+
+    # 4. the eraser: what is erased is not touched at all, and both shares say so; fill / clear / invert / reset
+    eng, r = opened(on)
+    sid = r["session_id"]
+    ex, ey = 0.82, 0.30                                      # plain wall
+    re_ = eng.edit_session_mask(sid, "stroke", [{"x": ex, "y": ey, "norm": 1}], 40.0, erase=True, dress_smooth=False, dress_strength=45.0)
+    if not agrees(eng, re_) or re_["layer_share"] >= r["layer_share"]:
+        bad.append(f"an eraser stroke must take from the layer: layer_share {r['layer_share']} -> {re_.get('layer_share')}")
+    out = _quiet(eng.apply_session, sid, 100.0, False, False, 45.0)[0]
+    cy_, cx_, rad = int(ey * h), int(ex * w), int(0.5 * 40.0 * w / r["preview_w"])
+    if int(out[cy_ - rad:cy_ + rad, cx_ - rad:cx_ + rad, 3].max()) != 0:
+        bad.append("an erased zone is still part of the layer after Apply")
+    rf = eng.edit_session_mask(sid, "fill")
+    rc = eng.edit_session_mask(sid, "clear")
+    ra = eng.edit_session_mask(sid, "reset_auto")
+    if (rf["mask_share"], rf["layer_share"]) != (1.0, 1.0) or (rc["mask_share"], rc["layer_share"]) != (0.0, 0.0):
+        bad.append(f"fill / clear: {rf['mask_share']}, {rf['layer_share']} / {rc['mask_share']}, {rc['layer_share']}")
+    if abs(ra["mask_share"] - r["mask_share"]) > 1e-9 or abs(ra["layer_share"] - r["layer_share"]) > 1e-9 or not agrees(eng, ra):
+        bad.append(f"'reset' must bring the automatic mask back: {r['mask_share']}, {r['layer_share']} -> {ra['mask_share']}, {ra['layer_share']}")
+    ri = eng.edit_session_mask(sid, "invert")
+    if not agrees(eng, ri) or abs(ri["mask_share"] - ri["layer_share"]) > 1e-9 or abs(ri["layer_share"] - (1.0 - r["layer_share"])) > 0.02:
+        bad.append(f"inverted mask: {ri['mask_share']}, {ri['layer_share']} (the layer was {r['layer_share']})")
+    eng.edit_session_mask(sid, "invert")
+
+    # 5. after the sliders: the light refresh and the full recompute report the same, and more is found at a higher
+    #    setting (a frame large enough for the light way: its long side is above PREVIEW_PROXY_MIN_DIM)
+    big, _ = H.make_studio_image(1950, 2600, n_dust=80, n_hair=4, seed=78)
+    more = dict(on, spots=95)
+    e1, r1 = opened(on, big)
+    rq = _quiet(e1.recompute_session, r1["session_id"], dict(more), True, None, True)
+    e2, r2 = opened(on, big)
+    rfull = _quiet(e2.recompute_session, r2["session_id"], dict(more), True, None, False)
+    if rq.get("quick") is not True or rfull.get("quick") is not False:
+        bad.append(f"recompute: the light way was {rq.get('quick')}, the full way {rfull.get('quick')}")
+    if not agrees(e1, rq) or not agrees(e2, rfull):
+        bad.append("recompute: the shares differ from the masks on screen")
+    if abs(rq["mask_share"] - rfull["mask_share"]) > 0.004 or abs(rq["layer_share"] - rfull["layer_share"]) > 0.004:
+        bad.append(f"light refresh vs full recompute: mask_share {rq['mask_share']} / {rfull['mask_share']}, layer_share {rq['layer_share']} / {rfull['layer_share']}")
+    if rq["mask_share"] <= r1["mask_share"]:
+        bad.append(f"a more sensitive search must find more: {r1['mask_share']} -> {rq['mask_share']}")
+    # Apply after a light refresh computes the real frame; the masks must stay the ones that were on screen
+    before = counted(e1)
+    _quiet(e1.apply_session, r1["session_id"], 100.0, False, False, 45.0)
+    after = counted(e1)
+    if abs(before[0] - after[0]) > 0.004 or abs(before[1] - after[1]) > 0.004:
+        bad.append(f"Apply after a light refresh changed the masks: {before} -> {after}")
+    # 6. two passes: what the second pass repaired is marked too (big dark marks: the stand-in repair leaves a smudge
+    #    of them for the second pass to find)
+    marks = img.copy()
+    rng = np.random.default_rng(3)
+    for i in range(10):
+        mx, my = int(rng.uniform(0.08, 0.92) * w), int(rng.uniform(0.66, 0.95) * h)
+        if abs(mx - w // 2) < 0.2 * w:
+            mx = int(0.15 * w) + i * 20
+        cv2.circle(marks, (mx, my), 12, tuple(int(max(0, int(v) - 70)) for v in marks[my, mx]), -1, lineType=cv2.LINE_AA)
+    oc = {}
+    _quiet(H.make_engine(E, sil).process, marks, 8, dict(on, cleanPasses=2), out_cache=oc)
+    second = 0 if oc.get("heal_mask_pass2") is None else int((oc["heal_mask_pass2"] > 0).sum())
+    e3, r3 = opened(dict(on, cleanPasses=2), marks)
+    e4, r4 = opened(on, marks)
+    if second < 100:
+        bad.append(f"two passes: the test frame gave the second pass nothing to repair ({second} px)")
+    elif not agrees(e3, r3) or r3["mask_share"] <= r4["mask_share"]:
+        bad.append(f"two passes: the second pass repaired {second} px, yet mask_share is {r3['mask_share']} (one pass: {r4['mask_share']})")
+    report("mask", not bad, f"backdrop evened: the layer covers {r_on['layer_share'] * 100:.0f}% of the frame, {r_on['mask_share'] * 100:.1f}% of the frame is marked as "
+                            f"found and repaired (bright green), the rest of the layer is pale green; a brushed mark is repaired at Apply ({c_src:.0f} -> {c_painted:.0f} levels), "
+                            f"an erased zone is left alone; light refresh == full recompute" if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
 def check_format():
@@ -1406,16 +2031,18 @@ def check_http():
     def split(body):
         n = struct.unpack_from("<I", body, 0)[0]
         meta = json.loads(body[4:4 + n].decode("utf-8"))
-        # ("recomputed" is new: Apply says whether it had to compute the real frame itself)
-        meta["stats"] = {k: v for k, v in meta.get("stats", {}).items() if k not in ("elapsed_ms", "reused_stages", "recomputed")}
+        # ("recomputed" is new: Apply says whether it had to compute the real frame itself; "smoke" is new: what
+        #  was seen of smoke in the frame)
+        meta["stats"] = {k: v for k, v in meta.get("stats", {}).items() if k not in ("elapsed_ms", "reused_stages", "recomputed", "smoke")}
         return meta, body[4 + n:]
 
     def norm(d):
-        # ("quick" is new: a recompute says whether it only refreshed the preview; "scene" and "mask_share" are new:
-        #  the answer describes the frame and tells how much of it is green)
-        d = {k: v for k, v in d.items() if k not in ("session_id", "mask_png_b64", "quick", "scene", "mask_share")}
+        # ("quick" is new: a recompute says whether it only refreshed the preview; "scene", "smoke", "mask_share" and
+        #  "layer_share" are new: the answer describes the frame, what was seen of smoke, and how much of the frame
+        #  was found and repaired / is covered by the layer)
+        d = {k: v for k, v in d.items() if k not in ("session_id", "mask_png_b64", "quick", "scene", "smoke", "mask_share", "layer_share")}
         if "stats" in d:
-            d["stats"] = {k: v for k, v in d["stats"].items() if k not in ("elapsed_ms", "reused_stages")}
+            d["stats"] = {k: v for k, v in d["stats"].items() if k not in ("elapsed_ms", "reused_stages", "smoke")}
         return d
 
     bad = []
@@ -1582,7 +2209,7 @@ GROUPS = [("convert", check_convert), ("process", check_process), ("stage", chec
           ("session", check_session),
           ("white", check_white), ("gpu", check_gpu),
           ("cyc", check_cyc), ("dress", check_dress), ("speed", check_speed), ("smoke", check_smoke), ("empty", check_empty),
-          ("format", check_format), ("scene", check_scene),
+          ("format", check_format), ("scene", check_scene), ("stains", check_stains), ("seam", check_seam), ("mask", check_mask),
           ("server", check_server), ("http", check_http),
           ("folders", lambda: IC.check_folders(report)), ("install", lambda: IC.check_install(report)),
           ("bat", lambda: IC.check_bat(report)), ("plugin", check_plugin)]

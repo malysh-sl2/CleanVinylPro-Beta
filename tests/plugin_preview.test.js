@@ -7,7 +7,9 @@
 //   - the window opens with the cleaned photo, "До / Після" and "Маска" switch the three views;
 //   - a preset click gives one light refresh with that preset's values and says what it changed;
 //   - the automatic preset: the presets travel with the photo, the server's choice lands on the controls;
-//   - a button pressed while the server is still starting is remembered and runs when the server answers.
+//   - a button pressed while the server is still starting is remembered and runs when the server answers;
+//   - smoke: every request asks for "protect smoke only where there is smoke", and the smoke controls say in
+//     words what the server saw (on a frame without smoke they change nothing - the note explains why).
 //
 //   node tests/plugin_preview.test.js
 //   node tests/plugin_preview.test.js "preset click" remembered     (only the scenarios whose name has one of the texts)
@@ -60,11 +62,21 @@ function makeEnv(serverOpts = {}) {
     launches: 0,           // how many times the plugin asked Windows to start the server
     scene: null,           // what the server sees in the frame, e.g. { kind: "wide", framing: "wide", dark: false }
     startMaskShare: null,  // share of the frame that is green after the first scan
-    maskShares: []         // ...and after each following recompute
+    maskShares: [],        // ...and after each following recompute
+    frameSmoke: null,      // what the frame has of smoke, e.g. { share: 0.05, largest: 0.04, found: true }
+    disk: null             // files in the plugin's data folder, e.g. { "presets_local.json": [...] }; null = no disk
   }, serverOpts);
   const W = 4, H = 6;
 
   const reply = (obj, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => obj, arrayBuffer: async () => new ArrayBuffer(0) });
+  // What the engine says of smoke for the parameters `p` (the rule of engine.py: _smoke_auto, SMOKE_ALWAYS_FROM)
+  function smokeAnswer(p) {
+    if (!server.frameSmoke) return null;
+    const on = !!p.smokeOn;
+    const auto = on && !!p.smokeAuto && Number(p.smoke) < 95;
+    const kept = on && (server.frameSmoke.found || !auto);
+    return Object.assign({}, server.frameSmoke, { on, auto, protected: kept ? Math.round(server.frameSmoke.share * 12000) / 10000 : 0 });
+  }
   function waitOrAbort(ms, signal) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(resolve, ms);
@@ -120,6 +132,11 @@ function makeEnv(serverOpts = {}) {
             auto_fractions: used.autoFractions ? server.autoFractions : { fracFine: used.fracFine, fracMed: used.fracMed, fracLarge: used.fracLarge },
             orig_jpg_b64: "QQ==", comp_jpg_b64: "QQ==", overlay_jpg_b64: "QQ==", stats: {}
           };
+          const smoke = smokeAnswer(used);
+          if (smoke) {
+            ans.smoke = smoke;
+            if (scene) scene.smoke = smoke;
+          }
           if (scene) ans.scene = scene;
           if (server.startMaskShare !== null) ans.mask_share = server.startMaskShare;
           return reply(ans);
@@ -138,6 +155,7 @@ function makeEnv(serverOpts = {}) {
           };
           if (server.quickAware) ans.quick = !!body.quick && Number(p.cleanPasses || 1) < 2;
           if (server.maskShares.length) ans.mask_share = server.maskShares.shift();
+          if (smokeAnswer(p)) ans.smoke = smokeAnswer(p);
           return reply(ans);
         }
         case "/session/mask-edit":
@@ -176,7 +194,21 @@ function makeEnv(serverOpts = {}) {
       constants: { ElementPlacement: { PLACEBEFORE: "placeBefore" } }
     },
     uxp: {
-      storage: { localFileSystem: { getDataFolder: async () => { throw new Error("no disk in the test"); } } },
+      storage: {
+        localFileSystem: {
+          // the plugin's data folder: a plain object of file name -> content (what the plugin writes lands there too)
+          getDataFolder: async () => {
+            if (!server.disk) throw new Error("no disk in the test");
+            return {
+              getEntry: async (name) => {
+                if (!(name in server.disk)) throw new Error("no such file: " + name);
+                return { read: async () => JSON.stringify(server.disk[name]) };
+              },
+              createFile: async (name) => ({ write: async (text) => { server.disk[name] = JSON.parse(text); } })
+            };
+          }
+        }
+      },
       shell: {
         openExternal: async () => {
           server.launches++;
@@ -887,6 +919,145 @@ async function main() {
     expect(env.server.launches === 1, "one launch request, got " + env.server.launches);
   });
 
+  // ---------------------------------------------------------------- defaults that changed since the PC saved its presets
+  const presets430 = () => {
+    const list = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, "..", "server", "presets_defaults.json"), "utf8"));
+    list.forEach((p) => { p.cfg.cycCurve = 0; });
+    list.push({ id: "user_1", name: "Мій пресет", color: "#ffffff", builtin: false, cfg: Object.assign({}, list[0].cfg, { cycCurve: 0, spots: 33 }) });
+    return list;
+  };
+  await scenario("a PC with the presets of 4.3.0: the new corner default reaches it once, the user's own values stay",
+    { disk: { "presets_local.json": presets430(), "user_settings.json": { schemaVersion: 5, activePresetId: "wide_shot", autoPreset: false, cfg: Object.assign({}, presets430()[3].cfg) } },
+      scene: { kind: "wide", framing: "wide", dark: false } }, async (env, expect) => {
+      await sleep(500);                                      // bootstrap + the first sync with the server
+      const cyc = (id) => env.state(`(presetsList.find((p) => p.id === ${JSON.stringify(id)}) || { cfg: {} }).cfg.cycCurve`);
+      expect(cyc("wide_shot") === 65 && cyc("std") === 65 && cyc("medium_shot") === 65 && cyc("clean_stands") === 65,
+        "the four presets with a floor must get 65: " + ["wide_shot", "std", "medium_shot", "clean_stands"].map(cyc).join());
+      expect(cyc("lowkey") === 0 && cyc("closeup") === 0 && cyc("user_1") === 0, "the other presets and the user's own one must stay: " + [cyc("lowkey"), cyc("closeup"), cyc("user_1")].join());
+      expect(env.state("activePresetId") === "wide_shot" && env.state("getSliderVal('gSlCyc')") === 65, "the slider of the active preset must follow, got " + env.state("getSliderVal('gSlCyc')"));
+      expect(env.el("gValCyc").textContent === "65%", "...and show it: " + env.el("gValCyc").textContent);
+      const onDisk = env.server.disk;
+      expect(onDisk["presets_local.json"].find((p) => p.id === "wide_shot").cfg.cycCurve === 65, "the moved presets must be saved on the PC");
+      expect((onDisk["user_settings.json"].presetMoves || []).includes("cyc65"), "the settings must remember that the move was made: " + JSON.stringify(onDisk["user_settings.json"].presetMoves));
+      const sent = env.of("/presets").filter((r) => r.method === "POST");
+      expect(sent.length >= 1 && sent[sent.length - 1].body.find((p) => p.id === "wide_shot").cfg.cycCurve === 65, "the server copy must get the moved presets too");
+      await env.open();
+      expect(env.of("/session/start")[0].body.params.cycCurve === 65, "the first scan must go with the new value");
+      // the user decides otherwise: 0 stays 0 from now on (the next start of Photoshop reads the files written here)
+      env.state("setSliderVal('gSlCyc', 0); presetsList.find((p) => p.id === 'wide_shot').cfg.cycCurve = 0; persistPresets(); persistSettingsNow();");
+      await sleep(200);
+      expect(onDisk["presets_local.json"].find((p) => p.id === "wide_shot").cfg.cycCurve === 0 && onDisk["user_settings.json"].presetMoves.includes("cyc65"),
+        "a value set by the user afterwards must be saved as it is");
+      expect(env.state("applyPresetDefaultMoves()") === false && cyc("wide_shot") === 0, "...and must not be moved again");
+    });
+
+  await scenario("...also while the server is not running yet (the move is made when the panel starts, not when the server answers)",
+    { online: false, disk: { "presets_local.json": presets430(), "user_settings.json": { schemaVersion: 5, activePresetId: "std", autoPreset: true, cfg: Object.assign({}, presets430()[0].cfg) } } },
+    async (env, expect) => {
+      await sleep(400);
+      expect(env.state("presetsList.find((p) => p.id === 'std').cfg.cycCurve") === 65 && env.state("getSliderVal('gSlCyc')") === 65, "moved at start-up");
+      const onDisk = env.server.disk;
+      expect(onDisk["presets_local.json"].find((p) => p.id === "medium_shot").cfg.cycCurve === 65 && (onDisk["user_settings.json"].presetMoves || []).includes("cyc65"),
+        "...and saved on the PC at once");
+      expect(env.state("settingsMigrated") === true, "the server copy is to follow at the first sync");
+    });
+
+  await scenario("a PC whose plugin folder is empty but whose server still holds the presets of 4.3.0: moved when they arrive", {}, async (env, expect) => {
+    // (the scripted server answers GET /presets with nothing; the arrival is played by hand, the way syncPresetsFromServer does it)
+    await sleep(300);
+    const moved = env.state(`(function () {
+      presetsList = ${JSON.stringify(presets430())};
+      applySettingsSnapshot({ schemaVersion: 5, activePresetId: "wide_shot", cfg: { cycCurve: 0 } });
+      const changed = applyPresetDefaultMoves();
+      return [changed, presetsList.find((p) => p.id === "wide_shot").cfg.cycCurve, getSliderVal("gSlCyc"), presetsList.find((p) => p.id === "user_1").cfg.cycCurve].join();
+    })()`);
+    expect(moved === "true,65,65,0", "settings that carry no list of moves reset it, so the move is made: " + moved);
+  });
+
+  await scenario("a fresh installation: the built-in presets come with the corner default, nothing is 'moved'", { disk: {} }, async (env, expect) => {
+    await sleep(500);
+    expect(env.state("getSliderVal('gSlCyc')") === 65 && env.state("activePresetId") === "std", "the first preset is on the controls with its 65");
+    expect(env.state("appliedPresetMoves.includes('cyc65')") === true, "the move counts as made");
+    expect(env.state("presetsList.find((p) => p.id === 'lowkey').cfg.cycCurve") === 0, "'Темний ключ' keeps the corner");
+  });
+
+  // ---------------------------------------------------------------- smoke
+  await scenario("smoke: every request asks to protect smoke only where there is smoke; the corner presets go with the floor",
+    { scene: { kind: "wide", framing: "wide", dark: false } }, async (env, expect) => {
+      await env.open();
+      const start = env.of("/session/start")[0];
+      const sp = start.body.scenePresets || {};
+      expect(start.body.params.smokeAuto === true, "the first scan must ask for it: " + JSON.stringify(start.body.params));
+      expect(Object.keys(sp).length === 5 && Object.keys(sp).every((k) => sp[k].smokeAuto === true), "...and so must every set of the automatic preset");
+      expect(sp.wide.cycCurve === 65 && sp.medium.cycCurve === 65 && sp.default.cycCurve === 65 && sp.dark.cycCurve === 0 && sp.close.cycCurve === 0,
+        "the corner line goes by default in 'Дальній план', 'Середній план', 'Студія' and stays in 'Темний ключ', 'Ближній план': "
+        + JSON.stringify(Object.keys(sp).map((k) => [k, sp[k].cycCurve])));
+      expect(env.state("getSliderVal('gSlCyc')") === 65, "the slider must show the value of the applied preset");
+      await env.drag("gSlSpots", 90);
+      await env.settle(900);
+      const rc = env.recomputes();
+      expect(rc.length === 1 && rc[0].body.params.smokeAuto === true && rc[0].body.params.cycCurve === 65, "a refresh must carry it too");
+      env.click("dlgBtnApply");
+      await env.settle(900);
+      const ap = env.of("/session/apply");
+      expect(ap.length === 1 && ap[0].body.params.smokeAuto === true, "...and Apply as well");
+    });
+
+  await scenario("smoke controls on a frame without smoke: the note says why nothing changes",
+    { frameSmoke: { share: 0.004, largest: 0.002, found: false } }, async (env, expect) => {
+      env.check("dlgChkAutoPreset", false);
+      await env.open();
+      await env.settle(300);
+      expect(env.badge() === "", "a frame without smoke opens without a word about smoke: " + env.badge());
+      env.check("dlgChkSmoke", false);
+      await env.settle(900);
+      let rc = env.recomputes();
+      expect(rc.length === 1 && rc[0].body.params.smokeOn === false && rc[0].body.quick === true, "one light refresh with the protection off");
+      expect(env.badge().includes("вимкнено") && env.badge().includes("не знайдено") && env.badge().includes("той самий"),
+        "the note must say the result is the same: " + env.badge());
+      env.check("dlgChkSmoke", true);
+      await env.settle(900);
+      rc = env.recomputes();
+      expect(rc.length === 2 && rc[1].body.params.smokeOn === true, "one more refresh with the protection on");
+      expect(env.badge().includes("не знайдено") && env.badge().includes("нічого не змінює") && env.badge().includes("95–100"),
+        "the note must say that nothing changes and how to force the protection: " + env.badge());
+      await env.drag("gSlSmoke", 96);                        // "there is smoke, protect it anyway"
+      await env.settle(1100);
+      rc = env.recomputes();
+      expect(rc.length === 3 && rc[2].body.params.smoke === 96, "the slider gives one more refresh");
+      expect(env.badge().includes("95–100") && env.badge().includes("збережено") && env.badge().includes("0,48 %"),
+        "the note must say that everything smoke-like is kept now: " + env.badge());
+      await env.drag("gSlSpots", 90);                        // another control: no words about smoke
+      await env.settle(1100);
+      expect(env.recomputes().length === 4, "the other slider refreshes as usual");
+      expect(!env.badge().includes("95–100"), "the smoke note must not come back after another control: " + env.badge());
+    });
+
+  await scenario("a frame with smoke: said when the window opens, and when the protection is switched off",
+    { frameSmoke: { share: 0.05, largest: 0.04, found: true }, scene: { kind: "wide", framing: "wide", dark: false } }, async (env, expect) => {
+      await env.open();
+      await env.settle(300);
+      expect(env.badge().includes("Авто-пресет") && env.badge().includes("Дим знайдено") && env.badge().includes("6,0 %"),
+        "the opening note must name the preset and the protected smoke: " + env.badge());
+      env.click("gBtnSmoke");                                // the switch in the fine settings
+      await env.settle(900);
+      const rc = env.recomputes();
+      expect(rc.length === 1 && rc[0].body.params.smokeOn === false, "one refresh with the protection off");
+      expect(env.badge().includes("вимкнено") && env.badge().includes("5,0 %") && env.badge().includes("чиститься"),
+        "the note must warn that the smoke is cleaned now: " + env.badge());
+      expect(!env.el("dlgChkSmoke").checked, "the checkbox on top must follow the switch");
+    });
+
+  await scenario("an older server that says nothing of smoke: no smoke notes, nothing breaks", {}, async (env, expect) => {
+    env.check("dlgChkAutoPreset", false);
+    await env.open();
+    env.check("dlgChkSmoke", false);
+    await env.settle(900);
+    expect(env.recomputes().length === 1, "the refresh is still asked for");
+    expect(env.badge() === "", "no note without an answer about smoke: " + env.badge());
+    expect(env.state("sessState.smokeNote") === false, "the request for a note must be closed");
+  });
+
   const failed = results.filter((r) => r.problems.length);
   if (!results.length) {
     console.log("plugin preview: no scenario has that text in its name");
@@ -894,7 +1065,7 @@ async function main() {
   }
   console.log(failed.length
     ? `plugin preview: ${failed.length} of ${results.length} scenarios FAILED`
-    : `plugin preview: ${results.length} scenarios pass (drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press)`);
+    : `plugin preview: ${results.length} scenarios pass (drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes)`);
   process.exit(failed.length ? 1 : 0);
 }
 

@@ -23,7 +23,7 @@
       "fracLarge": true,
       "dressSmooth": false,
       "dressStrength": 45,
-      "cycCurve": 0,
+      "cycCurve": 65,
       "cleanPasses": 1
     }
   },
@@ -51,7 +51,7 @@
       "fracLarge": true,
       "dressSmooth": false,
       "dressStrength": 45,
-      "cycCurve": 0,
+      "cycCurve": 65,
       "cleanPasses": 1
     }
   },
@@ -107,7 +107,7 @@
       "fracLarge": true,
       "dressSmooth": false,
       "dressStrength": 45,
-      "cycCurve": 0,
+      "cycCurve": 65,
       "cleanPasses": 1
     }
   },
@@ -191,7 +191,7 @@
       "fracLarge": true,
       "dressSmooth": false,
       "dressStrength": 45,
-      "cycCurve": 0,
+      "cycCurve": 65,
       "cleanPasses": 1
     }
   },

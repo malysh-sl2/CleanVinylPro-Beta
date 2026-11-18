@@ -38,10 +38,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: 1. Справжня HTTP-перевірка чи вже працює саме сервер Clean Vinyl Pro 2 v4.3.0 на порту 18746
-"server\.venv\Scripts\python.exe" -c "import json, sys, urllib.request; r=urllib.request.urlopen('http://127.0.0.1:18746/health', timeout=2); d=json.loads(r.read().decode('utf-8')); sys.exit(0 if d.get('ok') and d.get('app')=='cleanvinylpro2' and d.get('version')=='4.3.0' else 1)" >nul 2>&1
+:: 1. Справжня HTTP-перевірка чи вже працює саме сервер Clean Vinyl Pro 2 v4.4.0 на порту 18746
+"server\.venv\Scripts\python.exe" -c "import json, sys, urllib.request; r=urllib.request.urlopen('http://127.0.0.1:18746/health', timeout=2); d=json.loads(r.read().decode('utf-8')); sys.exit(0 if d.get('ok') and d.get('app')=='cleanvinylpro2' and d.get('version')=='4.4.0' else 1)" >nul 2>&1
 if not errorlevel 1 (
-    echo [OK] AI GPU сервер Clean Vinyl Pro 2 v4.3.0 вже запущено на http://127.0.0.1:18746
+    echo [OK] AI GPU сервер Clean Vinyl Pro 2 v4.4.0 вже запущено на http://127.0.0.1:18746
     timeout /t 1 /nobreak >nul
     popd
     if /i "%~1"=="--no-elevate" exit 0
@@ -56,9 +56,9 @@ if not errorlevel 1 (
     echo Сервер Clean Vinyl Pro 2 вже запускається, чекаємо готовності порту 18746...
     for /l %%i in (1,1,10) do (
         timeout /t 1 /nobreak >nul
-        "server\.venv\Scripts\python.exe" -c "import json, sys, urllib.request; r=urllib.request.urlopen('http://127.0.0.1:18746/health', timeout=2); d=json.loads(r.read().decode('utf-8')); sys.exit(0 if d.get('ok') and d.get('app')=='cleanvinylpro2' and d.get('version')=='4.3.0' else 1)" >nul 2>&1
+        "server\.venv\Scripts\python.exe" -c "import json, sys, urllib.request; r=urllib.request.urlopen('http://127.0.0.1:18746/health', timeout=2); d=json.loads(r.read().decode('utf-8')); sys.exit(0 if d.get('ok') and d.get('app')=='cleanvinylpro2' and d.get('version')=='4.4.0' else 1)" >nul 2>&1
         if not errorlevel 1 (
-            echo [OK] AI GPU сервер Clean Vinyl Pro 2 v4.3.0 готовий!
+            echo [OK] AI GPU сервер Clean Vinyl Pro 2 v4.4.0 готовий!
             popd
             if /i "%~1"=="--no-elevate" exit 0
             if /i "%~1"=="--direct" exit 0
@@ -83,7 +83,7 @@ if "%FOUND_OLD%"=="1" (
     timeout /t 1 /nobreak >nul
 )
 
-echo Запуск AI GPU сервера Clean Vinyl Pro 2 v4.3.0...
+echo Запуск AI GPU сервера Clean Vinyl Pro 2 v4.4.0...
 echo (Ви можете згорнути це вікно, але не закривайте його під час роботи у Photoshop)
 echo.
 "server\.venv\Scripts\python.exe" "server\server.py"

@@ -34,6 +34,9 @@ written here and in the repository.
   «Дальній план» automatically (not «Студія (Стандарт)»).
 - He reports problems as a short numbered list. When a point can be read two ways and the readings behave
   differently for him, ask with an option card (one click for him) instead of guessing.
+- When the result of the cleaning is the complaint, he sends pairs of JPEGs: the frame as shot and the same
+  frame retouched by hand the way he wants it (`1.jpg` and `1 (2).jpg`). His own retouch is the target: measure
+  against it (section 4, "Working on his photos") instead of guessing a taste.
 
 ## 2. What is in the repository
 
@@ -108,31 +111,76 @@ Both programs must be able to run side by side, so nothing is shared with the or
     start); the status turns green by itself. A button pressed meanwhile is remembered
     (`ensureServerForAction`, `pendingPress`); a second press takes it back.
   - The panel shows a banner when the running server reports another version (`PLUGIN_VERSION`).
+- **4.4.0** — the cleaning itself, after his three sample frames with his own retouch next to them.
+  - Floor joint (`_detect_vinyl_seam_mask`): the pieces of one line on both sides of the person are judged
+    together (`seamJoin`, default on; judged one by one, the shorter side stayed). A dark, obvious joint is taken
+    too: the thickness of a line is judged at 40 % of its own strength (before, only faint joints passed).
+  - Stains (`_smooth_backdrop_stains`, slider «Сліди взуття та розводи»): a new stage. The backdrop, with its
+    light taken out (`_light_plane`), is averaged with neighbours of similar tone (`_even_by_tone`) right up to
+    the silhouette. The old stage was switched off around every person by the "shadow" map and the feather ramp.
+    Bends of the light (the rim of a lamp's pool, soft shadow edges) are left alone (`STAIN_SLOPE_*`).
+    `feather` now belongs to the background blur only.
+  - Corner: found once on the untouched frame (`_corner_line_of_frame`, cached as stage `corner`); the seam
+    search leaves its strip alone when the corner tool is on; a thin line (a floor joint) is no longer taken for
+    the corner (`one_way` in `_find_corner_line`). `cycCurve` is 65 in the built-in presets `std`,
+    `medium_shot`, `wide_shot`, `clean_stands` and 0 in the others. Inside a selection the corner goes only
+    when the selection holds the whole line (`_selection_holds_line`).
+  - Smoke: the plugin sends `smokeAuto`; smoke is then protected only when the frame has it
+    (`SMOKE_MIN_SHARE`, `SMOKE_MIN_CLOUD`; on his frames the "smoke" was dirt next to the feet). From 95 % on
+    the slider it is protected on trust (`SMOKE_ALWAYS_FROM`). Every answer of the window carries `smoke`
+    (what was seen); the plugin turns it into a note when a smoke control is used (`smokeNoteText`).
+  - Mask: with the stages that work on the whole backdrop (stains, blur, corner) the layer covers the whole
+    backdrop. The session therefore keeps two masks: `auto_mask_small_u8` (the layer) and
+    `repair_mask_small_u8` (found and repaired). «Маска» shows them as pale and bright green; `mask_share`
+    counts the bright part, `layer_share` the layer; a brush stroke outside the repaired zones is repaired at
+    Apply (before, a stroke inside the layer did nothing).
+  - A changed default reaches installed PCs through `PRESET_DEFAULT_MOVES` in `main.js` (made once, only where
+    the stored value is still the former default, remembered in the settings as `presetMoves`).
 
 ## 3. Current state — update this at the end of every session
 
-_Last updated: 2026-11-18, by the agent of the first session, after releasing 4.3.0._
+_Last updated: 2026-11-18, by the agent of the first session, after releasing 4.4.0._
 
-- **Released:** 4.3.0, tag `cvp2-v4.3.0`, as a pre-release. Direct download:
-  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.3.0/CleanVinylPro2.zip`
-- **Owner's progress:** 4.2.0 is installed and works on his PC (install log of 2026-11-18): the installer
-  copied the libraries from the old program (2.0 GB, no download), found the models in `D:\model AI fotoshop`,
-  LaMa ran on `CUDAExecutionProvider`, the panel opened in Photoshop with a green status. So the `.bat` files,
-  the installer, the GPU, the real models and the panel HAVE run on Windows once, with 4.2.0.
-  After using it he sent a list of wishes; 4.3.0 answers it. **He has not reported on 4.3.0 yet.**
-- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (27 results, 35 scenarios of
-  the panel test among them) on 2026-11-18, with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4.
-  Deliberate defects: 20 put into `main.js` and 10 into the engine / server; the checks caught 29, the 30th
-  changes nothing but speed. The real panel code was also run once against the real server code over HTTP
-  (stand-in networks): open with the automatic preset, preset clicks, the three views, «Застосувати».
-- **Not run in Photoshop yet (4.3.0):** everything new in the big window and on the panel - only the simulated
-  browser of `tests/plugin_preview.test.js` has seen it. In particular: the look of the new buttons in UXP, the
-  remembered press with the real launcher, the automatic preset with the real BRIA silhouettes (the framing
-  rule was validated with another person-segmentation model, see section 4).
+- **Released:** 4.4.0, tag `cvp2-v4.4.0`, as a pre-release. Direct download:
+  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.4.0/CleanVinylPro2.zip`
+- **Owner's progress:** 4.2.0 and 4.3.0 are installed and work on his PC (program in
+  `D:\Plugin Photoshop\CleanVinylPro2`, libraries copied from the old program without a download, models in
+  `D:\model AI fotoshop`, LaMa on `CUDAExecutionProvider`, Python 3.12.10). So the `.bat` files, the installer,
+  the GPU, the real models and the panel HAVE run on Windows.
+  After 4.3.0 he sent three frames as shot and the same frames retouched by hand (the «(2)» files). On them
+  4.3.0 was measured to remove the floor joint on one side of the person only or not at all, to leave the stains
+  near the feet and the wall-floor line, and to protect dirt next to the feet as "smoke". 4.4.0 answers that.
+  His wording of that message is not preserved here; whether «шов» in it meant the floor joint or the wall-floor
+  line was not confirmed with him (4.4.0 treats both). **He has not reported on 4.4.0 yet.**
+- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (30 results; 46 scenarios of
+  the panel test and 25 cases of the settings test among them) on 2026-11-18, with NumPy 2.4.6 and OpenCV
+  5.1.0, set up as in section 4. Deliberate defects for what is new in 4.4.0: 25 put into the engine and 15
+  into `main.js`; the checks caught 38. The two that pass are second lines of defence (the layer alpha keeps
+  the person out even when the stain stage does not; the soft end of the tone layers matters for under 0.1 %
+  of the pixels).
+- **What 4.4.0 gives on his three frames** (measured with stand-in networks, section 4): the joint is repaired
+  on both sides on all three; the wall-floor line is gone on the two frames that get «Дальній план» and is
+  softened by the seam repair on the dark one («Темний ключ» keeps `cycCurve` 0, as his own retouch keeps the
+  step there); fine and medium texture of the floor is evened to about the level of his retouch (band energy
+  kept, fine to coarse - his frame 2: his 0.57 0.61 1.01 1.12, ours 0.61 0.56 0.90 1.00; his frame 3: his 0.86
+  0.84 0.93 0.96, ours 0.84 0.85 1.04 0.99). His retouch of frame 2 smooths the WALL much more than the program
+  does (his 0.29 0.67, ours 0.77 0.92): that would be «Розмиття фону», which stays 0 in these presets.
+- **Not run in Photoshop yet (4.4.0):** all of it. In particular: how LaMa (the real inpainting) fills the long
+  seam strips that are now found on both sides and the dark joints that are now accepted; the look of the two
+  greens in the real window; the real BRIA silhouettes at hair and feet with the stain stage running right up to
+  them; the one-time move of the corner default on his stored presets (it ran only in the simulated panel).
 - **Merging:** pull request #1 (`arena/33f1ced8-cleanvinylpro-beta` into `main`) is open and deliberately not
-  merged yet: fixes that follow his report on 4.3.0 should come from the session that knows the code. Merge it
+  merged yet: fixes that follow his report on 4.4.0 should come from the session that knows the code. Merge it
   when that session ends or when he writes «зливай» (section 6). If `main` already contains this file, that
   has happened. Merging also removes the folder `CleanVinylPro/` from `main`.
+
+### Open questions about 4.4.0 (not asked yet; ask when he reports)
+
+- Is the wall-floor line meant to disappear on every full-length frame? His retouch dissolves it on the grey
+  frames and keeps a soft step on the black one; the presets follow that. One number per preset (`cycCurve`).
+- Does he want the wall smoothed as strongly as in his retouch of frame 2? Then «Розмиття фону» should get a
+  default above 0 in «Дальній план».
+- His retouch removes the studio gear at the frame edges; the presets leave it (`removeStands` off, as before).
 
 ### Offered to the owner, not built (he has not asked for them)
 
@@ -155,11 +203,23 @@ _Last updated: 2026-11-18, by the agent of the first session, after releasing 4.
   (about 31-35) is therefore NOT dark and gets «Дальній план»; his black sample (about 19) gets «Темний ключ».
   If he disagrees, this one number moves.
 - Presets differ mostly in search sensitivity, so the cleaned photo changes little between them; the difference
-  shows in the mask. That is why the note after a preset click gives the share of the frame that is green.
+  shows in the mask. That is why the note after a preset click gives the share of the frame where defects were
+  found (the bright green).
 
 ### Known limits of the image processing
 
 - The cyclorama corner is searched between 25 % and 82 % of the frame height and must be nearly horizontal.
+  A hair-thin dark crease right in the corner stays as a faint line after the corner tool: the seam search
+  leaves the corner strip alone when the tool is on. (Letting the seam repair run there first gave the same
+  tone on his frames and removed the crease on a drawn frame, but puts a long inpainted strip next to the
+  person; it could not be judged without the real LaMa. One line decides: `corner_skip` in `process`.)
+- The stain stage reaches about 2 % of the frame. At the default 65 a round stain of 1 % of the frame height
+  loses 85 %, one of 2.4 % loses 70 %, one of 4 % half, one of 6 % a fifth; from 10 % up it is taken for light
+  and stays. A small soft shadow is evened like a stain of its size (a drawn one of 8 % of the height kept
+  80 % of its depth); contact shadows and large shadows stay. On a dark backdrop the tolerance is a third of
+  the one on a light backdrop, so less is evened there (a drawn test: 67 % left against 42 %).
+- The seam search takes the straight lower edge of a silhouette for a line when it is level and long (seen
+  only on a drawn frame with a rectangular "dress"); it was so in v3.2.1 too.
 - The clothing tool is delicate: deep folds stay, near-black clothes are not touched.
 - Format 5:7: equipment cut by the frame edge stays cut; the added strips near the feet can look streaky.
 
@@ -204,6 +264,22 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
 - **The owner's photos** arrive in `/tmp/arena-coding-uploads/`. They show his clients: never commit them and
   never publish previews made from them. `_local/` is git-ignored for such experiments.
 
+### Working on his photos
+
+- The engine runs on them with stand-ins: the silhouette from MediaPipe (see above; `_clean_fg_mask` wants the
+  raw matte as uint8 0..255 - a float matte gives nonsense masks) and `cv2.inpaint` in place of LaMa (a class
+  with `get_inputs` / `get_providers` / `run`, as `FakeLama` in `tests/harness.py`). **What the stand-in repair
+  draws is not evidence**: Telea leaves scalloped blotches on big masks and smears long strips. Judge the
+  search (what is marked), the tone stages and the masks; never the quality of the fill or the hair edges.
+- Look at zoom, with a strong local-contrast boost (CLAHE) next to the plain crop: the defects he complains about
+  are a few levels deep and invisible in a reduced overview.
+- His retouched frame can be laid over the original when it was not re-cropped (ORB + affine fit gave scale
+  1.0004 for two of the three; the third was re-framed and could not be aligned). Then compare band energies of
+  the backdrop (wall and floor apart) between original, program and his retouch.
+- Useful numbers for a tone stage: what is left of a known stain pattern; depth of shadows before and after;
+  growth of the gradient of the low-passed frame (new edges); change of a row profile across a slope of light.
+- Do not open a picture in the same step that writes it: the viewer shows the previous file.
+
 ### Traps already paid for
 
 - The quick preview must be built by `_session_proxies_quick`. A preview made from a twice-reduced frame
@@ -222,7 +298,24 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   to the ignore list in its `norm()`.
 - The built-in presets are stored on the owner's PC (`presets_local.json`, `user_presets.json`) the way they
   were when first seen: changing a value in `DEFAULT_PRESETS` / `presets_defaults.json` does NOT reach an
-  existing installation. New behaviour for an existing preset must be derived in code (as `presetFracAuto` does).
+  existing installation by itself. Either derive the behaviour in code (as `presetFracAuto` does) or add an
+  entry to `PRESET_DEFAULT_MOVES` in `main.js` (a one-time move of one value; `tests/plugin_settings.test.js`
+  and the "PC with the presets of 4.3.0" scenarios show how it is checked). `DEFAULT_PRESETS` and
+  `presets_defaults.json` must say the same; the settings test compares them.
+- The engine's "shadow" map (`shadow_s`) is not a shadow detector: it is a wide halo around every person
+  (22-42 % of his frames). Anything damped by it does nothing where the floor is dirtiest. The same goes for a
+  ramp that grows with the distance from the person.
+- An edge-keeping average (bilateral) flattens the two shoulders of a soft slope and so sharpens it into a
+  line; cut off sharply, its range limit draws ragged patches; with a plain average as its notion of "light"
+  it lightens a strip along the frame borders of a vignetted backdrop. All three were seen on his frames or on
+  drawn ones; the answers are in `_smooth_backdrop_stains`, `_even_by_tone` and `_light_plane` - read their
+  comments before you touch the stage.
+- The floor joint drawn by `make_studio_image` is too thick for the seam search and was never found by any
+  version. `tests/run_checks.py` draws its own (`_joint_frame`).
+- The light (quick) preview exists only for frames whose long side is at least `PREVIEW_PROXY_MIN_DIM` (2520
+  px): a check of the light way needs a frame that large, smaller ones silently take the full way.
+- The legacy regime of the checks (`_legacy`, `_legacy_window`) is where v3.2.1 must still be matched pixel for
+  pixel. A new stage must be off in it by default or be switched off there explicitly.
 - A preset click often changes almost nothing in the cleaned preview. Measure before you conclude that a click
   "does not work": the engine recomputes, the picture just stays within a few levels.
 - Badge texts in the panel avoid the glyphs ⚙ and ⟳; keep avoiding them.

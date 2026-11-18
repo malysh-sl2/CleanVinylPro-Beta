@@ -6,7 +6,7 @@ const uxpShell = uxp.shell;
 const CANDIDATE_URLS = ["http://127.0.0.1:18746", "http://localhost:18746"];
 // The same number as in manifest.json and server.py. A server of another version still answers (for example the
 // previous one that was left running after an update) - the panel then says how to restart it.
-const PLUGIN_VERSION = "4.3.0";
+const PLUGIN_VERSION = "4.4.0";
 let SERVER_URL = CANDIDATE_URLS[0];
 
 const DEFAULT_PRESETS = [
@@ -15,14 +15,14 @@ const DEFAULT_PRESETS = [
     name: "Студія (Стандарт)",
     color: "#4da3ff",
     builtin: true,
-    cfg: { spots: 75, scuffs: 65, blur: 0, cycCurve: 0, feather: 60, seamOn: true, seam: 85, edge: 70, smokeOn: true, smoke: 80, grain: 90, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
+    cfg: { spots: 75, scuffs: 65, blur: 0, cycCurve: 65, feather: 60, seamOn: true, seam: 85, edge: 70, smokeOn: true, smoke: 80, grain: 90, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
   },
   {
     id: "medium_shot",
     name: "Середній план",
     color: "#59b5ff",
     builtin: true,
-    cfg: { spots: 75, scuffs: 65, blur: 10, cycCurve: 0, feather: 65, seamOn: true, seam: 78, edge: 74, smokeOn: true, smoke: 80, grain: 92, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
+    cfg: { spots: 75, scuffs: 65, blur: 10, cycCurve: 65, feather: 65, seamOn: true, seam: 78, edge: 74, smokeOn: true, smoke: 80, grain: 92, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
   },
   {
     id: "closeup",
@@ -36,7 +36,7 @@ const DEFAULT_PRESETS = [
     name: "Дальній план",
     color: "#7c8cff",
     builtin: true,
-    cfg: { spots: 85, scuffs: 78, blur: 0, cycCurve: 0, feather: 55, seamOn: true, seam: 90, edge: 66, smokeOn: true, smoke: 80, grain: 90, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
+    cfg: { spots: 85, scuffs: 78, blur: 0, cycCurve: 65, feather: 55, seamOn: true, seam: 90, edge: 66, smokeOn: true, smoke: 80, grain: 90, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
   },
   {
     id: "lowkey",
@@ -57,7 +57,7 @@ const DEFAULT_PRESETS = [
     name: "Без стійок (AI)",
     color: "#f2a649",
     builtin: true,
-    cfg: { spots: 78, scuffs: 70, blur: 0, cycCurve: 0, feather: 60, seamOn: true, seam: 85, edge: 72, smokeOn: true, smoke: 80, grain: 90, shadow: true, removeStands: true, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
+    cfg: { spots: 78, scuffs: 70, blur: 0, cycCurve: 65, feather: 60, seamOn: true, seam: 85, edge: 72, smokeOn: true, smoke: 80, grain: 90, shadow: true, removeStands: true, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
   },
   {
     id: "gentle",
@@ -89,6 +89,15 @@ const LEGACY_IDLE_UNLOAD_SEC = 30; // default of settings schema <= 4
 const SETTINGS_SCHEMA_VERSION = 5;
 let idleUnloadSec = DEFAULT_IDLE_UNLOAD_SEC;
 let settingsMigrated = false;
+// Built-in presets are kept on the PC the way they were first seen, so a default that changes in a new version
+// would never reach an installed copy. Each entry moves one value, once: in the listed built-in presets, and on
+// the slider itself when one of those presets is the active one - and only where the stored value is still the
+// former default (a value the user chose stays). The moves already made are remembered in the settings.
+const PRESET_DEFAULT_MOVES = [
+  // 4.4.0: the wall-floor line is removed by default wherever a floor is usually in the frame
+  { id: "cyc65", presets: ["std", "medium_shot", "wide_shot", "clean_stands"], key: "cycCurve", slider: "gSlCyc", from: 0, to: 65 }
+];
+let appliedPresetMoves = [];
 let makeMaskDefault = false;
 let deletedDefaultIds = [];
 let knownDefaultIds = [];
@@ -158,8 +167,9 @@ let sessState = {
   previewForce: false,     // refresh even if the settings look the same (AUTO fractions were asked for again)
   quickUnsupported: false, // the running server is an older build that only knows the full recompute
   lastStats: null,
-  maskShare: null,         // share of the frame that is green now (0..1), as the server last reported it
+  maskShare: null,         // share of the frame where defects were found (bright green), as the server last reported it
   presetNote: null,        // a preset was just clicked: say what it changed when the refresh comes back
+  smokeNote: false,        // a smoke control was just used: say what the server saw of smoke when the refresh comes back
   note: "",                // short message in the corner of the photo (which preset was picked and why)
   noteTimer: null
 };
@@ -318,7 +328,8 @@ function escapeHtml(s) {
 // ------------------------------------------------------------------
 const USER_GUIDE_TIPS = [
   "💡 Вікно відкривається одразу з чистим фото. Кнопка «До / Після» показує оригінал, ще раз — знову результат.",
-  "💡 Кнопка «Маска» показує зеленим, що буде очищено. Гумка (E) стирає зайве зелене з одягу, взуття або тіней.",
+  "💡 Кнопка «Маска»: яскраво-зелене — знайдені дефекти, блідо-зелене — фон, який вирівнюється. Гумка (E) стирає зайве зелене з одягу, взуття або тіней.",
+  "💡 Розводи й сліди на підлозі вирівнюються аж до самих ніг, тіні лишаються. Лінію стіна–підлога прибирає «Циклорама»; щоб лишити її — поставте 0%.",
   "💡 Пресет підбирається сам під кадр: темний фон, ближній, середній план чи повний зріст. Іншої думки — виберіть свій у списку.",
   "💡 Ctrl + Клік по іконці Пензля (B) заливає всю маску; Ctrl + Клік по Гумці (E) — повністю очищає маску.",
   "💡 Увімкніть іконку сукні зверху, щоб AI делікатно розгладив різкі складки на одязі без впливу на шкіру й волосся.",
@@ -451,6 +462,9 @@ function readCurrentConfig() {
     edge: getSliderVal("gSlEdge"),
     smokeOn: smokeEnabled,
     smoke: getSliderVal("gSlSmoke"),
+    // Smoke is protected only on frames that really have it: the server looks for it and says what it saw
+    // (see smokeNoteText). From 95% up on the slider smoke is taken on trust and everything smoke-like is kept.
+    smokeAuto: true,
     grain: getSliderVal("gSlGrain"),
     shadow: el("gChkShadow") ? el("gChkShadow").checked : true,
     removeStands: el("gChkRemoveStands") ? el("gChkRemoveStands").checked : false,
@@ -488,6 +502,7 @@ function normalizedPresetConfig(cfg) {
     edge: clampSliderVal("gSlEdge", c.edge ?? 70),
     smokeOn: flag(c.smokeOn, true),
     smoke: clampSliderVal("gSlSmoke", c.smoke ?? 80),
+    smokeAuto: true,
     grain: clampSliderVal("gSlGrain", c.grain ?? 90),
     shadow: flag(c.shadow, true),
     removeStands: !!c.removeStands,
@@ -676,7 +691,8 @@ function buildSettingsSnapshot() {
     autoPreset,
     brushSize: sessState.brushSize,
     deletedDefaultIds: Array.from(new Set(deletedDefaultIds)),
-    knownDefaultIds: Array.from(new Set(knownDefaultIds))
+    knownDefaultIds: Array.from(new Set(knownDefaultIds)),
+    presetMoves: Array.from(new Set(appliedPresetMoves))
   };
 }
 
@@ -684,6 +700,8 @@ function applySettingsSnapshot(s) {
   if (!s || typeof s !== "object") return;
   if (Array.isArray(s.deletedDefaultIds)) deletedDefaultIds = Array.from(new Set(s.deletedDefaultIds));
   if (Array.isArray(s.knownDefaultIds)) knownDefaultIds = Array.from(new Set(s.knownDefaultIds));
+  // (settings saved by an older version carry no list: every move is still to be made - applyPresetDefaultMoves)
+  appliedPresetMoves = Array.isArray(s.presetMoves) ? Array.from(new Set(s.presetMoves.filter((x) => typeof x === "string"))) : [];
   if (s.speedMode) speedMode = s.speedMode === "quality" ? "quality" : "fast";
   if (s.idleUnloadSec !== undefined) {
     // Settings saved before schema 5 always carry the former default (30 s), whether or not the option was
@@ -726,6 +744,27 @@ function appendNewDefaultPresets() {
     if (!known) knownDefaultIds.push(dp.id);
   });
   return added;
+}
+
+// Makes the moves of PRESET_DEFAULT_MOVES that were not made yet. Call it once the presets and the settings are
+// loaded. Returns true when a preset or a slider was changed (the caller saves).
+function applyPresetDefaultMoves() {
+  let changed = false;
+  PRESET_DEFAULT_MOVES.forEach((m) => {
+    if (appliedPresetMoves.includes(m.id)) return;
+    appliedPresetMoves.push(m.id);
+    presetsList.forEach((p) => {
+      if (!p || !p.builtin || !p.cfg || !m.presets.includes(p.id)) return;
+      if (Number(p.cfg[m.key] ?? m.from) !== m.from) return;
+      p.cfg[m.key] = m.to;
+      changed = true;
+    });
+    if (m.presets.includes(activePresetId) && getSliderVal(m.slider) === m.from) {
+      setSliderVal(m.slider, m.to);
+      changed = true;
+    }
+  });
+  return changed;
 }
 
 async function writeLocalJson(filename, obj) {
@@ -837,6 +876,10 @@ async function syncPresetsFromServer() {
       }
     }
 
+    if (applyPresetDefaultMoves()) {
+      changed = true;
+      updateSliderVisuals();
+    }
     if (appendNewDefaultPresets()) changed = true;
     if (!presetsList.some((p) => p.id === activePresetId) && presetsList.length > 0) activePresetId = presetsList[0].id;
 
@@ -1403,7 +1446,7 @@ function updateStageVisibility() {
       badge.textContent = "ДО · оригінал";
       badge.className = "r4m-mode-badge visible";
     } else if (showMask) {
-      badge.textContent = "МАСКА · зелене буде очищено";
+      badge.textContent = "МАСКА · яскраве — дефекти, бліде — вирівняний фон";
       badge.className = "r4m-mode-badge visible mask";
     } else {
       badge.textContent = "ПІСЛЯ · чисте фото";
@@ -1657,14 +1700,41 @@ function announcePresetClick(p) {
   sessState.presetNote = { name: p.name, before: sessState.maskShare };
 }
 
+// (the shares are the bright green of the mask: dust, seam and gear that were found and will be redrawn; the rest
+// of the backdrop is evened as a whole and is pale green there)
 function presetNoteText(note, shareNow) {
   if (typeof shareNow !== "number") return `✓ Пресет «${note.name}» застосовано.`;
   const now = percentOfFrame(shareNow);
-  if (typeof note.before !== "number") return `✓ Пресет «${note.name}»: буде очищено ${now} кадру.`;
+  if (typeof note.before !== "number") return `✓ Пресет «${note.name}»: дефекти знайдено на ${now} кадру.`;
   const was = percentOfFrame(note.before);
   return now === was
-    ? `✓ Пресет «${note.name}»: зона очищення та сама (${now} кадру) — відмінність лише в м’якості та краях.`
-    : `✓ Пресет «${note.name}»: буде очищено ${now} кадру (було ${was}).`;
+    ? `✓ Пресет «${note.name}»: дефекти знайдено там само (${now} кадру) — відмінність у вирівнюванні фону та краях.`
+    : `✓ Пресет «${note.name}»: дефекти знайдено на ${now} кадру (було ${was}).`;
+}
+
+// What the server saw of smoke in this frame, in words. `sm` comes with every answer of the big window:
+// { share, largest: smoke-like areas / the biggest of them (share of the frame), found: enough of it to call it
+//   smoke, protected: share of the frame that is kept, on: protection asked for, auto: only when smoke is found }.
+function smokeNoteText(sm) {
+  if (!sm || typeof sm !== "object") return "";
+  if (!sm.on) {
+    return sm.found
+      ? `Захист диму вимкнено: дим у кадрі (${percentOfFrame(sm.share)}) чиститься як звичайний фон.`
+      : "Захист диму вимкнено. Диму в кадрі й так не знайдено — результат той самий.";
+  }
+  if (!sm.found && sm.auto) {
+    return "Диму в кадрі не знайдено, тому захист диму тут нічого не змінює. Дим є, але ледь помітний? Поставте «Захист диму» на 95–100 %.";
+  }
+  if (!(sm.protected > 0)) return "Захист диму увімкнено, але схожих на дим ділянок у кадрі немає.";
+  return sm.auto
+    ? `Дим знайдено й захищено: ${percentOfFrame(sm.protected)} кадру не чиститься.`
+    : `Захист диму на 95–100 %: збережено все, що схоже на дим (${percentOfFrame(sm.protected)} кадру), навіть світлі розводи.`;
+}
+
+// A smoke control was used: once the refreshed preview is back, say what the server saw of smoke. (On most frames
+// there is no smoke and the control changes nothing - without these words it looks broken.)
+function askSmokeNote() {
+  if (sessState.open && sessState.id) sessState.smokeNote = true;
 }
 
 function updatePreviewBadge() {
@@ -1805,7 +1875,13 @@ async function recomputeInteractiveSession(preserveEdits = true, quick = false) 
       if (sessState.presetNote && untouched) {
         const note = sessState.presetNote;
         sessState.presetNote = null;
+        sessState.smokeNote = false;
         showPreviewNote(presetNoteText(note, d.mask_share));
+      } else if (sessState.smokeNote && untouched) {
+        sessState.smokeNote = false;
+        showPreviewNote(smokeNoteText(d.smoke));
+      } else if (sessState.note) {
+        showPreviewNote("");  // the note on screen described the picture that has just been replaced
       }
       if (typeof d.mask_share === "number") sessState.maskShare = d.mask_share;
       done = true;
@@ -1813,6 +1889,7 @@ async function recomputeInteractiveSession(preserveEdits = true, quick = false) 
     }
   } catch (err) {
     sessState.presetNote = null;
+    sessState.smokeNote = false;
     if (err && err.name === "AbortError") {
       aborted = true;
       if (el("dlgHoverHint")) el("dlgHoverHint").textContent = quick ? "Оновлення перегляду перервано." : "Перерахунок скасовано.";
@@ -1947,6 +2024,7 @@ async function openInteractiveWorkspace() {
   sessState.view = "result";   // the window opens with the cleaned photo; "Маска" shows the green zones
   sessState.maskShare = null;
   sessState.presetNote = null;
+  sessState.smokeNote = false;
   showPreviewNote("");
   sessState.blend = 100;
   sessState.peekingClean = false;
@@ -2034,7 +2112,10 @@ async function openInteractiveWorkspace() {
       if (untouched) sessState.previewSyncedSig = previewSettingsSignature();
       else sessState.previewSyncedSig = scenePreset ? "" : captured.settingsSig;
       if (typeof res.mask_share === "number") sessState.maskShare = res.mask_share;
-      if (autoNote) showPreviewNote(autoNote);
+      // Smoke in the frame changes what is cleaned, so it is said right away (no smoke - the usual case - no words)
+      const smokeSeen = res.smoke || (res.scene && res.scene.smoke) || null;
+      const smokeNote = untouched && smokeSeen && smokeSeen.on && smokeSeen.protected > 0 ? smokeNoteText(smokeSeen) : "";
+      if (autoNote || smokeNote) showPreviewNote([autoNote, smokeNote].filter(Boolean).join(" "), smokeNote ? 12000 : 8000);
 
       if (el("dlgOrigImg")) el("dlgOrigImg").src = "data:image/jpeg;base64," + res.orig_jpg_b64;
       if (el("dlgCompImg")) el("dlgCompImg").src = "data:image/jpeg;base64," + res.comp_jpg_b64;
@@ -2072,6 +2153,7 @@ async function openInteractiveWorkspace() {
     cancelPreviewTimer();
     sessState.pendingRecompute = false;
     sessState.presetNote = null;
+    sessState.smokeNote = false;
     showPreviewNote("");
     stopProgressPolling();
     stopModalTimer();
@@ -2802,6 +2884,7 @@ function initEvents() {
 
     // The slider was released: one light refresh of the preview, a moment later (Blend and Clothing are instant).
     if (finishedSliderId && finishedSliderId !== "dlgSlBlend" && finishedSliderId !== "gSlDress") {
+      if (finishedSliderId === "gSlSmoke") askSmokeNote();
       requestPreviewRefresh(PREVIEW_DELAY_SLIDER_MS, false);
     }
 
@@ -2879,6 +2962,7 @@ function initEvents() {
     smokeEnabled = !!el("dlgChkSmoke").checked;
     updateSliderVisuals();
     scheduleSaveSettings();
+    askSmokeNote();
     refreshPreviewAfterClick(false);
     if (el("dlgHoverHint")) {
       el("dlgHoverHint").textContent = smokeEnabled
@@ -2976,6 +3060,7 @@ function initEvents() {
     smokeEnabled = !smokeEnabled;
     updateSliderVisuals();
     scheduleSaveSettings();
+    askSmokeNote();
     requestPreviewRefresh(PREVIEW_DELAY_CLICK_MS, false);
   });
   el("gBtnDress").addEventListener("click", async () => {
@@ -3253,13 +3338,16 @@ function initEvents() {
     hasLocalSettings = true;
     applySettingsSnapshot(localSettings);
   }
-  if (appendNewDefaultPresets()) {
-    await writeLocalJson("presets_local.json", presetsList);
-    await writeLocalJson("user_settings.json", buildSettingsSnapshot());
-  }
   if (!hasLocalSettings && presetsList.length > 0) {
     activePresetId = presetsList[0].id;
     applyConfig(presetsList[0].cfg);
+  }
+  // Defaults that changed since the presets on this PC were saved (the server copy follows at the first sync)
+  const movedDefaults = applyPresetDefaultMoves();
+  if (movedDefaults) settingsMigrated = true;
+  if (appendNewDefaultPresets() || movedDefaults) {
+    await writeLocalJson("presets_local.json", presetsList);
+    await writeLocalJson("user_settings.json", buildSettingsSnapshot());
   }
 
   renderPresets();
