@@ -39,6 +39,11 @@ Part 2 - what Clean Vinyl Pro 2 does differently, each with its own measurable p
   dark      a dark backdrop with a pool of light: the noise of the lit part is not taken for dust (it is judged
             against the noise found there), real dust is still found, an evenly lit frame is searched exactly as
             before; the pictures of the big window keep the fine noise of a dark frame (JPEG 100 instead of 90)
+  gear      studio gear is told by its body: dust at the hard edge of a cast shadow and a scratch on the floor
+            are repaired (both used to be kept untouched as "gear"); a stand, a cable and a reflector at the frame
+            border are still left alone; a shadow edge is not taken for smoke
+  shadow    a dirty spot inside a cast shadow is repaired; the rim of the shadow, its denser parts, a contact shadow
+            and a light gap in it are not (the rule is also tried on drawn spots with the owner's numbers)
   undo      the big window: every mask edit (brush, eraser, fill, clear, invert) can be taken back and made again,
             also after the sliders were moved; Apply after a step back == Apply without that edit
 
@@ -111,7 +116,7 @@ def _quiet(fn, *a, **k):
 def _legacy(p: dict) -> dict:
     """The parameters under which Clean Vinyl Pro 2 must still give the pixels of v3.2.1 (see the header)."""
     return dict(p, speedMode="quality", smokeOn=False, cycCurve=0, dressSmooth=False, scuffs=0, seamJoin=False,
-                grainLocal=False, previewQuality=90)
+                grainLocal=False, previewQuality=90, gearBody=False, shadowSpots=False)
 
 
 def _legacy_window(p: dict) -> dict:
@@ -664,6 +669,42 @@ def _plain_frame(w, h, seed=0, person=True):
     return img, sil
 
 
+def _two_line_frame(w, h, level=18.6, upper=0.59, lower=0.77, drop=3.3, lit=14.0, seed=11, noise=1.1, person=(70, 62, 58)):
+    """
+    A backdrop of brightness `level` with two lines across it:
+      at `upper` of the height a faint step - the backdrop right below it is `drop` levels darker and slowly climbs
+      back (nine tenths of the step within one percent of the height);
+      at `lower` a sharp strong one, `lit` levels up, a little tilted.
+    level 18.6, drop 3.3, lit 14: the owner's black backdrop - the upper line is the wall-floor corner (3.4 levels on
+    his frame), the lower one the rim of a pool of light, four times as strong.
+    A light `level`: the lower line is the corner, the upper one a faint line across the wall.
+    Returns (frame, silhouette 1024).
+    """
+    rng = np.random.default_rng(seed)
+    yy = np.linspace(0, 1, h, dtype=np.float32)[:, None]
+    xx = np.linspace(0, 1, w, dtype=np.float32)[None, :]
+    fall = 1.0 - 0.10 * ((xx - 0.5) * 2) ** 2
+    t = 1.0 / (1.0 + np.exp(-np.clip((yy - upper) * 400.0, -50, 50)))
+    below = level - drop + 1.35 * drop * np.clip((yy - upper) / (lower - upper), 0.0, 1.0)
+    lum = (level * (1 - t) + below * t) * fall
+    edge_y = lower + 0.010 * (xx - 0.5)
+    lum = lum + lit * (1.0 / (1.0 + np.exp(-np.clip((yy - edge_y) * 500.0, -50, 50)))) * (1.0 + 0.6 * np.clip((yy - lower) / (1.0 - lower), 0.0, 1.0))
+    lum = np.broadcast_to(lum, (h, w)).astype(np.float32)
+    img = lum[..., None] * np.float32([1.02, 1.0, 0.97])
+    img = img + (rng.standard_normal((h, w, 1)).astype(np.float32) + 0.25 * rng.standard_normal((h, w, 3)).astype(np.float32)) * noise
+    _, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=1)
+    img = np.clip(img, 0, 255)
+    img[cv2.resize(sil, (w, h)) > 0.5] = person
+    return img.astype(np.uint8), sil
+
+
+def _across(img, y, cols, gap=0.012, tall=0.02):
+    """Mean brightness just below the height `y` minus just above it, in a column band (levels)."""
+    h = img.shape[0]
+    g = img[:, cols].astype(np.float32).mean(axis=(1, 2))
+    return float(g[int(h * (y + gap)):int(h * (y + gap + tall))].mean() - g[int(h * (y - gap - tall)):int(h * (y - gap))].mean())
+
+
 def check_cyc():
     bad = []
     off = dict(H.STD, spots=0, scuffs=0, seamOn=False, blur=0)
@@ -724,6 +765,36 @@ def check_cyc():
         bad.append(f"a selection that holds the whole corner: line step {before} -> {after_whole}")
     if min(a / b for a, b in zip(after_part, before)) < 0.95 or st_part.get("corner_row") is not None or int(out_part[:, :, 3].max()) != 0:
         bad.append(f"a selection that holds a part of the corner must leave it alone: line step {before} -> {after_part}, corner_row {st_part.get('corner_row')}")
+
+    # A black backdrop: the corner is a faint step, and lower on the floor runs something four times as strong and
+    # as sharp - the rim of a pool of light, the shadow of a stool. Version 4.5.0 took that for the corner and bent
+    # the light there; the corner itself stayed. The corner is the upper line, however faint next to the other.
+    # (drop 1.9: as faint to the finder as the corner of the owner's frame, score 0.26)
+    sides = (slice(int(w * 0.04), int(w * 0.24)), slice(int(w * 0.76), int(w * 0.96)))
+    for drop in (3.3, 1.9):
+        dark, sil_d = _two_line_frame(w, h, drop=drop)
+        for mode in ("fast", "quality"):
+            out, st = _quiet(H.make_engine(E, sil_d).process, dark, 8, dict(off, smokeOn=False, speedMode=mode, cycCurve=65))
+            comp = _comp(dark, out)
+            row = st.get("corner_row")
+            corner = [(_across(dark, 0.59, c), _across(comp, 0.59, c)) for c in sides]
+            rim = [(_across(dark, 0.77, c), _across(comp, 0.77, c)) for c in sides]
+            if row is None or abs(row - 0.59) > 0.012:
+                bad.append(f"black backdrop, corner of {drop} levels at 0.59, rim of a pool of light at 0.77 ({mode}): the corner was looked for at {row}")
+            elif max(abs(a) / abs(b) for b, a in corner) > 0.55:
+                bad.append(f"black backdrop ({drop} levels, {mode}): the corner step went {corner} (before, after) - not removed")
+            if max(abs(a - b) for b, a in rim) > 0.08 * abs(rim[0][0]):
+                bad.append(f"black backdrop ({drop} levels, {mode}): the rim of the pool of light was changed: {rim} (before, after)")
+            if drop == 3.3 and mode == "fast" and row is not None:
+                notes.append(f"black backdrop: faint corner found at {row:.3f} above a rim of light 4x as strong, step {corner[0][0]:.1f} -> {corner[0][1]:.1f}")
+    # ...but only where such a faint line can be seen at all. On a light backdrop a line of 5 levels across the wall
+    # is nothing next to the corner, and the corner stays the corner (exactly as before).
+    light, sil_l = _two_line_frame(w, h, level=150.0, upper=0.45, lower=0.62, drop=5.0, lit=22.0, noise=1.8, person=(40, 40, 46))
+    out, st = _quiet(H.make_engine(E, sil_l).process, light, 8, dict(off, smokeOn=False, speedMode="fast", cycCurve=65))
+    comp = _comp(light, out)
+    row = st.get("corner_row")
+    if row is None or abs(row - 0.62) > 0.012 or max(abs(_across(comp, 0.45, c) - _across(light, 0.45, c)) for c in sides) > 0.3:
+        bad.append(f"light backdrop with a faint line across the wall at 0.45: the corner (at 0.62) was looked for at {row}")
     report("cyc", not bad, "cyclorama removes the wall-floor line (" + "; ".join(notes) + "), person untouched, no corner -> no change; "
                            "inside a selection only when it holds the whole line" if not bad else "wrong:\n  " + "\n  ".join(bad))
 
@@ -1094,6 +1165,11 @@ def check_scene():
                 bad.append(f"backdrop {backdrop}, person {person}: {got}")
             if abs((got["backdrop_luma"] or 0) - backdrop) > 1.5:
                 bad.append(f"backdrop {backdrop} measured as {got['backdrop_luma']}")
+    # the owner's own backdrops: black (13-20) and dark grey (31) are a dark key to him, his grey one (52) is not
+    for backdrop, dark in ((13, True), (20, True), (31, True), (52, False), (78, False)):
+        got = kind_of(full, 2000, 3000, backdrop, 120)
+        if got["dark"] != dark:
+            bad.append(f"the owner's backdrop of brightness {backdrop} must {'be' if dark else 'not be'} a dark key (limit {limit})")
     # ...also when the person takes most of the frame: a bright face on black is dark key, a dark coat on grey is not
     big = np.zeros((1024, 1024), np.float32)
     cv2.ellipse(big, (512, 640), (430, 560), 0, 0, 360, 1.0, -1)
@@ -1483,13 +1559,17 @@ def check_stains():
 # ----------------------------------------------------------------------------------------------------------------------
 # The joint of two backdrop sheets ("Шов з’єднання вінілу"), alone and together with the wall-floor corner
 # ----------------------------------------------------------------------------------------------------------------------
-def _joint_frame(w, h, left=(0.0, 0.18), right=(0.83, 1.0), y_left=0.80, y_right=0.80, corner=False, seed=7, dark=10.0, weak_left=1.0):
+def _joint_frame(w, h, left=(0.0, 0.18), right=(0.83, 1.0), y_left=0.80, y_right=0.80, corner=False, seed=7, dark=10.0, weak_left=1.0,
+                 narrow=False, step=0.0):
     """
     A floor with the joint of two backdrop sheets (a hair-thin dark line with a faint rim), seen only as two pieces:
     a wide silhouette - a long dress with a train that leaves the frame - hides the middle. `left` / `right`: the
     visible part of the line on each side (shares of the width); `y_left` / `y_right`: its height on each side
     (different values = two different lines); `dark`: how dark the line is (levels). corner=True adds the
-    wall-floor corner at 0.62 of the height. Returns (frame, silhouette 1024, mask of the drawn joint).
+    wall-floor corner at 0.62 of the height.
+    narrow=True: the usual narrow 'person' instead of the dress - the floor between the two pieces is in plain view.
+    step: the line runs along the edge of a lit area - the floor below `y_left` is this many levels lighter.
+    Returns (frame, silhouette 1024, mask of the drawn joint).
     """
     rng = np.random.default_rng(seed)
     yy = np.linspace(0, 1, h, dtype=np.float32)[:, None]
@@ -1500,6 +1580,10 @@ def _joint_frame(w, h, left=(0.0, 0.18), right=(0.83, 1.0), y_left=0.80, y_right
     else:
         lum = 150.0 * (1.0 - 0.22 * ((xx - 0.5) * 2) ** 2 - 0.15 * ((yy - 0.45) * 2) ** 2) + 25.0 * yy
     lum = np.broadcast_to(lum, (h, w)).astype(np.float32).copy()
+    if step:
+        lit = np.zeros((h, w), np.float32)
+        lit[int(h * y_left):] = 1.0
+        lum += step * cv2.GaussianBlur(lit, (0, 0), 1.5)
     joint = np.zeros((h, w), bool)
     for (x0, x1), yj, k in ((left, y_left, weak_left), (right, y_right, 1.0)):
         ys, xa, xb = int(h * yj), int(w * x0), int(w * x1)
@@ -1510,10 +1594,14 @@ def _joint_frame(w, h, left=(0.0, 0.18), right=(0.83, 1.0), y_left=0.80, y_right
     img = np.clip(lum[..., None] * np.float32([1.02, 1.0, 0.97]) + rng.standard_normal((h, w, 3)).astype(np.float32) * 1.8, 0, 255).astype(np.uint8)
     sil = np.zeros((h, w), np.uint8)
     cx = w // 2
-    cv2.ellipse(sil, (cx, int(h * 0.20)), (int(w * 0.035), int(h * 0.07)), 0, 0, 360, 255, -1)
-    xl, xr = int(w * (left[1] + 0.02)) if left[1] > left[0] else int(w * 0.20), int(w * (right[0] - 0.02)) if right[1] > right[0] else int(w * 0.81)
-    dress = np.array([[cx - int(w * 0.05), int(h * 0.26)], [cx + int(w * 0.05), int(h * 0.26)], [xr, int(h * 0.74)], [xr, h], [xl, h], [xl, int(h * 0.74)]], np.int32)
-    cv2.fillPoly(sil, [dress], 255)
+    if narrow:
+        _, sil_std = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=1)
+        sil[cv2.resize(sil_std, (w, h)) > 0.5] = 255
+    else:
+        cv2.ellipse(sil, (cx, int(h * 0.20)), (int(w * 0.035), int(h * 0.07)), 0, 0, 360, 255, -1)
+        xl, xr = int(w * (left[1] + 0.02)) if left[1] > left[0] else int(w * 0.20), int(w * (right[0] - 0.02)) if right[1] > right[0] else int(w * 0.81)
+        dress = np.array([[cx - int(w * 0.05), int(h * 0.26)], [cx + int(w * 0.05), int(h * 0.26)], [xr, int(h * 0.74)], [xr, h], [xl, h], [xl, int(h * 0.74)]], np.int32)
+        cv2.fillPoly(sil, [dress], 255)
     img[sil > 0] = (40, 40, 46)
     joint &= sil == 0
     return img, cv2.resize(sil, (1024, 1024), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0, joint
@@ -1702,6 +1790,92 @@ def check_seam():
     r = run(cycCurve=65)
     if r["stats"].get("corner_row") is not None or not both_gone(r):
         bad.append(f"a joint in a frame without a corner: 'corner' at {r['stats'].get('corner_row')}, joint covered {r['cover']}")
+
+    # 6. What only looks like the pieces of a joint (version 4.5.0 repaired both as one; found on the owner's frames).
+    # a) Two short lines that stand at one height by chance - a scratch at each border of the frame. Next to a narrow
+    #    person the floor between them is in plain view and shows no line; a joint would be seen there. Behind a wide
+    #    dress the very same two pieces are one joint.
+    ends = dict(left=(0.0, 0.16), right=(0.84, 1.0))
+    for mode in ("fast", "quality"):
+        r = run(mode=mode, frame=dict(ends, narrow=True))
+        if not untouched(r):
+            bad.append(f"{mode}: two short lines with the floor in plain view between them were repaired as one joint: covered {r['cover']}")
+        r = run(mode=mode, frame=dict(ends))
+        if not both_gone(r):
+            bad.append(f"{mode}: the same two pieces behind a wide dress are one joint: covered {r['cover']}, line {r['before']} -> {r['after']} levels")
+    # b) A thin line along the edge of a lit area: the floor is lighter on one of its sides. A strip repaired there
+    #    smears the light. (The line is drawn low on the floor: higher up a straight edge from border to border is
+    #    the wall-floor corner and belongs to the corner check.)
+    low = dict(y_left=0.88, y_right=0.88)
+    for edge in (14.0, -14.0, 10.0):
+        r = run(frame=dict(low, step=edge))
+        if not untouched(r):
+            bad.append(f"a thin line along the edge of a lit area ({edge:+.0f} levels) was repaired as a joint: covered {r['cover']}")
+    for edge in (0.0, 5.5):  # ...but a floor that is a little lighter on one side of a joint is still a floor with a joint
+        r = run(frame=dict(low, step=edge))
+        if not both_gone(r):
+            bad.append(f"a joint with the floor {edge} levels lighter on one side: covered {r['cover']}, line {r['before']} -> {r['after']} levels")
+    # c) The rules themselves, on drawn arrays.
+    #    The floor in plain view between two pieces: 1000 columns, the pieces take 160 at each border, the person 100.
+    seen = np.ones((400, 1000), np.float32)
+    seen[:, 450:550] = 0.0
+    spans, level = [(0, 160), (840, 160)], {"slope": 0.0, "offs": 200.0, "xc": 80.0}
+
+    def in_view(cand, lead=level):
+        return ENG._seam_floor_in_view(spans, lead, np.cumsum(cand, axis=0, dtype=np.int32), seen, 7.0)
+
+    nothing = np.zeros((400, 1000), np.uint8)
+    on_line, off_line, slanted = nothing.copy(), nothing.copy(), nothing.copy()
+    on_line[198:203, 300:420] = 1          # something thin the search saw on the course of the line (not a piece)
+    off_line[150:153, 600:700] = 1         # ...and away from it
+    for x in range(600, 720):
+        slanted[int(round(199.2 + 0.03 * x)), x] = 1
+    got = (in_view(nothing), in_view(on_line), in_view(off_line), in_view(slanted), in_view(slanted, {"slope": 0.03, "offs": 199.2, "xc": 80.0}))
+    if got != (580, 460, 580, 580, 460):
+        bad.append(f"floor in plain view between two pieces: {got}, expected (580, 460, 580, 580, 460)")
+    #    A piece is looked at along its own course. A bent joint: across a straight line laid through it the line
+    #    smears out (on the owner's black frame it kept a fifth of its strength and the joint was dropped).
+    ph, pw = 400, 900
+    xs_p = np.arange(150, 750)
+    course = 200.0 + 24.0 * ((xs_p - 150) / 600.0) ** 2
+    floor = (120.0 + 0.05 * np.arange(ph, dtype=np.float32)[:, None]) * np.ones((1, pw), np.float32)
+    away = np.abs(np.arange(ph, dtype=np.float32)[:, None] - np.interp(np.arange(pw), xs_p, course)[None, :])
+    inside = (np.arange(pw)[None, :] >= 150) & (np.arange(pw)[None, :] < 750)
+    bent = floor.copy()
+    bent[(away <= 1.0) & inside] -= 8.0
+    bent[(away <= 3.5) & inside] -= 1.6
+    y0, bh = 198, 30
+    comp = ((away <= 1.0) & inside)[y0:y0 + bh, 150:750]
+    path = ENG._seam_piece_path(comp, comp.astype(np.float32), y0)
+    slope, offs = (float(v) for v in np.polyfit(xs_p, course, 1))
+    piece = {"box": (150, y0, 600, bh), "path": path, "slope": slope, "offs": offs}
+    everything = np.ones((ph, pw), np.float32)
+    along = ENG._seam_piece_check(bent, everything, piece)
+    across = ENG._seam_piece_check(bent, everything, dict(piece, path=None))
+    level_piece = {"box": (150, 190, 600, 20), "path": np.full(600, 200.0, np.float32), "slope": 0.0, "offs": 200.0}
+    line = floor.copy()
+    line[199:202] -= 8.0
+    plain = ENG._seam_piece_check(line, everything, level_piece)
+    if float(np.abs(path - course).max()) > 1.5:
+        bad.append(f"the course of a bent piece is off by {np.abs(path - course).max():.1f} rows")
+    if along is None or across is None or along[0] < 0.9 * plain[0] or across[0] > 0.5 * along[0] or abs(along[1]) > 1.0:
+        bad.append(f"a bent joint: along its own course {along}, across a straight line {across}, a straight joint {plain}")
+    #    ...what the profile says: a joint on a floor that gets lighter towards the camera has no step, a slow slope of
+    #    the light is no line, the edge of a lit area gives its height, and too little backdrop gives no answer.
+    slow = ENG._seam_piece_check(floor + 0.5 * np.clip(np.arange(ph, dtype=np.float32)[:, None] - 180.0, 0.0, 40.0), everything, level_piece)
+    if abs(plain[1]) > 0.5 or slow[0] > 0.1 * plain[0] or abs(slow[1]) > 0.5:
+        bad.append(f"profile of a joint {plain} (no step expected), of a slow slope {slow} (no line, no step expected)")
+    for height in (12.0, -12.0, 5.0):
+        edge_img = floor.copy()
+        edge_img[200:] += height
+        got_step = ENG._seam_piece_check(cv2.GaussianBlur(edge_img, (0, 0), 1.2), everything, level_piece)[1]
+        if abs(got_step - height) > 0.5:
+            bad.append(f"the edge of a lit area, {height:+.0f} levels: the profile says {got_step:+.1f}")
+    hidden = everything.copy()
+    hidden[:, 150:650] = 0.0
+    if ENG._seam_piece_check(line, hidden, level_piece) is not None:
+        bad.append("a piece with five sixths of the backdrop around it hidden must give no answer")
+    notes.append("two scratches at one height are not a joint, a line along the edge of a lit area is not a joint")
     report("seam", not bad, "; ".join(notes) + "; two different lines and a lone short piece are left alone; faint and dark joints alike, "
            "with the corner tool on or off; a corner is repaired as a whole line or not at all"
            if not bad else "wrong:\n  " + "\n  ".join(bad))
@@ -2597,6 +2771,330 @@ def check_dark():
 
 
 # ----------------------------------------------------------------------------------------------------------------------
+# What is studio gear, and a dirty spot inside a cast shadow
+# ----------------------------------------------------------------------------------------------------------------------
+def _gear_frame(w=1500, h=2000, seed=6):
+    """
+    A light floor with real studio gear and with two things that only have long strong edges:
+      shadow   a hard-edged cast shadow on the floor (light on one side, shadow on the other - nothing stands there);
+      scratch  a thin faint scratch (an eighth of the light is missing in it);
+      specks   dust right next to the shadow edge and around the scratch;
+      pole     a light stand inside the frame: a thin dark pole with two legs;
+      cable    a thin dark cable on the floor;
+      panel    a reflector that comes in over the right border: a broad light panel - a one-sided edge without a
+               body, like the shadow, but at the border of the frame.
+    Returns (frame, silhouette 1024, dict: every item as a float map 0..1, 'shadow_edge', 'panel_edge', 'person',
+    'specks': centres of the specks near the shadow edge / the scratch).
+    """
+    rng = np.random.default_rng(seed)
+    yy = np.linspace(0, 1, h, dtype=np.float32)[:, None]
+    xx = np.linspace(0, 1, w, dtype=np.float32)[None, :]
+    lum = 150.0 * (1.0 - 0.22 * ((xx - 0.5) * 2) ** 2 - 0.15 * ((yy - 0.45) * 2) ** 2) + 25.0 * yy
+    lum = np.broadcast_to(lum, (h, w)).astype(np.float32).copy()
+    pts = lambda coords: np.array([[int(x * w), int(y * h)] for x, y in coords], np.int32)  # noqa: E731
+
+    def drawn(fn, blur=1.2):
+        m = np.zeros((h, w), np.float32)
+        fn(m)
+        return cv2.GaussianBlur(m, (0, 0), blur)
+
+    shadow = drawn(lambda m: cv2.fillPoly(m, [pts([(0.07, 0.82), (0.33, 0.79), (0.38, 0.90), (0.10, 0.94)])], 1.0), 1.5)
+    scratch = drawn(lambda m: cv2.polylines(m, [pts([(0.66, 0.875), (0.74, 0.915), (0.83, 0.940), (0.88, 0.972)])], False, 1.0, 3, cv2.LINE_AA), 0.8)
+
+    def stand(m):
+        for (xa, ya), (xb, yb), thick in (((0.82, 0.30), (0.82, 0.74), 12), ((0.82, 0.70), (0.76, 0.78), 9), ((0.82, 0.70), (0.88, 0.78), 9)):
+            cv2.line(m, (int(xa * w), int(ya * h)), (int(xb * w), int(yb * h)), 1.0, thick, cv2.LINE_AA)
+
+    pole = drawn(stand)
+    cable = drawn(lambda m: cv2.polylines(m, [pts([(0.06, 0.665), (0.13, 0.700), (0.22, 0.705), (0.30, 0.760)])], False, 1.0, 4, cv2.LINE_AA), 0.8)
+    panel = drawn(lambda m: cv2.fillPoly(m, [pts([(0.90, 0.10), (1.01, 0.09), (1.01, 0.43), (0.915, 0.42)])], 1.0))
+    lum = lum * (1.0 - 0.40 * shadow) * (1.0 - 0.125 * scratch)
+    lum = lum * (1.0 - panel) + 222.0 * panel
+    lum = lum * (1.0 - pole) + 32.0 * pole
+    lum = lum * (1.0 - cable) + 34.0 * cable
+    grown = lambda m, k: cv2.dilate(m.astype(np.uint8), np.ones((k, k), np.uint8)) > 0  # noqa: E731
+    edge = cv2.Canny((shadow > 0.5).astype(np.uint8) * 255, 50, 150) > 0
+    specks = {"edge": [], "scratch": []}
+    for key, zone, n in (("edge", grown(edge, 61) & ~grown(edge, 25), 14), ("scratch", grown(scratch > 0.3, 91) & ~grown(scratch > 0.05, 31), 8)):
+        ys, xs = np.nonzero(zone)
+        tries = 0
+        while len(specks[key]) < n and tries < 4000:
+            tries += 1
+            i = int(rng.integers(0, ys.size))
+            cx, cy = int(xs[i]), int(ys[i])
+            if any((cx - a) ** 2 + (cy - b) ** 2 < 70 ** 2 for a, b in specks["edge"] + specks["scratch"]) or not (20 < cx < w - 20 and 20 < cy < h - 20):
+                continue
+            spot = np.zeros((h, w), np.float32)
+            cv2.circle(spot, (cx, cy), 3, 1.0, -1, lineType=cv2.LINE_AA)
+            lum -= 38.0 * spot
+            specks[key].append((cx, cy))
+    img = np.clip(lum[..., None] * np.float32([1.02, 1.0, 0.97]) + rng.standard_normal((h, w, 3)).astype(np.float32) * 1.8, 0, 255)
+    _, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=1)
+    person = cv2.resize(sil, (w, h)) > 0.5
+    img[person] = (40, 40, 46)
+    return img.astype(np.uint8), sil, dict(shadow=shadow, scratch=scratch, pole=pole, cable=cable, panel=panel, person=person, specks=specks,
+                                           shadow_edge=grown(edge, 5), panel_edge=cv2.Canny((panel > 0.5).astype(np.uint8) * 255, 50, 150) > 0)
+
+
+def check_gear():
+    """
+    Studio gear is left untouched by every stage, so whatever is taken for gear keeps its dirt. Until 4.5.0 every
+    long strong edge was gear - the hard edge of a cast shadow and a scratch on the floor included (the owner's grey
+    frame: dust and a scratch left inside untouched rectangles). Gear is now told by its body.
+    """
+    bad, notes = [], []
+    w, h = 1500, 2000
+    img, sil, g = _gear_frame(w, h)
+    gray = lambda im: im.astype(np.float32).mean(axis=2)  # noqa: E731
+    grown = lambda m, k: cv2.dilate(m.astype(np.uint8), np.ones((k, k), np.uint8)) > 0  # noqa: E731
+    zones = {"shadow edge": g["shadow_edge"], "scratch": g["scratch"] > 0.5, "stand": g["pole"] > 0.5, "cable": g["cable"] > 0.5,
+             "reflector at the border": g["panel_edge"]}
+    # 1. the map of what is kept as gear
+    eng = H.make_engine(E, sil)
+    fg, core = eng._clean_fg_mask(_quiet(eng._predict_fg_raw, img), w, h, 70.0)
+    kept, smoke = {}, {}
+    for body in (True, False):
+        smoke[body] = {}
+        st, _, _, _ = eng._compute_protection_maps_small(img, fg, core, 80.0, True, True, smoke_auto=True, info=smoke[body], gear_body=body)
+        st_full = cv2.resize(st, (w, h), interpolation=cv2.INTER_LINEAR) > 75
+        kept[body] = {k: float(st_full[m].mean()) for k, m in zones.items()}
+    for k in ("shadow edge", "scratch"):
+        if kept[False][k] < 0.9:
+            bad.append(f"the test frame is not what it should be: by the old rule the {k} is kept as gear on {kept[False][k] * 100:.0f}% of its length only")
+        if kept[True][k] > 0.05:
+            bad.append(f"the {k} is still kept as studio gear ({kept[True][k] * 100:.0f}% of it)")
+    for k in ("stand", "cable", "reflector at the border"):
+        if kept[True][k] < 0.9:
+            bad.append(f"the {k} is not kept as studio gear any more ({kept[True][k] * 100:.0f}% of it)")
+    # an edge that is not gear is not smoke either (its outline read as wisps and "smoke" was found in the frame)
+    if smoke[True].get("found") or smoke[True].get("share", 1.0) > 0.01:
+        bad.append(f"a hard shadow edge that is no gear any more was taken for smoke: {smoke[True]}")
+    # 2. the result: dust at the shadow edge and the scratch are repaired, the shadow and the gear stay
+    scr = g["scratch"] > 0.5
+    beside = grown(scr, 25) & ~grown(scr, 13)
+    inside = cv2.erode((g["shadow"] > 0.98).astype(np.uint8), np.ones((41, 41), np.uint8)) > 0
+    around = grown(g["shadow"] > 0.02, 121) & ~grown(g["shadow"] > 0.02, 41) & ~g["person"]
+    thin_gear = (g["pole"] > 0.02) | (g["cable"] > 0.02)
+    base = dict(H.STD, scuffs=0, blur=0, cycCurve=0, seamOn=False, smokeAuto=True)
+    o = gray(img)
+
+    def cleaned(mode, **over):
+        oc = {}
+        out, stats = _quiet(H.make_engine(E, sil).process, img, 8, dict(base, speedMode=mode, **over), out_cache=oc)
+        heal = oc["heal_mask_full"] > 0
+        c = gray(_comp(img, out))
+        return dict(heal=heal, stats=stats, c=c, found={k: sum(bool(heal[cy, cx]) for cx, cy in v) for k, v in g["specks"].items()},
+                    line=float(c[beside].mean() - c[scr].mean()), shadow=float(np.median(c[around]) - np.median(c[inside])))
+
+    line0, shadow0 = float(o[beside].mean() - o[scr].mean()), float(np.median(o[around]) - np.median(o[inside]))
+    n_edge, n_scr = len(g["specks"]["edge"]), len(g["specks"]["scratch"])
+    for mode in ("quality", "fast"):
+        now, old = cleaned(mode), cleaned(mode, gearBody=False)
+        if not np.array_equal(now["heal"], cleaned(mode, gearBody=True)["heal"]):
+            bad.append(f"{mode}: telling gear by its body must be the default (no 'gearBody' in the request)")
+        if old["found"]["edge"] > n_edge // 2 or float(old["heal"][scr].mean()) > 0.1:
+            bad.append(f"{mode}: the test frame is not what it should be: by the old rule {old['found']['edge']} of {n_edge} specks at the shadow edge are found, "
+                       f"{old['heal'][scr].mean() * 100:.0f}% of the scratch")
+        if now["found"]["edge"] < n_edge - 1 or now["found"]["scratch"] < n_scr - 1:
+            bad.append(f"{mode}: dust next to a shadow edge: {now['found']['edge']} of {n_edge} specks found; around a scratch: {now['found']['scratch']} of {n_scr}")
+        if float(now["heal"][scr].mean()) < 0.9 or now["line"] > 0.4 * line0:
+            bad.append(f"{mode}: the scratch: {now['heal'][scr].mean() * 100:.0f}% of it marked, {line0:.1f} -> {now['line']:.1f} levels")
+        if abs(now["shadow"] - shadow0) > 0.03 * shadow0:
+            bad.append(f"{mode}: the cast shadow itself changed: {shadow0:.1f} -> {now['shadow']:.1f} levels deep")
+        if bool(now["heal"][thin_gear].any()) or float(np.abs(now["c"] - o)[thin_gear].max()) > 0.0:
+            bad.append(f"{mode}: the stand or the cable was touched ({int(now['heal'][thin_gear].sum())} px marked for repair)")
+        if now["stats"].get("smoke", {}).get("found"):
+            bad.append(f"{mode}: smoke was 'found' in a frame without any: {now['stats'].get('smoke')}")
+        if mode == "fast":
+            notes.append(f"dust at a hard shadow edge: {old['found']['edge']} -> {now['found']['edge']} of {n_edge} specks found; "
+                         f"a scratch {line0:.0f} -> {now['line']:.1f} levels (was left as 'gear')")
+            # the green preview (before the big window is opened) shows the very same marks
+            green, _ = _quiet(H.make_engine(E, sil).preview_action_mask, img, 8, dict(base, speedMode=mode))
+            missed, extra = int((now["heal"] & (green == 0)).sum()), int(((green > 0) & ~grown(now["heal"], 3)).sum())
+            if missed or extra:
+                bad.append(f"the green preview differs from the cleaning ({missed} px not shown, {extra} px shown but not cleaned)")
+    report("gear", not bad, "; ".join(notes) + "; the shadow, a stand, a cable and a reflector at the frame border stay as they are; "
+           "a shadow edge is not taken for smoke" if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
+def _shadow_frame(w=2800, h=4200, seed=8, stain=12.3, faint=9.8):
+    """
+    A light floor with a broad cast shadow next to the person (denser towards one side, as real shadows are), and:
+      stain    a dirty spot wholly inside the shadow - what the rule is for. Sized and shaded like the owner's scuff
+               under a hand's shadow: 1.4 x the threshold of the place, the shadow around it varying by a good half
+               of its depth; too big and too faint for the fine pass of the dust search;
+      faint    a patch only a little darker than the shadow (the shadow's own unevenness);
+      gap      a light patch (a gap in the shadow);
+      rim      a dark patch on the soft rim of the shadow;
+      tip      a short narrow tongue of the shadow sticking out into the lit floor (the shadow of a finger);
+      contact  the dark core of the contact shadow, right at a shoe.
+    The frame is big for the reason given at _low_key_frame.
+    Returns (frame, silhouette 1024, dict: every item as a float map 0..1, 'shadow', 'person').
+    """
+    rng = np.random.default_rng(seed)
+    yy = np.linspace(0, 1, h, dtype=np.float32)[:, None]
+    xx = np.linspace(0, 1, w, dtype=np.float32)[None, :]
+    lum = 150.0 * (1.0 - 0.22 * ((xx - 0.5) * 2) ** 2 - 0.15 * ((yy - 0.45) * 2) ** 2) + 25.0 * yy
+    lum = np.broadcast_to(lum, (h, w)).astype(np.float32).copy()
+    _, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=1)
+    person = cv2.resize(sil, (w, h)) > 0.5
+    cx = w // 2
+    u = w / 1500.0
+
+    def ell(x, y, ax, ay, blur):
+        m = np.zeros((h, w), np.float32)
+        cv2.ellipse(m, (int(x * w), int(y * h)), (int(ax * u), int(ay * u)), 0, 0, 360, 1.0, -1, lineType=cv2.LINE_AA)
+        return cv2.GaussianBlur(m, (0, 0), blur * u)
+
+    shadow = ell(0.755, 0.80, 0.16 * 1500, 0.065 * 2000, 12.0)
+    dense = 1.0 + 0.36 * np.clip((xx - 0.755) / 0.10, -1.0, 1.0)
+    tip = np.zeros((h, w), np.float32)
+    cv2.line(tip, (int(0.60 * w), int(0.745 * h)), (int(0.645 * w), int(0.765 * h)), 1.0, int(16 * u), cv2.LINE_AA)
+    tip = cv2.GaussianBlur(tip, (0, 0), 2.0 * u)
+    small = np.zeros((max(8, h // 8), max(8, w // 8)), np.float32)
+    cv2.ellipse(small, (cx // 8 + int(30 * u), int(h * 0.905) // 8), (max(1, int(w * 0.11) // 8), max(1, int(h * 0.022) // 8)), 0, 0, 360, 1.0, -1)
+    contact_soft = cv2.resize(cv2.GaussianBlur(small, (0, 0), 6 * u), (w, h))
+    items = dict(
+        stain=ell(0.735, 0.805, 15, 8, 2.2),
+        faint=ell(0.800, 0.775, 15, 8, 0.8),
+        gap=ell(0.700, 0.770, 15, 8, 2.2),
+        rim=ell(0.915, 0.800, 15, 8, 2.2),
+        contact=ell(0.5 + 0.030, 0.9095, 15, 8, 2.2),
+    )
+    lum = lum * (1.0 - 0.28 * np.maximum(shadow * dense, tip)) * (1.0 - 0.38 * contact_soft)
+    lum = lum - stain * items["stain"] - faint * items["faint"] + 18.0 * items["gap"] - 18.0 * items["rim"] - 18.0 * items["contact"]
+    img = lum[..., None] * np.float32([1.02, 1.0, 0.97])
+    img = img + (rng.standard_normal((h, w, 1)).astype(np.float32) + 0.25 * rng.standard_normal((h, w, 3)).astype(np.float32)) * 1.8
+    img = np.clip(img, 0, 255)
+    img[person] = (40, 40, 46)
+    items.update(shadow=shadow, tip=tip, person=person)
+    return img.astype(np.uint8), sil, items
+
+
+def _shadow_rule_cases():
+    """
+    The shadow-spot rule on drawn inputs, at the working size of a 20-megapixel frame: one blob per case.
+    A case: (name, how dark the blob is against the shadow in units of the threshold, by how much the shadow around
+    it varies as a share of the blob's depth, size (w, h) in px, what else is there, taken or not).
+    Returns (cases, centre of every blob, the mask the rule gives, the map of the blobs).
+    """
+    thr = 8.46  # the threshold inside a full shadow at the usual settings
+    cases = [
+        # the owner's frames (the numbers are in the engine, at SHADOW_SPOT_*)
+        ("the scuff in a hand's shadow, quality mode", 1.36, 0.61, (18, 9), None, True),
+        ("the scuff in a hand's shadow, fast mode", 1.41, 0.50, (14, 9), None, True),
+        ("a faint patch along the rim of a pool of light", 1.13, 0.30, (25, 8), None, False),
+        ("another such patch", 1.07, 0.30, (11, 8), None, False),
+        ("a piece of a hard shadow edge", 4.64, 0.98, (8, 20), None, False),
+        # every limit from its other side
+        ("a clear spot in an even shadow", 3.0, 0.20, (16, 12), None, True),
+        ("a spot whose surroundings vary by 0.9 of its depth", 1.36, 0.90, (18, 9), None, False),
+        ("a deep spot, the shadow around it varies by 14 levels", 3.5, 14.0 / (3.5 * thr), (16, 12), None, False),
+        ("a deep spot, the shadow around it varies by 10 levels", 3.5, 10.0 / (3.5 * thr), (16, 12), None, True),
+        ("a spot right next to the person", 1.6, 0.2, (18, 9), "person", False),
+        ("a spot at the border of the frame", 1.6, 0.2, (18, 9), "border", False),
+        ("a spot with other finds all around it", 1.6, 0.2, (18, 9), "busy", False),
+        ("a long streak", 1.6, 0.2, (48, 8), None, False),
+        ("a big patch", 1.6, 0.2, (90, 60), None, False),
+        ("a light patch", 1.6, 0.2, (18, 9), "light", False),
+    ]
+    sw, sh = 1365, 2048
+    l_med = np.full((sh, sw), 100.0, np.float32)
+    dd = np.zeros((sh, sw), np.float32)
+    lighter = np.zeros((sh, sw), np.float32)
+    safe = np.ones((sh, sw), bool)
+    extra = np.zeros((sh, sw), np.uint8)
+    centres = []
+    for i, (_, peak, vary, (bw, bh), what, _) in enumerate(cases):
+        cx, cy = (12 if what == "border" else 200 + 320 * (i % 4)), 200 + 320 * (i // 4)
+        depth = peak * thr
+        l_med[cy - 150:cy + 150, cx:min(sw, cx + 150)] += vary * depth      # the shadow: two tones that meet at the blob
+        blob = np.zeros((sh, sw), np.float32)
+        cv2.ellipse(blob, (cx, cy), (bw // 2, bh // 2), 0, 0, 360, 1.0, -1, lineType=cv2.LINE_AA)
+        blob = cv2.GaussianBlur(blob, (0, 0), 0.8)
+        if what == "light":
+            lighter += depth * blob
+        else:
+            dd += depth * blob
+        if what == "person":
+            safe[cy - 4:cy + 4, cx + bw // 2 + 3:cx + bw // 2 + 9] = False
+        if what == "busy":
+            extra[cy - bh:cy + bh:2, cx - bw:cx + bw:2] = 1
+        centres.append((cx, cy))
+    cand = ((dd > thr) | (lighter > thr)).astype(np.uint8)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(cand, connectivity=8)
+    out = ENG._shadow_spots(np.arange(1, n), stats, labels, np.maximum(cand, extra), dd, np.full((sh, sw), thr, np.float32),
+                            l_med - dd + lighter, l_med, safe, 1.8)
+    return cases, centres, out, dd
+
+
+def check_shadow():
+    """
+    A dirty spot inside a cast shadow is repaired (the owner's grey frame: a scuff under the shadow of a hand was
+    the one mark the dust search kept, because inside a shadow it used to drop everything bigger than a speck);
+    the shadow itself - its rim, its denser parts, the shadow under a shoe - is not.
+    """
+    bad, notes = [], []
+    # 1. the rule itself, with the numbers measured on the owner's frames
+    cases, centres, out, dd = _shadow_rule_cases()
+    rows, cols = np.arange(out.shape[0])[:, None], np.arange(out.shape[1])[None, :]
+    for (name, _, _, _, _, want), (cx, cy) in zip(cases, centres):
+        got = bool(out[cy, cx])
+        if got != want:
+            bad.append(f"{name}: {'taken' if got else 'left'}, must be {'taken' if want else 'left'}")
+        elif got and not bool(out[(dd > 1.8) & (np.abs(rows - cy) < 80) & (np.abs(cols - cx) < 80)].all()):
+            bad.append(f"{name}: taken, but not whole (its faint rim would stay as a ring)")
+    # 2. a whole frame, both speed modes
+    w, h = 2800, 4200
+    img, sil, g = _shadow_frame(w, h)
+    gray = lambda im: im.astype(np.float32).mean(axis=2)  # noqa: E731
+    grown = lambda m, k: cv2.dilate(m.astype(np.uint8), np.ones((k, k), np.uint8)) > 0  # noqa: E731
+    names = ("stain", "faint", "gap", "rim", "contact")
+    core = {n: g[n] > 0.5 for n in names}
+    ring = {n: grown(core[n], 121) & ~grown(g[n] > 0.02, 31) & ~g["person"] for n in names}
+    near_stain = grown(g["stain"] > 0.05, 61)
+    marks = np.maximum.reduce([g[n] for n in names])
+    in_shadow = (g["shadow"] > 0.98) & ~grown(marks > 0.02, 61)
+    lit_floor = grown(g["shadow"] > 0.02, 241) & ~grown(g["shadow"] > 0.02, 81) & ~g["person"] & (g["tip"] < 0.01)
+    depth = lambda a, n: float(np.median(a[ring[n]]) - a[core[n]].mean())  # noqa: E731
+    base = dict(H.STD, scuffs=0, blur=0, cycCurve=0, seamOn=False, smokeOn=False, smokeAuto=True)
+    o = gray(img)
+    shadow0 = float(np.median(o[lit_floor]) - np.median(o[in_shadow]))
+
+    def cleaned(mode, **over):
+        oc = {}
+        out_l, _ = _quiet(H.make_engine(E, sil).process, img, 8, dict(base, speedMode=mode, **over), out_cache=oc)
+        return oc["heal_mask_full"] > 0, gray(_comp(img, out_l))
+
+    for mode, left_max in (("quality", 0.80), ("fast", 0.40)):  # (the stand-in for the repair network only blurs: a big spot stays half visible)
+        (h_on, c_on), (h_off, c_off) = cleaned(mode), cleaned(mode, shadowSpots=False)
+        if not np.array_equal(h_on, cleaned(mode, shadowSpots=True)[0]):
+            bad.append(f"{mode}: looking for dirt inside shadows must be the default (no 'shadowSpots' in the request)")
+        if float(h_off[core["stain"]].mean()) > 0.0:
+            bad.append(f"{mode}: the test frame is not what it should be: the spot inside the shadow is found without the rule")
+        d0, d1 = depth(o, "stain"), depth(c_on, "stain")
+        if float(h_on[core["stain"]].mean()) < 0.9 or d1 > left_max * d0:
+            bad.append(f"{mode}: the dirty spot inside the shadow: {h_on[core['stain']].mean() * 100:.0f}% of it marked, {d0:.1f} -> {d1:.1f} levels")
+        added = h_on & ~h_off
+        if bool((added & ~near_stain).any()):
+            bad.append(f"{mode}: the rule marked {int((added & ~near_stain).sum())} px of the shadow that are not the dirty spot")
+        for n in names[1:]:
+            if abs(depth(c_on, n) - depth(c_off, n)) > 0.05:
+                bad.append(f"{mode}: '{n}' was changed by the rule: {depth(c_off, n):.1f} -> {depth(c_on, n):.1f} levels")
+        shadow1 = float(np.median(c_on[lit_floor]) - np.median(c_on[in_shadow]))
+        if abs(shadow1 - shadow0) > 0.03 * shadow0:
+            bad.append(f"{mode}: the cast shadow itself changed: {shadow0:.1f} -> {shadow1:.1f} levels deep")
+        if mode == "fast":
+            notes.append(f"a dirty spot inside a cast shadow: {d0:.1f} -> {d1:.1f} levels (was left alone)")
+            green, _ = _quiet(H.make_engine(E, sil).preview_action_mask, img, 8, dict(base, speedMode=mode))
+            missed, extra = int((h_on & (green == 0)).sum()), int(((green > 0) & ~grown(h_on, 3)).sum())
+            if missed or extra:
+                bad.append(f"the green preview differs from the cleaning ({missed} px not shown, {extra} px shown but not cleaned)")
+    report("shadow", not bad, "; ".join(notes) + f"; the rule on drawn spots: {len(cases)} cases, the owner's scuff taken, the rim of a shadow, a faint "
+           "patch, a contact shadow, a streak and a light gap left; nothing else in the shadow is touched" if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
+# ----------------------------------------------------------------------------------------------------------------------
 # Steps back and forward for the mask edits of the big window
 # ----------------------------------------------------------------------------------------------------------------------
 def check_undo():
@@ -2786,7 +3284,7 @@ GROUPS = [("convert", check_convert), ("process", check_process), ("stage", chec
           ("white", check_white), ("gpu", check_gpu),
           ("cyc", check_cyc), ("dress", check_dress), ("speed", check_speed), ("smoke", check_smoke), ("empty", check_empty),
           ("format", check_format), ("scene", check_scene), ("stains", check_stains), ("seam", check_seam), ("mask", check_mask),
-          ("dark", check_dark), ("undo", check_undo),
+          ("dark", check_dark), ("gear", check_gear), ("shadow", check_shadow), ("undo", check_undo),
           ("server", check_server), ("http", check_http),
           ("folders", lambda: IC.check_folders(report)), ("install", lambda: IC.check_install(report)),
           ("bat", lambda: IC.check_bat(report)), ("plugin", check_plugin)]

@@ -50,6 +50,16 @@ written here and in the repository.
   until he ticks it, and ticking it seemed to refresh nothing; a button that resets one preset; a backup of
   all settings that survives a reinstall; dark presets by framing. 4.5.0 answers these. No option card was
   shown for 4.5.0; what the agent decided alone is listed in section 3.
+- His message after trying 4.5.0: two pairs of JPEGs, the frame as shot and the result of 4.5.0 with red
+  ellipses drawn on what is wrong (`0Q5A3413`: black backdrop, a woman on a stool; `0Q5A3384`: grey backdrop,
+  a woman sitting on the floor, hard shadows). **Its wording is not preserved here**; the agent worked from
+  this list: the wall-floor corner on the black backdrop is still there; a halo next to the person and the
+  stool; debris left on the grey floor (a scratch bottom right, blotches under the knee, a scratch next to
+  the jeans, a spot inside the shadow of a hand, a light spot at the top-right border); a dark-grey backdrop
+  should count as dark; and he asked what «злити в main» means. He also answered three questions of 4.5.0:
+  Ctrl+Z works in Photoshop, the corner must go completely, dark grey is dark. He called 4.5.0 the best so
+  far. 4.6.0 answers this report. Red ellipses on a result are his way to point: find each circled place
+  in the original and in his result, at zoom, before changing anything.
 
 ## 2. What is in the repository
 
@@ -194,80 +204,112 @@ Both programs must be able to run side by side, so nothing is shared with the or
     `lowkeyCyc65`. A new built-in preset is inserted under the built-in preset it follows
     (`appendNewDefaultPresets`).
 
+- **4.6.0** — what the search takes for what, after his two frames tried with 4.5.0. No new controls; two
+  request parameters, both on by default and off in the legacy regime of the checks.
+  - Studio gear by its body (`_edge_blobs_with_body`, parameter `gearBody`). `_compute_protection_maps_small`
+    kept every long strong edge as gear, and gear is left untouched by every stage. The hard edge of a cast
+    shadow and a long scratch were "gear", with all the dirt around them: untouched rectangles on his grey
+    frame. A group of strong edges is now gear when something stands there - most of the light is missing
+    (or added) in a thin body with backdrop on both sides (`GEAR_BODY_*`) - or when it touches the left,
+    right or top border of the frame. Share of light missing, measured: stands, cables, a softbox 0.62-0.93;
+    shadow edges 0.03-0.12; his scratch 0.07; folds of a white dress 0.28. An edge that is no gear is kept
+    out of the smoke search all the same (`edges_any`): its outline read as wisps and "smoke" was found.
+  - Corner on a black backdrop (`_find_corner_line`, rule 2b, `CORNER_UPPER_*`). The corner is half an L*
+    there; the rim of a pool of light or the shadow of a stool lower on the floor scores five times as much.
+    4.5.0 bent the light at that line and left the corner. A line above the strongest one is now the corner
+    when it scores 0.15, runs along half of the visible backdrop and its step is 4 % of the brightness
+    around it (on a light backdrop that is 2.5 L*, so nothing changes there). His frame: 0.26 at 0.589 of
+    the height against 1.54 at 0.768.
+  - Floor joint, only with `seamJoin` (`_seam_piece_check`, `_seam_piece_path`, `_seam_floor_in_view`). A
+    thin piece is looked at once more on its own profile, taken along its own course. A tone step of
+    `SEAM_LIGHT_EDGE` levels right at it is the edge of a lit area, not a joint; a piece that shows less
+    than `SEAM_OWN_LINE` of what the search saw lies on nothing (the search answers to slanted edges of
+    light). Pieces are one line only when the floor between them is mostly hidden: with more open floor
+    without a line between them than they are long, they are two scratches (his grey frame: a band of
+    93,000 px across the floor was repaired). `_detect_vinyl_seam_mask(info=...)` returns every piece and
+    group with its numbers and the reason it was dropped.
+  - A dirty spot inside a cast shadow (`_shadow_spots`, `SHADOW_SPOT_*`, parameter `shadowSpots`). The dust
+    search dropped every blob over 28 px that lies in a shadow. A small compact blob that is clearly darker
+    than an even shadow around it, away from the person, the gear and the frame border, is now taken
+    whole. The limits come from his frames and are written next to the constants.
+  - A dark key is a backdrop below 40 of 255 (`SCENE_DARK_LUMA`, was 26): his dark grey (31) is dark to
+    him, his grey (52) is not.
+  - `tests/try_defects.py`: the deliberate defects for these rules, kept in the repository.
+
 ## 3. Current state — update this at the end of every session
 
-_Last updated: 2026-11-19, by the agent of the first session, after releasing 4.5.0._
+_Last updated: 2026-11-19, by the agent of the first session, after releasing 4.6.0._
 
-- **Released:** 4.5.0, tag `cvp2-v4.5.0`, as a pre-release. Direct download:
-  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.5.0/CleanVinylPro2.zip`
-- **Owner's progress:** 4.2.0, 4.3.0 and 4.4.0 are installed and work on his PC (program in
+- **Released:** 4.6.0, tag `cvp2-v4.6.0`, as a pre-release. Direct download:
+  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.6.0/CleanVinylPro2.zip`
+- **Owner's progress:** 4.2.0 to 4.5.0 have been installed and work on his PC (program in
   `D:\Plugin Photoshop\CleanVinylPro2`, libraries copied from the old program without a download, models in
   `D:\model AI fotoshop`, LaMa on `CUDAExecutionProvider`, Python 3.12.10). So the `.bat` files, the
-  installer, the GPU, the real models and the panel HAVE run on Windows. He reported on 4.4.0 on 2026-11-19
-  with two screenshots (section 1); 4.5.0 answers that report.
-  **He has not reported on 4.5.0 yet.**
-- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (32 results in
-  890 s; 58 scenarios of the panel test and 39 cases of the settings test among them) on
-  2026-11-19, with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4. Deliberate defects for what is new
-  in 4.5.0: 71 put in one by one (25 into the engine, 8 into the server, 38 into the panel and the
-  presets); the checks caught all of them in the end. The first run let five through. Four were holes in the new
-  checks and are closed: a wrong "unevenly lit" rule and an overdone local noise (`check_dark` got a part
-  that tests the rule on drawn noise maps); a file of another program that has the shape of a backup (the
-  `http` check puts one into the folder); smoke protection switched on where `smokeEnabled` is declared (that
-  value is read only when the settings file carries no `cfg`; the panel test has such a start now). The fifth
-  changed nothing at all (`corner_skip` set with no corner line to skip) and was replaced by the defect it
-  stood for. On the way the full run also showed that 4.4.0 took a faint floor joint for the wall-floor
-  corner whenever the corner tool was on. Of the 41 defects tried for 4.4.0 two still pass every check; they
-  are second lines of defence (the layer alpha keeps the person out even when the stain stage does not; the
-  gradual end of the tone layers matters only on a frame of extreme contrast).
-- **What 4.5.0 gives on his three frames** (stand-in networks, section 4; the share of the frame marked as dust):
-  black frame `3.jpg` with «Темний ключ»: 5.11 % with 4.4.0, 0.85 % with the local noise at the former dust
-  value 92, 0.18 % at the new value 80; nothing is repaired inside the corner strip any more, and with
-  `cycCurve` 65 the line is gone (found at 0.532 of the height). Dark-grey frame `2.jpg` with «Дальній план»:
-  13.24 % -> 0.82 %; what is left are real specks and scratches on the lit floor (looked at one by one at
-  zoom). Light-grey frame `1.jpg`: the identical mask. The window picture of the black frame: the share of
-  pixels equal to their right neighbour in four dark zones is 0.58-0.72 in the data, was 0.84-0.91 after
-  JPEG 90 (0.98 in his screenshot) and is 0.50-0.65 after JPEG 100.
-- **Against his own retouch** (measured with 4.4.0, not measured again with 4.5.0; band energy kept, fine to
-  coarse): the floor is evened to about the level of his retouch - his frame 2: his 0.57 0.61 1.01 1.12, ours
-  0.61 0.56 0.90 1.00; his frame 3: his 0.86 0.84 0.93 0.96, ours 0.84 0.85 1.04 0.99. His retouch of frame 2
-  smooths the WALL much more than the program does (his 0.29 0.67, ours 0.77 0.92): that would be «Розмиття
-  фону», which stays 0 in these presets. The floor joint is repaired on both sides of the person on all three.
-- **Decided by the agent alone for 4.5.0** (he was not asked; change them if he says otherwise):
-  - the corner goes on dark backdrops too (`cycCurve` 65 in `lowkey`, `lowkey_medium`, `lowkey_wide`). His
-    own retouch of the black frame keeps a soft step there; 65 leaves about that. One number per preset;
-  - the values of `lowkey_medium` and `lowkey_close` are set by analogy with the light presets (dust 72 / 62,
-    more edge protection, no seam search and no large fraction in the close-up). No dark frame of those
-    framings was available: they were only tried on crops of his black frame;
-  - the smoke switch of the user's own presets is left as saved (only built-in presets are moved);
-  - the reset button does nothing for a preset the user made;
-  - backups go to `<program folder>\backup` (his program folder is on drive D:, which a reinstall of Windows
-    usually leaves alone); the folder cannot be chosen in the panel;
-  - his dark-grey frame (backdrop about 31 of 255) still counts as light and gets «Дальній план».
-- **Not run in Photoshop yet (4.5.0):** all of it. In particular:
-  - whether Ctrl+Z, Ctrl+Shift+Z and Ctrl+Y reach the modal window at all (Photoshop may keep them; the two
-    buttons do not depend on that) - **ask him**;
-  - `os.startfile` on the backup folder from the server process (the panel shows the path as text anyway);
-  - the two new icons `icons/ui/undo.png`, `redo.png` and the backup box in the narrow panel;
-  - the look of the window pictures at JPEG 100 on his dark frames, and the real LaMa fill of what the dust
-    search still marks there;
-  - the one-time moves on his stored presets (smoke off, «Темний ключ» 80 / 65) and the three new presets
-    appearing under «Темний ключ» (they ran only in the simulated panel).
+  installer, the GPU, the real models and the panel HAVE run on Windows. He reported on 4.5.0 with two
+  frames (section 1); 4.6.0 answers that report.
+  **He has not reported on 4.6.0 yet.**
+- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (34 results in
+  966 s; 58 scenarios of the panel test and 39 cases of the settings test among them) on
+  2026-11-19, with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4.
+  Deliberate defects for what is new in 4.6.0 (`tests/try_defects.py`, all in the engine): 34 put in one by one,
+  all 34 caught (1,114 s). While the checks were being written, two defects showed nothing on the
+  drawn frame - "a spot may touch the person" and "any patch above the threshold is a spot": the frame
+  refuses both blobs for a second reason. That is why the rule is also tried on drawn spots with the
+  owner's numbers. The green preview has its own copy of the two new defaults; it is now compared
+  with the cleaning on the new frames.
+  Of the 71 defects tried for 4.5.0 and the 41 for 4.4.0 the runners are gone (they lived in a git-ignored
+  folder that a new sandbox does not have); their checks are still in `tests/run_checks.py`.
+- **What 4.6.0 gives on his frames** (stand-in networks, section 4; the same engine code as on his PC, but
+  another silhouette and another fill):
+
+  | frame | preset the automatic picks | 4.5.0 | 4.6.0 |
+  |---|---|---|---|
+  | `0Q5A3413` black, stool | «Темний дальній план» | corner looked for at 0.766 (the stool's shadow); the real corner at 0.59 stays, the floor at 0.69-0.80 is flattened | corner at 0.589; the tone down the frame at x 0.88 runs 18.6, 19.0, 19.3, 19.8 where it stepped 18.6, 18.2, 15.1; nothing changes inside the stool or along it |
+  | `0Q5A3384` grey, hard shadows | «Дальній план» | "joint" of 93,033 px across the floor; gear zones 5.2 % of the frame with the dirt kept in them | no joint; gear zones 2.3 %; the scratch bottom right, the blotches under the knee, the scratch next to the jeans and the spot inside the hand's shadow are marked and repaired |
+  | `1.jpg` light grey | «Дальній план» | | the real joint at 0.79-0.81 of the height, on both sides, as before |
+  | `2.jpg` dark grey | now «Темний дальній план» (was «Дальній план») | | the two presets differ on 0.19 % of the frame by more than one level |
+  | `3.jpg` black | «Темний дальній план» | | the same lines as 4.5.0 (104,706 px marked by the seam search in both) |
+
+  Not solved on these frames, and said to him: the light spot at the top-right border of the grey frame is
+  evened (no patches any more) but still about 10 levels lighter than the wall around it - the stain stage
+  takes a spot of that size for light. On the right side of frame 3 the joint runs along the rim of a pool
+  of light and is not taken as a line; the dust search repairs bits of it and a dashed remainder shows in a
+  stretched view (4.5.0 did the same).
+- **Decided by the agent alone for 4.6.0** (he was not asked; change them if he says otherwise):
+  - 40 as the limit of a dark backdrop: between his dark grey (31) and his grey (52), nearer to the first;
+  - the light spot at the frame border stays (he is told that the brush of the big window repaints it);
+  - the two new rules cannot be switched off in the panel (`gearBody`, `shadowSpots` exist only as request
+    parameters);
+  - a small shadow of a small thing that lies wholly inside a bigger shadow is repaired like a dirty spot
+    (it cannot be told apart; the eraser brings it back);
+  - nothing was done about the three questions he has not answered (below).
+- **Not run in Photoshop yet (4.6.0):** all of it. In particular:
+  - the real silhouette. The stand-in missed the stool, a leg and a shoe under the dress on the black frame
+    and the train of the dress on frame 1; they were added to the stand-in matte by hand. His result of
+    4.5.0 left the stool untouched, so the real model very likely takes the stool as part of the person;
+    with the stool NOT in the silhouette the stand-in run darkened a narrow wedge between two stool legs
+    (700 px, up to 50 levels; the old gear rule did the same);
+  - the real LaMa fill of what is newly marked (the scratch, the spot inside the shadow): Telea leaves
+    faint dotted remnants along the scratch;
+  - of 4.5.0, still unconfirmed: opening the backup folder from the panel, the look of the new buttons,
+    the one-time preset moves. (Ctrl+Z works in Photoshop: he confirmed it.)
 - **Merging:** pull request #1 (`arena/33f1ced8-cleanvinylpro-beta` into `main`) is open and deliberately not
-  merged yet: fixes that follow his report on 4.5.0 should come from the session that knows the code. Merge it
-  when that session ends or when he writes «зливай» (section 6). If `main` already contains this file, that
-  has happened. Merging also removes the folder `CleanVinylPro/` from `main`.
+  merged yet: fixes that follow his report on 4.6.0 should come from the session that knows the code. He
+  asked what merging into `main` means and was told: the version is already published and can be downloaded;
+  merging only marks it on GitHub as the main one and changes nothing on his PC; he should write «зливай»
+  when he wants it. Merge it when he writes that or when the session ends (section 6). If `main` already
+  contains this file, that has happened. Merging also removes the folder `CleanVinylPro/` from `main`.
 
-### Open questions (not asked yet; ask when he reports on 4.5.0)
+### Open questions (ask when he reports on 4.6.0)
 
-- Do the keys Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y work in the big window on his PC?
-- Is the corner on a black backdrop meant to go completely, to stay as a soft step, or to stay as shot? Now:
-  `cycCurve` 65 in the dark presets that usually show a floor.
-- Should his dark-grey backdrop count as dark (`SCENE_DARK_LUMA` 26; his frame is about 31)? It would then get
-  the dark presets (dust 80 instead of 85, more edge protection).
+- Answered after 4.5.0: Ctrl+Z works in Photoshop; the corner on a black backdrop must go completely;
+  dark grey counts as dark (the limit is 40 now).
+- Should a light spot at the frame border (a lamp that shines into the frame) be removed by the program?
+  Now it is evened and stays.
 - Does he want the wall smoothed as strongly as in his retouch of frame 2? Then «Розмиття фону» should get a
   default above 0 in «Дальній план». (Open since 4.4.0.)
 - His retouch removes the studio gear at the frame edges; the presets leave it (`removeStands` off, as before).
+  (Open since 4.5.0, asked once, not answered.)
 - A series shot with smoke and the automatic preset: every frame opens with smoke protection off and a note
   that smoke was seen. The manual tells him to untick «Авто…» and pick «Зйомка з димом» for such a series.
   If that is a nuisance, the smoke switch could be kept as the user left it when the automatic preset is put
@@ -290,14 +332,41 @@ _Last updated: 2026-11-19, by the agent of the first session, after releasing 4.
 - The framing is read from the silhouette only. Checked on 44 real photos: 40 as judged by eye; the misses were
   neighbouring classes in unusual frames (a tight group, a jump). A raised hand above the head, a hat or very
   big hair can shift the answer by one class.
-- "Dark" means: median brightness of the backdrop below 26 of 255 (`SCENE_DARK_LUMA`). His dark-grey sample
-  (about 31) is therefore NOT dark and gets «Дальній план»; his black sample (about 20) gets «Темний дальній
-  план» (before 4.5.0: «Темний ключ»). If he disagrees, this one number moves.
+- "Dark" means: median brightness of the backdrop below 40 of 255 (`SCENE_DARK_LUMA`; 26 until 4.5.0). His
+  black samples measure 13 and 20, his dark grey 31, his grey 52, his light grey 78. The grey one is close
+  enough to the limit that a darker exposure of the same backdrop could cross it; if he complains that a
+  grey frame got a dark preset, this one number moves.
 - Presets differ mostly in search sensitivity, so the cleaned photo changes little between them; the difference
   shows in the mask. That is why the note after a preset click gives the share of the frame where defects were
   found (the bright green).
 
 ### Known limits of the image processing
+
+- Gear (4.6.0): a cast shadow or a broad light panel that leaves the frame over the left, right or top
+  border is still gear, as before - nothing is cleaned along its edge. A dark thing with backdrop on both
+  sides is gear whatever it is; the narrow shadow of a finger (a quarter of the light missing) counts.
+- Corner on a dark backdrop (4.6.0): when the corner cannot be seen at all, a sharp edge across the floor
+  (the rim of a pool of light, a shadow) is still the only line and is taken for the corner; the corner tool
+  then bends the light there. `cycCurve` 0 is the cure. A straight edge of light from border to border
+  between 25 % and 82 % of the height is a corner to the finder by definition.
+- Floor joint (4.6.0): pieces that lie closer than about 18 % of the frame width at one height merge into
+  one piece before they are judged, so a joint that runs along an edge of light for part of its length is
+  judged by the average step along it: all of it stays or all of it goes. A joint along the rim of a pool
+  of light is not taken as a line (right side of his frame 3); the dust search then repairs bits of it.
+- A spot inside a shadow (4.6.0): the small shadow of a small thing that lies wholly inside a bigger shadow
+  is repaired like dirt; so is the darker crossing of two faint thin shadows when each of them alone is
+  just below the threshold. The owner's scuff passes with little to spare (1.36 against the limit 1.25;
+  its surroundings vary by 7 levels against the limit 8.6): a fainter one stays, and that is the safe side.
+- Smoke: the soft rim of a broad shadow reads as wisps. On a drawn frame with such a shadow and the
+  protection ON, smoke was "found" and the whole shadow was protected (nothing cleaned in it). With the
+  built-in presets the protection is off, so only the note "smoke was seen" can be wrong.
+- 8-bit frames: the tone stages round without dithering. On a backdrop without noise (his black JPEG: 96 %
+  of neighbouring pixels are equal) the one-level contour lines of a gradient change their course where
+  the corner tool or the stain stage worked. It shows only when the darks are stretched about thirty times;
+  measured against his result of 4.5.0 the new run is no blotchier (0.42 against 0.58 levels between the
+  scales of 6 and 60 px). Dithering the corrections would remove it; not asked for.
+- A light spot at the frame border (a lamp shining into the frame, 300 px across) is evened, not removed:
+  the stain stage takes it for light.
 
 - Dust on a dark backdrop: at «Пил і цятки» 92 some plain noise of the lit part is still marked (his black
   frame: 0.85 % of the frame, about 145 small zones on the lit wall); at 80 it is 0.18 %. That is why the dark
@@ -451,9 +520,34 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
 - A new default of the engine (`grainLocal`, the preview quality) must be switched off in `_legacy` of the
   checks, or the comparisons with v3.2.1 fail for a reason that is not a regression.
 - A deliberate defect that every check lets through is a hole in the checks, not a proof that the code is
-  right: put the defects in one at a time with a small runner (apply an exact text replacement, run the
-  group it belongs to, restore the file, log caught / not caught) and close the holes it shows. Do not edit
-  the program files or build while such a run is going: it patches them in place.
+  right: put the defects in one at a time with `tests/try_defects.py` (it applies an exact text
+  replacement, runs the group the defect belongs to, restores the file and logs caught / not caught) and
+  close the holes it shows. Replace its list when you add rules. Do not edit the program files or build
+  while it runs: it patches them in place.
+- `_local/` and `/tmp` do not survive a new sandbox; the working tree does. Whatever the next session
+  needs - a runner, release notes, a probe - belongs in the repository or in this file.
+- A check run tests the engine as it was when the run STARTED (the module is imported once). After the last
+  edit, run the groups again.
+- The search for defects always works at the "quality" size (`fast_mode=False` in `process` and in
+  `preview_action_mask`); `fast_mode=True` is only the optional second pass. Probing a detector with
+  `fast_mode=True` says nothing about what he gets.
+- Drawing frames for the seam and corner checks: a straight step from border to border between 25 % and
+  82 % of the height IS the wall-floor corner to the finder, and pieces at the corner are exempt from the
+  "edge of light" rule - draw edges of light lower than 0.82 (`_joint_frame(..., y_left=0.88, step=...)`).
+  A corner must be sharp to be found when it is faint: nine tenths of the step within one percent of the
+  height (`_two_line_frame`), as on his frame.
+- Drawing a stain for the medium pass of the dust search: it must cover less than half of the 31 x 31
+  median window at the working size (2048 px), or the median follows it and it splits into two half-moons;
+  and it must be too big or too faint for the fine pass (kernel 19 px at full size, threshold x 1.85 inside
+  shadows), or the fine pass finds it and the rule under test is never asked (`_shadow_frame`).
+- `STD` of the test harness has the smoke protection ON. On a drawn frame with a soft-rimmed shadow smoke
+  is then "found" and nothing in the shadow is cleaned. Checks about shadows pass `smokeOn=False`.
+- MediaPipe as the stand-in silhouette misses a leg and a shoe under a dress, the train of a dress and a
+  stool. What then looks like a fault of the engine (a cut shoe toe, a smudge on the train, a "joint" on
+  the train) is the matte: fix the matte by hand first.
+- `cv2.morphologyEx(MORPH_CLOSE)` with a kernel of even width (1 x 110, the quality size of the seam search)
+  shifts its result by one pixel in OpenCV 5.1; a piece can then hold a single candidate point, and a line
+  fit through it warns (`fit_ok` guards that).
 - The plugin has no file dialog (`localFileSystem: "plugin"` in the manifest): anything the owner must find
   on disk is written by the server, and the panel shows the full path.
 

@@ -598,7 +598,9 @@ class CleanVinylEngine:
     # 1b. The scene of the frame (for the automatic choice of a preset)
     # ------------------------------------------------------------------
     SCENE_GRID = 256            # long side of the small grid the silhouette is measured on
-    SCENE_DARK_LUMA = 26.0      # median brightness of the backdrop (0..255) below which the frame is a dark key
+    # median brightness of the backdrop (0..255) below which the frame is a dark key. 26 until 4.5.0; the owner's
+    # dark-grey backdrop (about 31) is dark to him, his grey one (about 52) is not
+    SCENE_DARK_LUMA = 40.0
     SCENE_CLOSE_VISIBLE = 0.37  # less than this share of the body is in the frame -> close-up
     SCENE_SMALL_HEAD = 0.15     # head narrower than this share of the visible figure -> the whole person is in the frame
 
@@ -759,6 +761,60 @@ class CleanVinylEngine:
     # ------------------------------------------------------------------
     # 2. Protection & Stand Detection Maps (1024px)
     # ------------------------------------------------------------------
+    GEAR_BODY_K = 31             # px of the 1024 copy: a stand leg, a pole or a cable is thinner than this
+    GEAR_STEP_COHERENCE = 0.75   # edges of a blob that point one way this much: a one-sided step, not a thin thing
+    GEAR_BODY_STEP = 0.20        # a step-like blob is gear when this share of the light is missing / added in it
+    GEAR_BODY_THIN = 0.16        # ...and a blob of thin lines when its lines are at least this strong
+
+    @staticmethod
+    def _edge_blobs_with_body(L: np.ndarray, gx: np.ndarray, gy: np.ndarray, grad: np.ndarray,
+                              strong_edges: np.ndarray, labels: np.ndarray, stats: np.ndarray,
+                              cand: np.ndarray) -> np.ndarray:
+        """
+        Which groups of strong edges are studio gear. `cand`: one flag per label 1..n (the groups big enough to
+        be looked at); returns the flags of those that are gear. Everything on the 1024 copy, L in 0..255.
+        Any long strong edge used to be gear, and gear is left untouched by every stage. Two things that are no
+        gear at all were kept that way, with all the dirt inside them:
+          - the hard edge of a cast shadow (under a leg, next to an arm). It is a one-sided step: light on one
+            side, shadow on the other, nothing standing there;
+          - a scratch on a lit floor: a thin line like a cable, but a faint one.
+        Gear has a body. A leg, a pole or a cable is a thin dark (or shiny) thing: the backdrop is on BOTH its
+        sides, and most of the light is missing in it (or added, on chrome). That is measured against the
+        backdrop a little way off (what a closing / an opening with GEAR_BODY_K leaves), as a share of that
+        backdrop, so it works on a black frame as on a white one.
+          - a group whose edges point one way (a step): gear only when such a body is inside it
+            (the outline of a dark train or of a softbox has thin parts; a shadow edge has none);
+          - a group of thin lines: gear unless the lines are faint (a scratch takes away a tenth of the light,
+            a cable nearly all of it; the folds of a white dress on a light floor about a third);
+          - a group that touches the left, right or top border of the frame is gear as before: that is where
+            stands, softboxes and reflectors come in. (Not the bottom border: the scratches of the floor
+            nearest to the camera end there.)
+        """
+        sh, sw = L.shape
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (CleanVinylEngine.GEAR_BODY_K, CleanVinylEngine.GEAR_BODY_K))
+        l_closed = cv2.morphologyEx(L, cv2.MORPH_CLOSE, k)
+        l_opened = cv2.morphologyEx(L, cv2.MORPH_OPEN, k)
+        body = np.maximum((l_closed - L) / (l_closed + 6.0), (L - l_opened) / (L + 6.0))
+        sg = 7.0
+        one_way = np.hypot(cv2.GaussianBlur(gx, (0, 0), sg), cv2.GaussianBlur(gy, (0, 0), sg)) / (cv2.GaussianBlur(grad, (0, 0), sg) + 1e-3)
+        gear = np.zeros(cand.shape, dtype=bool)
+        for i in np.flatnonzero(cand):
+            x0, y0 = int(stats[i + 1, cv2.CC_STAT_LEFT]), int(stats[i + 1, cv2.CC_STAT_TOP])
+            bw, bh = int(stats[i + 1, cv2.CC_STAT_WIDTH]), int(stats[i + 1, cv2.CC_STAT_HEIGHT])
+            if x0 <= 2 or x0 + bw >= sw - 2 or y0 <= 2:
+                gear[i] = True
+                continue
+            box = (slice(y0, y0 + bh), slice(x0, x0 + bw))
+            m = labels[box] == (i + 1)
+            edges = m & (strong_edges[box] > 0)
+            step_like = bool(edges.any()) and float(np.median(one_way[box][edges])) >= CleanVinylEngine.GEAR_STEP_COHERENCE
+            vals = body[box][m]
+            if step_like:
+                gear[i] = float(np.percentile(vals, 90)) >= CleanVinylEngine.GEAR_BODY_STEP
+            else:
+                gear[i] = float(np.percentile(vals, 95)) >= CleanVinylEngine.GEAR_BODY_THIN
+        return gear
+
     def _compute_protection_maps_small(
         self,
         img_rgb_u8: np.ndarray,
@@ -769,9 +825,13 @@ class CleanVinylEngine:
         keep_shadows: bool,
         smoke_auto: bool = False,
         info: dict | None = None,
+        gear_body: bool = False,
     ):
         """
         Returns (stand protection, stand removal, smoke protection, shadow) maps, uint8, long side 1024.
+        gear_body: a group of strong edges counts as studio gear only when something stands there (see
+            _edge_blobs_with_body). Without it every long strong edge is gear, as before - the hard edge of a
+            cast shadow and a scratch on a lit floor included, and what is "gear" is left untouched.
         smoke_auto: protect smoke only when the frame really has it (see SMOKE_MIN_SHARE); without it everything
             smoke-like is protected, as before.
         info: optional dict that receives what was seen of smoke: "share" / "largest" (smoke-like areas and the
@@ -812,14 +872,20 @@ class CleanVinylEngine:
         edge_blobs = cv2.dilate(strong_edges, k_line)
         num_lbl, labels, stats, _ = cv2.connectedComponentsWithStats(edge_blobs, connectivity=8)
         edge_lut = np.zeros(num_lbl, dtype=np.float32)
+        any_lut = np.zeros(num_lbl, dtype=np.float32)
         if num_lbl > 1:
             bw_e = stats[1:, cv2.CC_STAT_WIDTH]
             bh_e = stats[1:, cv2.CC_STAT_HEIGHT]
             area_e = stats[1:, cv2.CC_STAT_AREA]
             is_horiz_corner = (bw_e > 0.24 * sw) & (bh_e < 0.055 * sh) & ((bw_e / np.maximum(bh_e, 1)) > 5.0)
             valid_edge = ((area_e > 950) | (np.maximum(bw_e, bh_e) > 85)) & (~is_horiz_corner)
+            any_lut[1:] = valid_edge.astype(np.float32)
+            if gear_body and bool(valid_edge.any()):
+                valid_edge = valid_edge & self._edge_blobs_with_body(L, gx, gy, grad, strong_edges, labels, stats, valid_edge)
             edge_lut[1:] = valid_edge.astype(np.float32)
         stand_mask = edge_lut[labels]
+        # every group of strong edges, gear or not: a shadow edge is no gear, and no smoke either (see B)
+        edges_any = any_lut[labels]
 
         # Large dark borders / curtains / lamps / edge-cropped caster feet (exclude tiny dark floor crumbs & model outline!)
         border_dark = ((L < 24.0) & (np.abs(L - bg_l) > 18.0)).astype(np.uint8)
@@ -877,7 +943,7 @@ class CleanVinylEngine:
             # Smoke is looked for in the backdrop only. The person and the gear are left out of every average (instead of
             # being blurred into their surroundings): otherwise their contrast outline reads as "wisps" and a thick ring
             # around every person gets protected as smoke - nothing is cleaned or smoothed there.
-            bg_only = ((fg_s < 0.06) & (stand_mask < 0.4)).astype(np.uint8)
+            bg_only = ((fg_s < 0.06) & (stand_mask < 0.4) & (edges_any < 0.4)).astype(np.uint8)
             bg_only = cv2.erode(bg_only, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))).astype(np.float32)
             den5 = np.maximum(cv2.GaussianBlur(bg_only, (5, 5), 0), 1e-3)
             den35 = np.maximum(cv2.GaussianBlur(bg_only, (35, 35), 0), 1e-3)
@@ -947,6 +1013,107 @@ class CleanVinylEngine:
     # ------------------------------------------------------------------
     # 3. Vinyl Join Seam Detector (Multi-scale thin/wide ratio)
     # ------------------------------------------------------------------
+    SEAM_LIGHT_EDGE = 8.0  # levels (0..255): a tone step this big right at a thin piece = the edge of a lit area
+    SEAM_OWN_LINE = 0.30   # a piece must show, on its own profile, at least this share of what the search saw in it
+
+    @staticmethod
+    def _seam_piece_path(comp: np.ndarray, strength: np.ndarray, y0: int) -> np.ndarray:
+        """
+        Where a thin piece runs: for every column of its box, the row (of the frame at working size) where the
+        search answered strongest; columns the piece skips are filled in from their neighbours, lone jumps are
+        taken out (a median over 9 columns) and the rest is smoothed a little.
+        """
+        bh, bw = comp.shape
+        s = np.where(comp, strength, -1.0)
+        has = comp.any(axis=0)
+        rows = np.argmax(s, axis=0).astype(np.float32)
+        cols = np.arange(bw)
+        path = np.interp(cols, cols[has], rows[has]).astype(np.float32)
+        if bw >= 9:
+            pad = np.pad(path, 4, mode="edge")
+            path = np.median(np.lib.stride_tricks.sliding_window_view(pad, 9), axis=1).astype(np.float32)
+            pad = np.pad(path, 4, mode="edge")
+            path = np.convolve(pad, np.full(9, 1.0 / 9.0, dtype=np.float32), mode="valid").astype(np.float32)
+        return path + float(y0)
+
+    @staticmethod
+    def _seam_piece_check(Ls: np.ndarray, backdrop_s: np.ndarray, piece: dict):
+        """
+        A thin piece of the seam search, looked at once more on its own: the tone of the backdrop across the
+        piece, averaged along the whole piece (the person left out). "Across the piece" follows the piece itself,
+        column by column (piece["path"]): a joint of two sheets is never quite straight, and across a straight
+        line laid through a wavy or bent piece the line smears out and reads as "nothing there".
+        Returns (line, step) or None when there is not enough backdrop around the piece to tell:
+          line - how strongly that profile shows a thin line or a sharp edge at the piece, measured the way the
+                 search measures it. The search averages along short stretches of rows turned by a few degrees;
+                 where such a stretch crosses the slanted rim of a pool of light it answers as to a line, and a
+                 row of such answers makes a "piece" that lies on nothing. Its own profile is a smooth slope;
+          step - the step of the tone right at the line (levels, signed), the slope of the light taken out: the
+                 two bands next to the line give the step, the two further out say how the light climbs or
+                 falls anyway, on each side apart. A joint on a floor that gets lighter towards the camera
+                 gives about zero; the straight edge of a lit area gives its height.
+        """
+        sh, sw = Ls.shape
+        x0, _, bw, _ = piece["box"]
+        xs = np.arange(x0, x0 + bw)
+        line = piece["path"] if piece.get("path") is not None else piece["slope"] * xs + piece["offs"]
+        n0 = max(4, int(round(0.0025 * sh)))          # the close band starts beyond the line and its rim...
+        n1 = n0 + max(4, int(round(0.004 * sh)))      # ...and is this high
+        f0 = max(n1 + 4, int(round(0.012 * sh)))      # the further band
+        f1 = f0 + (n1 - n0)
+        reach = f1 + 1
+        d = np.arange(-reach, reach + 1)
+        rows = np.rint(line[None, :] + d[:, None]).astype(np.int64)
+        inside = (rows >= 0) & (rows < sh)
+        rows = np.clip(rows, 0, sh - 1)
+        cols = np.broadcast_to(xs[None, :], rows.shape)
+        ok = inside & (backdrop_s[rows, cols] > 0.5)
+        cnt = ok.sum(axis=1)
+        if int(cnt.min()) < 0.3 * bw:
+            return None
+        prof = (np.where(ok, Ls[rows, cols], 0.0).sum(axis=1) / cnt).astype(np.float32).reshape(-1, 1)
+        # the two signals of the search (see _detect_vinyl_seam_mask), on this one profile
+        thin_sig = np.abs(cv2.GaussianBlur(prof, (1, 13), 0) - cv2.GaussianBlur(prof, (1, 3), 0))
+        gy = np.zeros_like(prof)
+        gy[1:-1] = np.abs(prof[2:] - prof[:-2])
+        thin_step = np.maximum(0.0, gy - 1.3 * cv2.GaussianBlur(gy, (1, 13), 0))
+        mid = slice(reach - 4, reach + 5)             # the piece itself is a few rows thick
+        line_here = float((thin_sig + thin_step)[mid].max())
+
+        def band(a: int, b: int) -> float:
+            return float(prof[reach + a:reach + b].mean())
+
+        a1, b1, a2, b2 = band(-n1, -n0), band(n0 + 1, n1 + 1), band(-f1, -f0), band(f0 + 1, f1 + 1)
+        per_row = 0.5 * ((b2 - b1) + (a1 - a2)) / float(f0 - n0)   # how the light changes away from the line
+        return line_here, (b1 - a1) - per_row * float(n0 + n1 + 1)
+
+    @staticmethod
+    def _seam_floor_in_view(spans, lead: dict, cand_rows: np.ndarray, allow_s: np.ndarray, tol: float) -> int:
+        """
+        How many columns of floor are in plain view between the pieces of one would-be line, along that line, with
+        no line on them. (A joint is seen wherever the floor is seen: when more floor lies open between the pieces
+        than the pieces are long, they are not one line.)
+        spans: (first column, width) of every piece; lead: the piece that gives the line ("slope", "offs", "xc");
+        cand_rows: the thin candidates of the search summed down the rows (np.cumsum(cand, axis=0));
+        allow_s: 1 where the backdrop is seen (no person, gear or smoke); tol: how far from the line a piece may lie.
+        "A line on them" is anything thin the search saw there, close to the line - also what it could not take as
+        a piece (the joint running along the rim of a pool of light is such a stretch).
+        """
+        sh = allow_s.shape[0]
+        xa = min(x0 for x0, _ in spans)
+        xb = max(x0 + bw for x0, bw in spans)
+        cols = np.arange(xa, xb)
+        lined = np.zeros(cols.size, dtype=bool)
+        for x0, bw in spans:
+            lined[x0 - xa:x0 + bw - xa] = True
+        line_y = lead["slope"] * cols + lead["offs"]
+        rows_l = np.clip(np.rint(line_y).astype(np.int64), 0, sh - 1)
+        near = tol + 0.004 * np.abs(cols - lead["xc"])
+        r_hi = np.clip(np.rint(line_y + near).astype(np.int64), 0, sh - 1)
+        r_lo = np.clip(np.rint(line_y - near).astype(np.int64) - 1, 0, sh - 1)
+        lined |= (cand_rows[r_hi, cols] - cand_rows[r_lo, cols]) > 0
+        return int(np.count_nonzero((allow_s[rows_l, cols] > 0.5) & ~lined))
+
     def _detect_vinyl_seam_mask(
         self,
         img_rgb_u8: np.ndarray,
@@ -958,6 +1125,8 @@ class CleanVinylEngine:
         fast_mode: bool = False,
         join: bool = True,
         skip_line: dict | None = None,
+        step_ok_line: dict | None = None,
+        info: dict | None = None,
     ) -> np.ndarray:
         """
         Thin, long, nearly horizontal lines of the floor: the joint of two backdrop sheets, tape, a crease.
@@ -965,9 +1134,24 @@ class CleanVinylEngine:
             They are judged together - a line counts when its visible pieces add up to a quarter of the frame width.
             (Judged one by one, the shorter side was dropped and the joint was removed on one side of the person
             only.) join=False judges every piece on its own, as the original program did.
+            Two things are told from a joint only in this mode (the original program took both):
+            - the sharp edge of a lit area - the rim of a pool of light, the shadow of a stool. A joint is a line
+              ON the floor: the floor has the same tone on its two sides. Where the tone steps by SEAM_LIGHT_EDGE
+              levels right at the line (the slope of the light taken out), two differently lit areas meet there,
+              and a strip repaired along that edge only smears the light. A slanted edge of that kind gives
+              "pieces" that lie on nothing at all; they do not show in their own profile (_seam_piece_check);
+            - pieces that stand at one height by chance: a scratch at the right border and the shadow line under
+              a leg at the left one. A joint is seen wherever the floor is seen, so between the pieces of one
+              joint the floor is mostly hidden. When more of the floor between them is in plain view (with no
+              line on it) than the pieces themselves are long, they are not one line.
         skip_line: {"row", "slope", "half"} in pixels of the frame - a line that belongs to the corner tool (the
             wall-floor corner). Nothing is marked along it: a repaired strip there would only blur the corner on
             one side and hide it from the corner tool.
+        step_ok_line: the wall-floor corner of the frame when no tool takes it (the same form). The tone does step
+            there, and a crease in the corner is still repaired as a line, as before (see _whole_line_repair_only).
+        info: a dict that receives what the search saw (join only): "pieces" - every thin piece with its place
+            (shares of the frame), its numbers and why it was dropped, if it was; "groups" - the lines tried, with
+            their length, their numbers and the verdict. For the self-checks and for looking into a frame.
         """
         h, w = img_rgb_u8.shape[:2]
         max_dim = 1400.0 if fast_mode else 2400.0
@@ -982,6 +1166,9 @@ class CleanVinylEngine:
         st_s = cv2.resize(stand_s, (sw, sh), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
         sm_s = cv2.resize(smoke_s, (sw, sh), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
         allow_s = ((fg_s < 0.40) & (st_s < 0.55) & (sm_s < 0.50)).astype(np.float32)
+        # (the pieces are checked on everything but the person: the edge of a shadow is often inside a zone kept
+        # as gear, and "no backdrop there to tell" would let it through)
+        not_person_s = (fg_s < 0.40).astype(np.float32)
 
         box_w = 110 if fast_mode else 160
         den_min = 18.0 if fast_mode else 28.0
@@ -1059,10 +1246,36 @@ class CleanVinylEngine:
                 piece = {"box": (x0, y0, bw, bh), "comp": comp, "thin": mean_thin, "wide": mean_wide, "bw": bw}
                 if join:
                     ys_p, xs_p = np.nonzero(comp)
-                    slope, offs = (np.polyfit(xs_p + x0, ys_p + y0, 1) if bw >= 40 else (0.0, float(ys_p.mean()) + y0))
+                    # (the piece may hold a couple of points only: a fit through one column has no direction)
+                    fit_ok = bw >= 40 and int(xs_p.max()) - int(xs_p.min()) >= 20
+                    slope, offs = (np.polyfit(xs_p + x0, ys_p + y0, 1) if fit_ok else (0.0, float(ys_p.mean()) + y0))
                     if abs(slope) > 0.06:  # steeper than the search looks for: take the piece as level
                         slope, offs = 0.0, float(ys_p.mean()) + y0
                     piece.update(slope=float(slope), offs=float(offs), xc=x0 + 0.5 * bw)
+                    piece["path"] = self._seam_piece_path(comp, best_thin[y0:y0 + bh, x0:x0 + bw], y0)
+                    in_corner = False
+                    if step_ok_line is not None:
+                        xc_f = (piece["xc"] + 0.5) / scale - 0.5
+                        yc_f = (piece["slope"] * piece["xc"] + piece["offs"] + 0.5) / scale - 0.5
+                        y_cor = float(step_ok_line["row"]) + float(step_ok_line["slope"]) * (xc_f - (w - 1) / 2.0)
+                        in_corner = abs(yc_f - y_cor) <= float(step_ok_line.get("half", 0.012 * h))
+                    why = None
+                    own = None if in_corner else self._seam_piece_check(Ls, not_person_s, piece)
+                    if own is not None:
+                        if abs(own[1]) >= self.SEAM_LIGHT_EDGE:
+                            why = "edge of light"     # two differently lit areas meet there: not a joint
+                        elif own[0] < self.SEAM_OWN_LINE * mean_thin:
+                            why = "no line of its own"
+                    if info is not None:
+                        info.setdefault("pieces", []).append({
+                            "x0": x0 / sw, "x1": (x0 + bw) / sw, "y0": y0 / sh, "y1": (y0 + bh) / sh,
+                            "thin": mean_thin, "wide": mean_wide, "in_corner": bool(in_corner),
+                            "own": None if own is None else float(own[0]), "step": None if own is None else float(own[1]),
+                            "dropped": why,
+                        })
+                    if why is not None:
+                        continue
+                    piece["no"] = len(info["pieces"]) - 1 if info is not None else -1
                 pieces.append(piece)
 
         accepted = []
@@ -1072,6 +1285,7 @@ class CleanVinylEngine:
             pieces.sort(key=lambda pc: -pc["bw"])
             tol = max(5.0 * (max_dim / 2400.0), 0.005 * sh)
             free = [True] * len(pieces)
+            cand_rows = None
             for i, lead in enumerate(pieces):
                 if not free[i] or lead["bw"] < 0.12 * sw:
                     continue  # a line is started by a piece long enough to give its direction
@@ -1095,7 +1309,20 @@ class CleanVinylEngine:
                 wide_g = sum(pieces[g]["wide"] * pieces[g]["bw"] for g in group) / total_w
                 for g in group:
                     free[g] = False
-                if total_w > 0.24 * sw and thin_g / (wide_g + 0.05) >= 1.05:
+                if len(group) > 1:
+                    if cand_rows is None:
+                        cand_rows = np.cumsum(cand, axis=0, dtype=np.int32)
+                    in_view = self._seam_floor_in_view(
+                        [(pieces[g]["box"][0], pieces[g]["bw"]) for g in group], lead, cand_rows, allow_s, tol)
+                else:
+                    in_view = 0
+                is_line = in_view <= total_w and total_w > 0.24 * sw and thin_g / (wide_g + 0.05) >= 1.05
+                if info is not None:
+                    info.setdefault("groups", []).append({
+                        "pieces": [pieces[g]["no"] for g in group], "length": total_w / sw, "in_view": in_view / sw,
+                        "thin": thin_g, "wide": wide_g, "accepted": bool(is_line),
+                    })
+                if is_line:
                     accepted.extend(pieces[g] for g in group)
         for pc in accepted:
             x0, y0, bw, bh = pc["box"]
@@ -1170,6 +1397,92 @@ class CleanVinylEngine:
         share = np.clip((ratio - start) / max(full - start, 1e-6), 0.0, 1.0)
         return (1.0 + share * np.maximum(ratio - 1.0, 0.0)).astype(np.float32)
 
+    # A dirty spot INSIDE a cast shadow. The search drops every blob of more than a few pixels that lies in a
+    # shadow: the darker parts of a shadow are the shadow itself. A scuff mark under a hand's shadow was kept with
+    # them. It is told apart by what a part of a shadow is not, all at once:
+    #   small and compact; clearly darker than the shadow around it (PEAK x the threshold of the place, which is
+    #   already more than twice the usual one inside a shadow); the shadow around it is even on every side and
+    #   empty of other finds (RING_BUSY) - so not the soft rim of the shadow, not a fold of it, not the place
+    #   where two shadows cross (there the lit floor comes up to the dark patch); it does not touch the person
+    #   or the gear - so not a contact shadow.
+    #   "Even": the shadow around the spot (the darkest against the lightest twentieth of the ring) varies by less
+    #   than RING_DEPTH of the depth of the spot, and never by more than RING_FLAT_MAX levels.
+    # Only dark spots: a light patch inside a shadow is a gap in the shadow.
+    # What cannot be told apart: the small shadow of a small thing that lies wholly inside a bigger shadow, away
+    # from the thing itself. It goes too (the eraser of the big window brings it back).
+    # The limits come from the owner's frames (2048 / 1400 px working copies):
+    #   the scuff inside a hand's shadow on the grey floor: 1.36 / 1.41 x the threshold, its surroundings vary by
+    #   0.61 / 0.50 of its depth (the shadow of a hand is small, its rim is near);
+    #   faint patches along the soft rim of a pool of light on the black floor: 1.07 and 1.13 x the threshold;
+    #   a piece of a hard shadow edge: 4.6 x the threshold, surroundings vary by 0.98 of its depth.
+    SHADOW_SPOT_MAX_DIM = 0.035   # of the long side
+    SHADOW_SPOT_PEAK = 1.25
+    SHADOW_SPOT_FILL = 0.30
+    SHADOW_SPOT_ASPECT = 3.5
+    SHADOW_SPOT_RING_DEPTH = 0.75
+    SHADOW_SPOT_RING_FLAT_MAX = 12.0   # levels (0..255)
+    SHADOW_SPOT_RING_BUSY = 0.08
+    SHADOW_SPOT_TRY = 600
+
+    @classmethod
+    def _shadow_spots(cls, idxs, stats, labels, spot_cand, dark_diff, d_thr_map, L, L_med, bg_safe, low_thr: float,
+                      info: list | None = None) -> np.ndarray:
+        """
+        The blobs `idxs` (labels of the medium pass that lie in a cast shadow) which are dirt and not shadow (see
+        SHADOW_SPOT_* above), as a mask of the working size. A blob that qualifies is taken whole: its darkest part
+        passed the (raised) threshold of the shadow, the rest of it is added down to `low_thr`, otherwise the repair
+        would cut the middle out and leave the rim as a ring.
+        """
+        sh, sw = labels.shape
+        out = np.zeros((sh, sw), dtype=np.uint8)
+        lim = cls.SHADOW_SPOT_MAX_DIM * max(sh, sw)
+        for idx in list(idxs)[:cls.SHADOW_SPOT_TRY]:
+            x, y, bw, bh, area = (int(v) for v in stats[idx, :5])
+            why = None
+            if max(bw, bh) > lim:
+                why = "large"
+            elif area < cls.SHADOW_SPOT_FILL * bw * bh or max(bw, bh) > cls.SHADOW_SPOT_ASPECT * max(1, min(bw, bh)):
+                why = "not compact"
+            m = max(6, int(round(0.5 * max(bw, bh))))
+            x0, x1, y0, y1 = max(0, x - m), min(sw, x + bw + m), max(0, y - m), min(sh, y + bh + m)
+            box = (slice(y0, y1), slice(x0, x1))
+            comp = labels[box] == idx
+            peak = flat = busy = None
+            depth = 0.0
+            if why is None:
+                dd = dark_diff[box]
+                # (how dark the spot is, is read from a slightly smoothed copy: in a faint patch of a dark frame
+                # single pixels stick out by half as much again, in a real spot they do not)
+                dd_s = cv2.GaussianBlur(dd, (0, 0), 1.2)
+                peak = float((dd_s[comp] / np.maximum(d_thr_map[box][comp], 1e-3)).max())
+                depth = float(dd_s[comp].max())
+                if peak < cls.SHADOW_SPOT_PEAK or float((L[box][comp] - L_med[box][comp]).mean()) >= 0.0:
+                    why = "faint"
+            if why is None:
+                near = cv2.dilate(comp.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+                ring = ~near
+                if (x1 - x0) < bw + 2 * m or (y1 - y0) < bh + 2 * m or not bool(bg_safe[box].all()):
+                    why = "touches the person, the gear or the border"
+                else:
+                    ring_l = L_med[box][ring]
+                    flat = float(np.percentile(ring_l, 95) - np.percentile(ring_l, 5))
+                    busy = float(np.count_nonzero(spot_cand[box][ring])) / float(max(1, ring_l.size))
+                    if flat > min(cls.SHADOW_SPOT_RING_FLAT_MAX, cls.SHADOW_SPOT_RING_DEPTH * depth):
+                        why = "the shadow around it is not even"
+                    elif busy > cls.SHADOW_SPOT_RING_BUSY:
+                        why = "other finds around it"
+            if why is None:
+                # the whole spot: what hangs together with its dark middle, down to the low threshold
+                soft = ((dark_diff[box] > low_thr) | comp).astype(np.uint8)
+                n_s, lab_s = cv2.connectedComponents(soft, connectivity=8)
+                keep = np.isin(lab_s, np.unique(lab_s[comp]))
+                out[box][keep] = 255
+            if info is not None:
+                info.append({"x": (x + 0.5 * bw) / sw, "y": (y + 0.5 * bh) / sh, "w": bw / sw, "h": bh / sh, "area": area,
+                             "peak": peak, "depth": depth, "ring_flat": flat, "ring_busy": busy,
+                             "taken": why is None, "why": why})
+        return out
+
     def _detect_spots_mask(
         self,
         img_rgb_u8: np.ndarray,
@@ -1183,8 +1496,13 @@ class CleanVinylEngine:
         frac_med: bool = True,
         frac_large: bool = True,
         local_grain: bool = False,
+        shadow_spots: bool = False,
+        info: dict | None = None,
     ):
         """
+        shadow_spots: a dirty spot inside a cast shadow is found too (see SHADOW_SPOT_* above); without it nothing
+        larger than a speck is ever touched inside a shadow, as in the original program.
+        info: a dict that receives "shadow_spots" - every blob tried by that rule, with its numbers and the verdict.
         local_grain: the fine pass judges every place against the noise found THERE, wherever that is clearly above
         the noise of the frame as a whole (see _local_grain_gain). A dark frame with a pool of light needs it: the
         frame noise is measured on the dark majority, the lit floor is twice as noisy, and that plain noise was
@@ -1260,9 +1578,19 @@ class CleanVinylEngine:
                 | ((areas > 45) & (areas <= 650) & frac_med)
                 | ((areas > 650) & frac_large)
             )
-            valid_sp = (areas >= 2) & (areas <= 3500) & (max_dim <= 180) & frac_ok & ~((sh_means > 48.0) & (areas > 28))
+            sized_ok = (areas >= 2) & (areas <= 3500) & (max_dim <= 180) & frac_ok
+            in_shadow = (sh_means > 48.0) & (areas > 28)
+            valid_sp = sized_ok & ~in_shadow
             spot_lut[1:] = valid_sp.astype(np.uint8) * 255
         clean_spots = spot_lut[labels]
+        if shadow_spots and num_lbl > 1 and bool(np.any(sized_ok & in_shadow)):
+            tried = [] if info is not None else None
+            clean_spots = np.maximum(clean_spots, self._shadow_spots(
+                np.nonzero(sized_ok & in_shadow)[0] + 1, stats, labels, spot_cand, dark_diff, d_thr_map, L, L_med,
+                bg_safe_geom, max(1.5, 0.5 * dark_thr), tried,
+            ))
+            if info is not None:
+                info["shadow_spots"] = tried
 
         spot_full = (cv2.resize(clean_spots, (w, h), interpolation=cv2.INTER_LINEAR) > 64).astype(np.uint8)
 
@@ -1828,6 +2156,10 @@ class CleanVinylEngine:
         map_y = np.arange(hh, dtype=np.float32)[:, None] + delta.astype(np.float32)[None, :]
         return cv2.remap(img, map_x, map_y, cv2.INTER_LINEAR, borderMode=border, borderValue=0)
 
+    CORNER_MIN_SCORE = 0.12        # a line scoring less is no corner (faint joints score about 0.002, a real corner 0.3-2)
+    CORNER_UPPER_MIN_SCORE = 0.15  # a line above the strongest one: wins when it scores at least this...
+    CORNER_UPPER_MIN_REL = 0.04    # ...and its step is this share of the brightness around it (L* + 1)
+
     @staticmethod
     def _find_corner_line(L: np.ndarray, valid: np.ndarray, y_lo: float = 0.25, y_hi: float = 0.82,
                           max_slope: float = 0.10, n_slopes: int = 21, scales=((2, 6), (4, 12))):
@@ -1839,6 +2171,13 @@ class CleanVinylEngine:
         surfaces). A slow light fall-off, the soft edge of a pool of light, a thin floor seam or a short edge is not
         a corner. When several lines score about alike, the highest one is the corner: shadows, pools of light and
         seams all lie on the floor, below it.
+        The same holds when the lines do NOT score alike. On a dark frame the corner is a step of half an L* (wall
+        and floor are both nearly black) while the shadow of a stool or the rim of a pool of light, lower on the
+        floor, is ten times that - and sharp enough to pass every test above. Bending the light there ruins the
+        floor. So a line above the strongest one is the corner when it is one in its own right: it passes the
+        usual limit with a margin (CORNER_UPPER_MIN_SCORE), runs along at least half of the visible backdrop and
+        can be seen - its step is at least CORNER_UPPER_MIN_REL of the brightness around it. (On a light backdrop
+        that is a step of well over one L*, which is no faint line; a faint one never wins there.)
         Returns dict(slope [rows per column], row [at the centre column], step [L*], cov, score) or None.
         """
         h, w = L.shape
@@ -1874,6 +2213,7 @@ class CleanVinylEngine:
             score = np.zeros(h, np.float32)
             mean_sharp_best = np.zeros(h, np.float32)
             cov_best = np.zeros(h, np.float32)
+            level_best = np.zeros(h, np.float32)
             for r1, r2 in scales:  # a sharp corner and a slightly out-of-focus one
                 okb = seg_ok & shifted(seg_ok, r2) & shifted(seg_ok, -r2)
                 step = shifted(P, r1) - shifted(P, -r1)
@@ -1925,23 +2265,26 @@ class CleanVinylEngine:
                 score = np.where(better, sc_r, score)
                 mean_sharp_best = np.where(better, mean_sharp, mean_sharp_best)
                 cov_best = np.where(better, cov, cov_best)
+                level_best = np.where(better, (P * okb).sum(axis=1) / np.maximum(n_ok, 1), level_best)
             score[: int(h * y_lo)] = 0.0
             score[int(h * y_hi):] = 0.0
-            return score, mean_sharp_best, cov_best
+            return score, mean_sharp_best, cov_best, level_best
 
         # 1) every slope of the coarse grid: what each row scores at best
         row_score = np.zeros(h, np.float32)
         row_slope = np.zeros(h, np.float32)
         row_step = np.zeros(h, np.float32)
         row_cov = np.zeros(h, np.float32)
+        row_level = np.zeros(h, np.float32)
         step_a = 2.0 * max_slope / (n_slopes - 1)
         for a in np.linspace(-max_slope, max_slope, n_slopes):
-            sc_a, st_a, cov_a = scores_for(float(a))
+            sc_a, st_a, cov_a, lv_a = scores_for(float(a))
             better = sc_a > row_score
             row_score = np.where(better, sc_a, row_score)
             row_slope = np.where(better, np.float32(a), row_slope)
             row_step = np.where(better, st_a, row_step)
             row_cov = np.where(better, cov_a, row_cov)
+            row_level = np.where(better, lv_a, row_level)
         top = float(row_score.max())
         i0 = int(np.argmax(row_score))
         if top > 0:
@@ -1954,6 +2297,13 @@ class CleanVinylEngine:
                     break
                 i0 = min(i0, j)
                 left[max(0, j - apart):j + apart + 1] = 0.0
+            # 2b) ...and a visible line above it, however faint next to it (see the doc): the highest such line
+            seen = ((row_score >= CleanVinylEngine.CORNER_UPPER_MIN_SCORE) & (row_cov >= 0.5)
+                    & (np.abs(row_step) >= CleanVinylEngine.CORNER_UPPER_MIN_REL * (row_level + 1.0)))
+            seen[max(0, i0 - apart):] = False
+            if bool(seen.any()):
+                j = int(np.flatnonzero(seen)[0])
+                i0 = j + int(np.argmax(np.where(seen[j:j + apart + 1], row_score[j:j + apart + 1], 0.0)))
         best = {"slope": float(row_slope[i0]), "row": float(i0), "step": float(row_step[i0]),
                 "cov": float(row_cov[i0]), "score": float(row_score[i0])}
         if best["score"] > 0:
@@ -1962,7 +2312,7 @@ class CleanVinylEngine:
             lo_r, hi_r = max(0, i0 - near), min(h, i0 + near + 1)
             for t in (-0.75, -0.5, -0.25, 0.25, 0.5, 0.75):
                 a = float(row_slope[i0]) + step_a * t
-                sc_a, st_a, cov_a = scores_for(a)
+                sc_a, st_a, cov_a, _ = scores_for(a)
                 j = lo_r + int(np.argmax(sc_a[lo_r:hi_r]))
                 if float(sc_a[j]) > best["score"]:
                     best = {"slope": float(a), "row": float(j), "step": float(st_a[j]), "cov": float(cov_a[j]),
@@ -2035,7 +2385,7 @@ class CleanVinylEngine:
         bad = (fg_s > 0.04) | (st_s > 0.25) | (sk_s > 0.20)
         valid = 1.0 - cv2.dilate(bad.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(np.float32)
         line = self._find_corner_line(L, valid)
-        if line is None or line["score"] < 0.12:
+        if line is None or line["score"] < self.CORNER_MIN_SCORE:
             return None
         return {"row": (line["row"] + 0.5) / sc - 0.5, "slope": float(line["slope"]), "half": 0.012 * h + 2.0 / sc,
                 "step": float(line["step"])}
@@ -2277,7 +2627,7 @@ class CleanVinylEngine:
 
         if line is None:
             found = self._find_corner_line(L, background(st_s))
-            if found is None or found["score"] < 0.12:
+            if found is None or found["score"] < self.CORNER_MIN_SCORE:
                 return cleaned_f32, np.zeros((h, w), dtype=np.float32)
             a_lin, row_small, step_sign = found["slope"], found["row"], found["step"]
         else:
@@ -2778,6 +3128,7 @@ class CleanVinylEngine:
             remove_stands = bool(params.get("removeStands", False))
             master_val = float(params.get("master", 100))
             seam_join = bool(params.get("seamJoin", True))
+            gear_body = bool(params.get("gearBody", True))
             cyc_str = float(params.get("cycCurve", 0))
             frac_fine = bool(params.get("fracFine", True))
             frac_med = bool(params.get("fracMed", True))
@@ -2794,7 +3145,8 @@ class CleanVinylEngine:
                     progress_cb(65, "Пошук дефектів для зеленої маски...")
                 fg_mask_u8, core_mask_u8 = self._clean_fg_mask(fg_raw_1024, w, h, edge_prot)
                 stand_protect_s, stand_remove_s, smoke_s, shadow_s = self._compute_protection_maps_small(
-                    img_rgb_u8, fg_mask_u8, core_mask_u8, smoke_str, smoke_on, keep_shadow, smoke_auto=smoke_auto
+                    img_rgb_u8, fg_mask_u8, core_mask_u8, smoke_str, smoke_on, keep_shadow, smoke_auto=smoke_auto,
+                    gear_body=gear_body,
                 )
                 eff_stand_protect = np.zeros_like(stand_protect_s) if remove_stands else stand_protect_s
                 eff_fg_for_spots = core_mask_u8 if remove_stands else fg_mask_u8
@@ -2807,6 +3159,7 @@ class CleanVinylEngine:
                     seam_mask = self._detect_vinyl_seam_mask(
                         img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_s, seam_eff, edge_prot, fast_mode=False,
                         join=seam_join, skip_line=(corner_line if cyc_str > 0 else None),
+                        step_ok_line=(corner_line if cyc_str <= 0 else None),
                     )
                     if cyc_str <= 0 and corner_line is not None:
                         seam_mask = self._whole_line_repair_only(seam_mask, corner_line, eff_fg_for_spots)
@@ -2824,6 +3177,7 @@ class CleanVinylEngine:
                     frac_med=frac_med,
                     frac_large=frac_large,
                     local_grain=bool(params.get("grainLocal", True)),
+                    shadow_spots=bool(params.get("shadowSpots", True)),
                 )
 
                 action_bin = np.maximum(seam_mask, spot_mask)
@@ -3082,6 +3436,10 @@ class CleanVinylEngine:
             seam_join = bool(params.get("seamJoin", True))
             # "grainLocal": dust is judged against the noise of the place it lies in (see _detect_spots_mask)
             grain_local = bool(params.get("grainLocal", True))
+            # "gearBody": studio gear is told by its body; a shadow edge or a scratch is not gear (_edge_blobs_with_body)
+            gear_body = bool(params.get("gearBody", True))
+            # "shadowSpots": a dirty spot inside a cast shadow is found too (see SHADOW_SPOT_*)
+            shadow_spots = bool(params.get("shadowSpots", True))
 
             frac_fine = bool(params.get("fracFine", True))
             frac_med = bool(params.get("fracMed", True))
@@ -3134,7 +3492,7 @@ class CleanVinylEngine:
                     sc[name] = (key, value)
 
             k_fg = self._fg_stage_key(edge_prot)
-            k_maps = (k_fg, smoke_str, smoke_on, smoke_auto, keep_shadow)
+            k_maps = (k_fg, smoke_str, smoke_on, smoke_auto, keep_shadow, gear_body)
             # The wall-floor corner and the seam search. With the corner tool on, the line is left to that tool: the
             # seam search skips its strip. With the tool at 0 (or when the selection holds only a part of the line,
             # so the tool leaves it) the seam search may take the line for a joint, as it always could - but only
@@ -3149,12 +3507,13 @@ class CleanVinylEngine:
             k_detect = (
                 k_maps, remove_stands, seam_on, (seam_eff if seam_on else 0.0),
                 spots_eff, frac_fine, frac_med, frac_large, (seam_join if seam_on else True), corner_skip, grain_local,
+                shadow_spots,
             )
             # The two searches inside "detect" are also remembered one by one: moving the dust slider does not look
             # for the seam again, and the other way round.
             k_seam = (k_maps, remove_stands, seam_eff, seam_join, corner_skip)
             k_corner = (k_maps, remove_stands)  # the wall-floor corner of the untouched frame
-            k_spots = (k_maps, remove_stands, spots_eff, frac_fine, frac_med, frac_large, grain_local)
+            k_spots = (k_maps, remove_stands, spots_eff, frac_fine, frac_med, frac_large, grain_local, shadow_spots)
             k_heal = (k_detect, fast_mode, grain_keep)
             # Order of the tone stages: corner -> stains -> blur. The corner goes first: once the wall-floor step is a
             # smooth slope, the stain stage sees no edge there and evens the backdrop across it.
@@ -3271,7 +3630,7 @@ class CleanVinylEngine:
                             smoke_info = {}
                             stand_protect_s, stand_remove_s, smoke_s, shadow_s = self._compute_protection_maps_small(
                                 img_rgb_u8, fg_mask_u8, core_mask_u8, smoke_str, smoke_on, keep_shadow,
-                                smoke_auto=smoke_auto, info=smoke_info,
+                                smoke_auto=smoke_auto, info=smoke_info, gear_body=gear_body,
                             )
                             smoke_info.update({"on": bool(smoke_on), "auto": bool(smoke_auto)})
                             _sc_put("maps", k_maps, (stand_protect_s, stand_remove_s, smoke_s, shadow_s, smoke_info))
@@ -3314,6 +3673,7 @@ class CleanVinylEngine:
                                     seam_mask = self._detect_vinyl_seam_mask(
                                         img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_s, seam_eff, edge_prot, fast_mode=False,
                                         join=seam_join, skip_line=(corner_line if corner_skip else None),
+                                        step_ok_line=(corner_frame if corner_line is None else None),
                                     )
                                     if corner_whole and corner_frame is not None and corner_line is None:
                                         seam_mask = self._whole_line_repair_only(seam_mask, corner_frame, eff_fg_for_spots)
@@ -3337,6 +3697,7 @@ class CleanVinylEngine:
                                         frac_med=frac_med,
                                         frac_large=frac_large,
                                         local_grain=grain_local,
+                                        shadow_spots=shadow_spots,
                                     )
                                     _sc_put("spots", k_spots, (spot_mask, grain_sigma))
 
@@ -3627,6 +3988,7 @@ class CleanVinylEngine:
                     frac_med=frac_med,
                     frac_large=frac_large,
                     local_grain=grain_local,
+                    shadow_spots=shadow_spots,
                 )
                 spot2_mask[heal_mask > 0] = 0
                 if np.any(spot2_mask > 0):
@@ -4165,6 +4527,7 @@ class CleanVinylEngine:
             bool(p.get("seamOn", True)), fl("seam", 85), fl("edge", 70),
             bool(p.get("smokeOn", True)), fl("smoke", 80), fl("grain", 90),
             CleanVinylEngine._smoke_auto(p), bool(p.get("seamJoin", True)), bool(p.get("grainLocal", True)),
+            bool(p.get("gearBody", True)), bool(p.get("shadowSpots", True)),
             bool(p.get("shadow", True)), bool(p.get("removeStands", False)),
             max(100.0, fl("master", 100)),
             "fast" if str(p.get("speedMode", "quality")).lower() == "fast" else "quality",

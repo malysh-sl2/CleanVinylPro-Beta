@@ -10,8 +10,8 @@
 Усі версії лежать на сторінці **[Releases](https://github.com/malysh-sl2/CleanVinylPro-Beta/releases)**.
 Найновіша версія — вгорі.
 
-Остання версія зараз — **4.5.0**:
-**[завантажити CleanVinylPro2.zip](https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.5.0/CleanVinylPro2.zip)**
+Остання версія зараз — **4.6.0**:
+**[завантажити CleanVinylPro2.zip](https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.6.0/CleanVinylPro2.zip)**
 
 На сторінці Releases натискайте посилання «Завантажити CleanVinylPro2.zip» у тексті. Файли «Source code»
 завантажувати не потрібно.
