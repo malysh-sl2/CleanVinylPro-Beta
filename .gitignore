@@ -22,6 +22,8 @@ CleanVinylPro2/server/models/
 .venv_old/
 CleanVinylPro2/server/launch_server_minimized.vbs
 CleanVinylPro2/server/_task_tmp.xml
+# Backups of the owner's settings (the panel button "Бекап налаштувань" writes them here on his PC)
+CleanVinylPro2/backup/
 
 # OS / editor leftovers
 Thumbs.db

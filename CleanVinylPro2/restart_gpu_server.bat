@@ -40,7 +40,7 @@ for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr /R /C:"127\.0\.0\.1:18
 )
 timeout /t 1 /nobreak >nul
 
-echo Запускаємо оновлений AI GPU сервер Clean Vinyl Pro 2 v4.4.0...
+echo Запускаємо оновлений AI GPU сервер Clean Vinyl Pro 2 v4.5.0...
 echo (Ви можете згорнути це вікно, але не закривайте його під час роботи у Photoshop)
 echo.
 "server\.venv\Scripts\python.exe" "server\server.py"

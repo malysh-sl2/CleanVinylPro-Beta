@@ -24,7 +24,8 @@ import zipfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FOLDER = "CleanVinylPro2"
 ZIP_PATH = os.path.join(ROOT, FOLDER + ".zip")
-SKIP_DIRS = {".venv", ".venv_old", "venv", "models", "__pycache__", "node_modules"}
+# (backup: the owner's settings backups, written by the server on his PC - they are his, never part of the program)
+SKIP_DIRS = {".venv", ".venv_old", "venv", "models", "__pycache__", "node_modules", "backup"}
 # presets.json and the like are written by the server; launch_server_minimized.vbs and _task_tmp.xml by setup_launcher.py
 SKIP_FILES = {"presets.json", "user_presets.json", "user_settings.json", "launch_server_minimized.vbs", "_task_tmp.xml"}
 SKIP_ENDINGS = (".pyc", ".pyo", ".log", ".tmp", ".part")

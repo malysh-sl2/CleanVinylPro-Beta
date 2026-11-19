@@ -321,7 +321,8 @@ html, body {
 
 /* A press that waits for the server (the action starts by itself when the status turns green) */
 .btn-primary.waiting,
-.btn-sec.waiting {
+.btn-sec.waiting,
+.mini-util-btn.waiting {
   background: #5a4a1e;
   border-color: #c79a3a;
   color: #ffe7b0;
@@ -432,6 +433,55 @@ html, body {
 
 .panel-help-box.visible {
   display: block;
+}
+
+/* Бекап налаштувань: текст, шлях до файла, список бекапів для відновлення */
+.backup-line {
+  margin-bottom: 4px;
+}
+
+.backup-path {
+  margin-bottom: 4px;
+  padding: 4px 5px;
+  border-radius: 3px;
+  background: #171b21;
+  color: #ffffff;
+  word-break: break-word;
+}
+
+.backup-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 190px;
+  overflow-y: auto;
+}
+
+.backup-row {
+  margin: 2px 0;
+  border: 1px solid #445368;
+  background: #27303d;
+  color: #dbe8ff;
+  border-radius: 4px;
+  padding: 5px 6px;
+  cursor: pointer;
+}
+
+.backup-row:hover {
+  background: #334052;
+  border-color: #647b9c;
+  color: #ffffff;
+}
+
+.backup-row.armed {
+  background: #6b3a1e;
+  border-color: #ffab5c;
+  color: #ffffff;
+}
+
+.backup-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
 }
 
 .footer-status {
@@ -1061,6 +1111,23 @@ html, body {
   font-size: 10.5px;
 }
 
+/* «Скинути пресет до стандартних»: друге натискання підтверджує */
+.gear-reset-btn {
+  margin-top: 4px;
+  border-color: #6b5a3a;
+  color: #ffd9a8;
+}
+
+.gear-reset-btn.is-dim {
+  opacity: 0.5;
+}
+
+.gear-reset-btn.armed {
+  background: #6b3a1e;
+  border-color: #ffab5c;
+  color: #ffffff;
+}
+
 .g-passes-row {
   display: flex;
   align-items: center;
@@ -1241,6 +1308,17 @@ html, body {
   height: 1px;
   background: #3d3d3d;
   margin: 2px 0;
+}
+
+/* Крок назад / уперед: тьмяні, коли кроків немає (натискання тоді лише пояснює це словами) */
+.r4m-step-btn.is-dim {
+  opacity: 0.42;
+}
+
+.r4m-step-btn.is-dim:hover {
+  background: #2b3340;
+  border-color: #4e5c70;
+  color: #eef4ff;
 }
 
 .r4m-size-box {

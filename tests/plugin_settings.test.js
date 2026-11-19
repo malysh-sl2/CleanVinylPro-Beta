@@ -3,8 +3,12 @@
 //   - the move of the idle-unload default from 30 s to 2 minutes;
 //   - that the settings added in 4.3.0 (automatic preset; the AUTO button of the fractions as the user left it and
 //     as the active preset made it) are read from old and new files and written back;
-//   - the one-time moves of changed preset defaults (4.4.0: "Циклорама" 0 -> 65 in four built-in presets): made
-//     once, only where the stored value is still the former default, never in the user's own presets.
+//   - the one-time moves of changed preset defaults (4.4.0: "Циклорама" 0 -> 65 in four built-in presets; 4.5.0:
+//     smoke protection off except in "Зйомка з димом", "Темний ключ" with dust 92 -> 80 and "Циклорама" 0 -> 65):
+//     made once, only where the stored value is still the former default, never in the user's own presets;
+//   - the built-in presets added by a new version (4.5.0: three dark presets by framing) land under the preset
+//     they follow, once, and never come back after the user deleted them;
+//   - the automatic preset knows the dark framings.
 //   node tests/plugin_settings.test.js
 const fs = require("fs");
 const path = require("path");
@@ -104,10 +108,13 @@ for (const [name, snapshot, expAutoPreset, expUser, expNow] of newKeys) {
 // ------------------------------------------------------------------ one-time moves of changed preset defaults
 const movesConst = src.match(/const PRESET_DEFAULT_MOVES = \[[\s\S]*?\n\];\n/);
 if (!movesConst) throw new Error("PRESET_DEFAULT_MOVES not found in main.js");
+const switchesConst = src.match(/const PRESET_SWITCHES = \{[\s\S]*?\n\};\n/);
+if (!switchesConst) throw new Error("PRESET_SWITCHES not found in main.js");
 const movesCode = `
 ${movesConst[0]}
+${switchesConst[0]}
 let activePresetId = "std", speedMode = "fast", makeMaskDefault = false, fracAuto = true, fracAutoUser = true, autoPreset = true;
-let idleUnloadSec = 120, settingsMigrated = false;
+let idleUnloadSec = 120, settingsMigrated = false, smokeEnabled = true;
 const DEFAULT_IDLE_UNLOAD_SEC = 120, LEGACY_IDLE_UNLOAD_SEC = 30, SETTINGS_SCHEMA_VERSION = 5;
 let deletedDefaultIds = [], knownDefaultIds = [], presetsList = [], appliedPresetMoves = [];
 const sessState = { brushSize: 24 };
@@ -116,8 +123,13 @@ function el() { return null; }
 function getSliderVal(id) { return sliders[id] ?? 0; }
 function setSliderVal(id, v) { sliders[id] = v; return v; }
 function setIdleUnloadSec() {}
-function readCurrentConfig() { return { cycCurve: getSliderVal("gSlCyc") }; }
-function applyConfig(cfg) { setSliderVal("gSlCyc", (cfg && cfg.cycCurve) ?? 0); }
+function readCurrentConfig() { return { cycCurve: getSliderVal("gSlCyc"), spots: getSliderVal("gSlSpots"), smokeOn: smokeEnabled }; }
+function applyConfig(cfg) {
+  const c = cfg || {};
+  setSliderVal("gSlCyc", c.cycCurve ?? 0);
+  setSliderVal("gSlSpots", c.spots ?? 75);
+  smokeEnabled = c.smokeOn !== undefined ? !!c.smokeOn : false;
+}
 ${grab("setAutoPreset")}
 ${grab("buildSettingsSnapshot")}
 ${grab("applySettingsSnapshot")}
@@ -127,12 +139,14 @@ module.exports = function runMoves(presets, snapshot, times) {
   appliedPresetMoves = [];
   activePresetId = "std";
   setSliderVal("gSlCyc", 0);
+  setSliderVal("gSlSpots", 75);
+  smokeEnabled = true;
   if (snapshot) applySettingsSnapshot(snapshot);
   const changed = [];
   for (let i = 0; i < (times || 1); i++) changed.push(applyPresetDefaultMoves());
-  const cyc = {};
-  presetsList.forEach((p) => (cyc[p.id] = p.cfg.cycCurve));
-  return { changed, cyc, slider: getSliderVal("gSlCyc"), saved: buildSettingsSnapshot() };
+  const cyc = {}, spots = {}, smoke = {};
+  presetsList.forEach((p) => { cyc[p.id] = p.cfg.cycCurve; spots[p.id] = p.cfg.spots; smoke[p.id] = p.cfg.smokeOn; });
+  return { changed, cyc, spots, smoke, slider: getSliderVal("gSlCyc"), spotsSlider: getSliderVal("gSlSpots"), smokeNow: smokeEnabled, saved: buildSettingsSnapshot() };
 };
 `;
 const modMoves = { exports: null };
@@ -140,11 +154,20 @@ new Function("module", movesCode)(modMoves);
 const runMoves = modMoves.exports;
 
 const defaultsNow = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "CleanVinylPro2", "server", "presets_defaults.json"), "utf8"));
-const MOVED = ["std", "medium_shot", "wide_shot", "clean_stands"];
-const as430 = () => defaultsNow.map((p) => Object.assign({}, p, { cfg: Object.assign({}, p.cfg, { cycCurve: 0 }) })); // the presets a 4.3.0 PC holds
-const mine = { id: "my_1", name: "Мій", builtin: false, cfg: { cycCurve: 0 } };
-const expectCyc = (r, want) => Object.keys(want).every((id) => r.cyc[id] === want[id]);
-const allMoved = Object.fromEntries(defaultsNow.map((p) => [p.id, MOVED.includes(p.id) ? 65 : 0]));
+// The built-in presets as the PCs of earlier versions hold them
+const IDS_440 = ["std", "medium_shot", "closeup", "wide_shot", "lowkey", "smoke", "clean_stands", "gentle"];
+const FLOOR_440 = ["std", "medium_shot", "wide_shot", "clean_stands"];      // "Циклорама" 65 since 4.4.0
+const SMOKE_OFF = IDS_440.filter((id) => id !== "smoke");                     // smoke protection off since 4.5.0
+const older = (cycOf) => defaultsNow.filter((p) => IDS_440.includes(p.id)).map((p) => Object.assign({}, p, {
+  cfg: Object.assign({}, p.cfg, { cycCurve: cycOf(p.id), smokeOn: true }, p.id === "lowkey" ? { spots: 92 } : {})
+}));
+const as430 = () => older(() => 0);
+const as440 = () => older((id) => (FLOOR_440.includes(id) ? 65 : 0));
+const mine = { id: "my_1", name: "Мій", builtin: false, cfg: { cycCurve: 0, spots: 92, smokeOn: true } };
+const ALL_MOVES = ["cyc65", "smokeOff", "lowkeySpots80", "lowkeyCyc65"];
+const cycNow = Object.fromEntries(IDS_440.map((id) => [id, FLOOR_440.includes(id) || id === "lowkey" ? 65 : 0]));
+const smokeNow = Object.fromEntries(IDS_440.map((id) => [id, id === "smoke"]));
+const same = (got, want) => Object.keys(want).every((id) => got[id] === want[id]);
 let moveCases = 0;
 function moveCase(name, ok, r) {
   moveCases++;
@@ -153,29 +176,63 @@ function moveCase(name, ok, r) {
     console.log("FAIL " + name + " -> " + JSON.stringify(r));
   }
 }
-let r = runMoves(as430(), { schemaVersion: 5, activePresetId: "wide_shot", cfg: { cycCurve: 0 } });
-moveCase("presets of 4.3.0: the four presets with a floor get 65, the others stay, the slider of the active preset follows",
-  r.changed[0] === true && expectCyc(r, allMoved) && r.slider === 65 && r.saved.presetMoves.includes("cyc65"), r);
+let r = runMoves(as430(), { schemaVersion: 5, activePresetId: "wide_shot", cfg: { cycCurve: 0, spots: 85, smokeOn: true } });
+moveCase("presets of 4.3.0: every move is made, the controls of the active preset follow",
+  r.changed[0] === true && same(r.cyc, cycNow) && same(r.smoke, smokeNow) && r.spots.lowkey === 80 && r.spots.wide_shot === 85 &&
+  r.slider === 65 && r.smokeNow === false && ALL_MOVES.every((id) => r.saved.presetMoves.includes(id)), r);
 r = runMoves(as430(), { schemaVersion: 5, activePresetId: "wide_shot", cfg: { cycCurve: 0 } }, 2);
-moveCase("the move is made once", r.changed[0] === true && r.changed[1] === false && expectCyc(r, allMoved), r);
+moveCase("the moves are made once", r.changed[0] === true && r.changed[1] === false && same(r.cyc, cycNow) && same(r.smoke, smokeNow), r);
 const edited = as430();
 edited.find((p) => p.id === "std").cfg.cycCurve = 40;
-r = runMoves(edited.concat([mine]), { schemaVersion: 5, activePresetId: "std", cfg: { cycCurve: 40 } });
+r = runMoves(edited.concat([mine]), { schemaVersion: 5, activePresetId: "std", cfg: { cycCurve: 40, smokeOn: true } });
 moveCase("a value the user chose stays; the user's own preset is never touched",
-  r.cyc.std === 40 && r.cyc.wide_shot === 65 && r.cyc.my_1 === 0 && r.slider === 40, r);
-r = runMoves(as430(), { schemaVersion: 5, activePresetId: "lowkey", cfg: { cycCurve: 0 } });
-moveCase("the slider is left alone when the active preset is not one of the four", r.slider === 0 && r.cyc.lowkey === 0 && r.cyc.std === 65, r);
-r = runMoves(as430().concat([mine]), { schemaVersion: 5, activePresetId: "my_1", cfg: { cycCurve: 0 } });
-moveCase("...or is the user's own", r.slider === 0 && r.cyc.my_1 === 0, r);
-r = runMoves(as430(), { schemaVersion: 5, activePresetId: "std", cfg: { cycCurve: 0 }, presetMoves: ["cyc65"] });
-moveCase("settings that remember the move: 0 set by the user afterwards stays 0",
-  r.changed[0] === false && r.cyc.std === 0 && r.cyc.wide_shot === 0 && r.slider === 0, r);
+  r.cyc.std === 40 && r.cyc.wide_shot === 65 && r.slider === 40 &&
+  r.cyc.my_1 === 0 && r.spots.my_1 === 92 && r.smoke.my_1 === true, r);
+r = runMoves(as430(), { schemaVersion: 5, activePresetId: "smoke", cfg: { cycCurve: 0, spots: 72, smokeOn: true } });
+moveCase("the controls are left alone when the active preset is not one a move names",
+  r.slider === 0 && r.spotsSlider === 72 && r.smokeNow === true && r.cyc.smoke === 0 && r.smoke.smoke === true && r.cyc.std === 65, r);
+r = runMoves(as430().concat([mine]), { schemaVersion: 5, activePresetId: "my_1", cfg: { cycCurve: 0, spots: 92, smokeOn: true } });
+moveCase("...or is the user's own", r.slider === 0 && r.spotsSlider === 92 && r.smokeNow === true && r.cyc.my_1 === 0, r);
+r = runMoves(as430(), { schemaVersion: 5, activePresetId: "std", cfg: { cycCurve: 0, smokeOn: true }, presetMoves: ALL_MOVES });
+moveCase("settings that remember the moves: what the user set afterwards stays",
+  r.changed[0] === false && r.cyc.std === 0 && r.cyc.wide_shot === 0 && r.slider === 0 && r.smoke.std === true && r.smokeNow === true && r.spots.lowkey === 92, r);
 r = runMoves(defaultsNow, null);
-moveCase("a fresh install: nothing to move, the move is remembered",
-  r.cyc.std === 65 && r.cyc.lowkey === 0 && r.saved.presetMoves.includes("cyc65"), r);
+moveCase("a fresh install: nothing to move, the moves are remembered",
+  r.cyc.std === 65 && r.cyc.lowkey === 65 && r.cyc.closeup === 0 && r.smoke.std === false && r.smoke.smoke === true && r.spots.lowkey === 80 &&
+  ALL_MOVES.every((id) => r.saved.presetMoves.includes(id)), r);
 r = runMoves(as430(), { schemaVersion: 5, presetMoves: "broken", activePresetId: "std", cfg: { cycCurve: 0 } });
 moveCase("a broken list in the file counts as no list", r.changed[0] === true && r.cyc.std === 65, r);
-moveCase("presets_defaults.json: exactly the four presets carry 65", defaultsNow.every((p) => p.cfg.cycCurve === (MOVED.includes(p.id) ? 65 : 0)), defaultsNow.map((p) => [p.id, p.cfg.cycCurve]));
+
+// 4.4.0 -> 4.5.0: the PC remembers the move of 4.4.0 and holds its presets
+const back0 = as440();
+back0.find((p) => p.id === "std").cfg.cycCurve = 0;   // "Циклорама" put back to 0 by the user after 4.4.0
+r = runMoves(back0.concat([mine]), { schemaVersion: 5, activePresetId: "lowkey", cfg: { cycCurve: 0, spots: 92, smokeOn: true }, presetMoves: ["cyc65"] });
+moveCase("presets of 4.4.0: smoke off everywhere but in the smoke preset, the dark preset gets dust 80 and the corner tool",
+  r.changed[0] === true && same(r.smoke, smokeNow) && r.spots.lowkey === 80 && r.cyc.lowkey === 65 &&
+  r.cyc.std === 0 && r.cyc.wide_shot === 65 && r.smoke.my_1 === true && r.spots.my_1 === 92, r);
+moveCase("...and the controls of the active dark preset follow all three", r.spotsSlider === 80 && r.slider === 65 && r.smokeNow === false, r);
+const tuned = as440();
+Object.assign(tuned.find((p) => p.id === "lowkey").cfg, { spots: 85, cycCurve: 30 });
+tuned.find((p) => p.id === "closeup").cfg.smokeOn = false;   // already switched off by the user
+r = runMoves(tuned, { schemaVersion: 5, activePresetId: "lowkey", cfg: { cycCurve: 30, spots: 70, smokeOn: false }, presetMoves: ["cyc65"] });
+moveCase("values the user chose in the dark preset stay, on the controls too",
+  r.spots.lowkey === 85 && r.cyc.lowkey === 30 && r.spotsSlider === 70 && r.slider === 30 && r.smokeNow === false && r.smoke.closeup === false && r.smoke.lowkey === false, r);
+r = runMoves(as440(), { schemaVersion: 5, activePresetId: "std", cfg: { cycCurve: 65, spots: 75, smokeOn: true }, presetMoves: ["cyc65"] }, 2);
+moveCase("the smoke switch of the active preset goes off once; switched on again by the user it stays on",
+  r.changed[0] === true && r.changed[1] === false && r.smokeNow === false && r.slider === 65, r);
+
+const FLOOR_NOW = ["std", "medium_shot", "wide_shot", "clean_stands", "lowkey", "lowkey_medium", "lowkey_wide"];
+moveCase("presets_defaults.json: exactly the presets with a floor carry \"Циклорама\" 65",
+  defaultsNow.every((p) => p.cfg.cycCurve === (FLOOR_NOW.includes(p.id) ? 65 : 0)), defaultsNow.map((p) => [p.id, p.cfg.cycCurve]));
+moveCase("presets_defaults.json: smoke protection is on in the smoke preset only",
+  defaultsNow.every((p) => p.cfg.smokeOn === (p.id === "smoke")), defaultsNow.map((p) => [p.id, p.cfg.smokeOn]));
+moveCase("every move names presets that exist, a key they have, and leads to the value the preset ships with", (() => {
+  const moves = new Function(movesConst[0] + "return PRESET_DEFAULT_MOVES;")();
+  return moves.length === ALL_MOVES.length && moves.every((m) => ALL_MOVES.includes(m.id) && m.presets.every((id) => {
+    const p = defaultsNow.find((x) => x.id === id);
+    return p && p.cfg[m.key] === m.to && typeof m.from === typeof m.to && m.from !== m.to;
+  }));
+})(), null);
 
 // The built-in presets exist twice: in the plugin (DEFAULT_PRESETS, used before the server answers) and on the
 // server (presets_defaults.json). They must say the same.
@@ -189,6 +246,68 @@ flat(pluginPresets).forEach((row, i) => {
 });
 moveCase("the built-in presets of the plugin and of the server are the same",
   pluginPresets.length === defaultsNow.length && differ.length === 0, { plugin: pluginPresets.length, server: defaultsNow.length, differ });
+
+// ------------------------------------------------------------------ built-in presets added by a new version
+const DARK_NEW = ["lowkey_medium", "lowkey_close", "lowkey_wide"];
+const addCode = `
+${inPlugin[0]}
+let presetsList = [], deletedDefaultIds = [], knownDefaultIds = [], hasLocalPresets = true;
+${grab("appendNewDefaultPresets")}
+module.exports = function runAppend(presets, known, deleted, times) {
+  presetsList = JSON.parse(JSON.stringify(presets));
+  knownDefaultIds = known.slice();
+  deletedDefaultIds = deleted.slice();
+  const added = [];
+  for (let i = 0; i < (times || 1); i++) added.push(appendNewDefaultPresets());
+  return { added, ids: presetsList.map((p) => p.id), known: knownDefaultIds.slice(), list: presetsList };
+};
+`;
+const modAdd = { exports: null };
+new Function("module", addCode)(modAdd);
+const runAppend = modAdd.exports;
+const order = (ids) => ids.map((id) => as440().find((p) => p.id === id) || mine);
+// (a PC that came from the first versions: the three framing presets were added at the end of its list in 4.3.0)
+const PC_ORDER = ["my_1", "std", "lowkey", "smoke", "clean_stands", "gentle", "medium_shot", "closeup", "wide_shot"];
+r = runAppend(order(PC_ORDER), IDS_440, [], 2);
+moveCase("the three dark presets by framing land right under \"Темний ключ\", once",
+  r.added[0] === true && r.added[1] === false &&
+  r.ids.join() === ["my_1", "std", "lowkey"].concat(DARK_NEW, ["smoke", "clean_stands", "gentle", "medium_shot", "closeup", "wide_shot"]).join() &&
+  DARK_NEW.every((id) => r.known.includes(id)), r.ids);
+moveCase("...with the values they ship with",
+  DARK_NEW.every((id) => JSON.stringify(flat([r.list.find((p) => p.id === id)])) === JSON.stringify(flat([defaultsNow.find((p) => p.id === id)]))), null);
+r = runAppend(order(IDS_440.filter((id) => id !== "lowkey")), IDS_440, ["lowkey"]);
+moveCase("\"Темний ключ\" deleted by the user: the new ones go under the built-in preset before it, the deleted one stays deleted",
+  r.ids.join() === ["std", "medium_shot", "closeup", "wide_shot"].concat(DARK_NEW, ["smoke", "clean_stands", "gentle"]).join(), r.ids);
+r = runAppend([mine], IDS_440, IDS_440);
+moveCase("no built-in preset left in the list: the new ones go to its end", r.ids.join() === ["my_1"].concat(DARK_NEW).join(), r.ids);
+r = runAppend(order(IDS_440), IDS_440.concat(DARK_NEW), ["lowkey_close", "lowkey_medium", "lowkey_wide"]);
+moveCase("dark presets deleted by the user do not come back", r.added[0] === false && r.ids.join() === IDS_440.join(), r.ids);
+
+// ------------------------------------------------------------------ the automatic preset and the defaults of a preset
+const sceneConst = src.match(/const AUTO_PRESET_BY_SCENE = \{[\s\S]*?\n\};\n/);
+if (!sceneConst) throw new Error("AUTO_PRESET_BY_SCENE not found in main.js");
+const sceneCode = `
+${sceneConst[0]}
+let presetsList = [];
+function presetRequestParams(p) { return Object.assign({}, p.cfg); }
+function clampSliderVal(id, v) { return v; }
+${grab("buildScenePresets")}
+${grab("normalizedPresetConfig")}
+module.exports = { scene: (presets) => { presetsList = presets; return buildScenePresets(); }, norm: normalizedPresetConfig, map: AUTO_PRESET_BY_SCENE };
+`;
+const modScene = { exports: null };
+new Function("module", sceneCode)(modScene);
+const sceneApi = modScene.exports;
+const DARK_KEYS = { dark_close: "lowkey_close", dark_medium: "lowkey_medium", dark_wide: "lowkey_wide", dark: "lowkey" };
+let sp = sceneApi.scene(defaultsNow);
+moveCase("the automatic preset: a dark backdrop has its own preset for every framing, a light one as before",
+  sp && Object.keys(sp.ids).length === 8 && same(sp.ids, Object.assign({ close: "closeup", medium: "medium_shot", wide: "wide_shot", default: "std" }, DARK_KEYS)) &&
+  sp.params.dark_wide.cycCurve === 65 && sp.params.dark_close.seamOn === false, sp && sp.ids);
+sp = sceneApi.scene(defaultsNow.filter((p) => p.id !== "lowkey_wide"));
+moveCase("...a deleted dark preset is simply not offered (the server then takes the general dark one)",
+  sp && !("dark_wide" in sp.ids) && sp.ids.dark === "lowkey" && Object.keys(sp.ids).length === 7, sp && sp.ids);
+moveCase("a preset that does not say whether smoke is protected: it is not", sceneApi.norm({}).smokeOn === false &&
+  sceneApi.norm({ smokeOn: true }).smokeOn === true && sceneApi.norm({ smokeOn: false }).smokeOn === false, sceneApi.norm({}));
 
 const total = cases.length + newKeys.length + moveCases;
 console.log(failed ? `plugin settings migration: ${failed} of ${total} cases FAILED` : `plugin settings migration: ${total} cases pass`);

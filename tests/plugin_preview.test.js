@@ -8,8 +8,15 @@
 //   - a preset click gives one light refresh with that preset's values and says what it changed;
 //   - the automatic preset: the presets travel with the photo, the server's choice lands on the controls;
 //   - a button pressed while the server is still starting is remembered and runs when the server answers;
-//   - smoke: every request asks for "protect smoke only where there is smoke", and the smoke controls say in
-//     words what the server saw (on a frame without smoke they change nothing - the note explains why).
+//   - smoke: the protection is off until it is asked for; every request asks for "protect smoke only where there
+//     is smoke", and the smoke controls say in words what the server saw (on a frame without smoke they change
+//     nothing - the note explains why); a frame that seems to have smoke says so when the window opens;
+//   - mask edits: Ctrl + Z / Ctrl + Shift + Z / Ctrl + Y and the two buttons step back and forward, edits reach
+//     the server one after another;
+//   - "Скинути пресет" gives one built-in preset the values it ships with, after a second press;
+//   - the backup of the settings: saved through the server, listed, restored after a second click, with a copy of
+//     what was there before;
+//   - a dark backdrop takes the dark preset of its framing.
 //
 //   node tests/plugin_preview.test.js
 //   node tests/plugin_preview.test.js "preset click" remembered     (only the scenarios whose name has one of the texts)
@@ -64,7 +71,17 @@ function makeEnv(serverOpts = {}) {
     startMaskShare: null,  // share of the frame that is green after the first scan
     maskShares: [],        // ...and after each following recompute
     frameSmoke: null,      // what the frame has of smoke, e.g. { share: 0.05, largest: 0.04, found: true }
-    disk: null             // files in the plugin's data folder, e.g. { "presets_local.json": [...] }; null = no disk
+    disk: null,            // files in the plugin's data folder, e.g. { "presets_local.json": [...] }; null = no disk
+    oldSceneRule: false,   // true = a server before 4.5.0: a dark frame is offered the "dark" set only
+    historyAware: true,    // false = a server before 4.5.0: no steps back / forward for the mask edits
+    edits: { undo: 0, redo: 0 },  // the history of mask edits the server holds
+    editDelays: [],        // ms the next mask edits take, one by one (then no delay)
+    editSeq: 0,            // how many mask edits were answered (each answer carries its number in the picture)
+    backupAware: true,     // false = a server before 4.5.0: no /backup/... addresses
+    backupSaveFails: false,
+    backupFolder: "D:\\Plugin Photoshop\\CleanVinylPro2\\backup",
+    backups: [],           // the files of the backup folder, oldest first
+    folderOpened: 0
   }, serverOpts);
   const W = 4, H = 6;
 
@@ -122,7 +139,11 @@ function makeEnv(serverOpts = {}) {
           let scene = null;
           if (server.scene) {
             scene = Object.assign({ applied: null }, server.scene);
-            for (const key of [scene.kind, scene.framing, "default"]) {
+            // the rule of engine.py (start_session): a dark backdrop has its own sets by framing
+            const keys = server.oldSceneRule
+              ? [scene.kind, scene.framing, "default"]
+              : (scene.dark ? ["dark_" + scene.framing, "dark"] : []).concat([scene.framing, "default"]);
+            for (const key of keys) {
               if (body.scenePresets && body.scenePresets[key]) { used = body.scenePresets[key]; scene.applied = key; break; }
             }
           }
@@ -156,11 +177,60 @@ function makeEnv(serverOpts = {}) {
           if (server.quickAware) ans.quick = !!body.quick && Number(p.cleanPasses || 1) < 2;
           if (server.maskShares.length) ans.mask_share = server.maskShares.shift();
           if (smokeAnswer(p)) ans.smoke = smokeAnswer(p);
+          if (server.historyAware) ans.history = { undo: server.edits.undo, redo: server.edits.redo };
           return reply(ans);
         }
-        case "/session/mask-edit":
+        case "/session/mask-edit": {
+          if (server.editDelays.length) await waitOrAbort(server.editDelays.shift(), init.signal);
+          // (the picture of every answer carries the number of the edit: the test sees which one is on screen)
+          const pic = Buffer.from("edit-" + (++server.editSeq)).toString("base64");
+          const ans = { ok: true, inverted: false, comp_jpg_b64: pic, overlay_jpg_b64: pic };
+          if (server.historyAware) {
+            const hist = server.edits;
+            if (body.op === "undo" || body.op === "redo") {
+              const from = body.op, to = body.op === "undo" ? "redo" : "undo";
+              ans.stepped = hist[from] > 0;
+              if (ans.stepped) { hist[from]--; hist[to]++; }
+            } else if (["fill", "clear", "invert"].includes(body.op) || (body.op === "stroke" && body.points && body.points.length)) {
+              hist.undo = Math.min(40, hist.undo + 1);
+              hist.redo = 0;
+            }
+            ans.history = { undo: hist.undo, redo: hist.redo };
+          }
+          return reply(ans);
+        }
         case "/session/dress-preview":
           return reply({ ok: true, inverted: false, comp_jpg_b64: "QQ==", overlay_jpg_b64: "QQ==" });
+        case "/backup/save": {
+          if (!server.backupAware) return reply({ detail: "Not Found" }, 404);
+          if (server.backupSaveFails) return reply({ ok: false, error: "диск недоступний" }, 500);
+          const nth = server.backups.length + 1;
+          const label = String(body.label || "");
+          const file = `CleanVinylPro2_backup_2026-11-19_08-${String(30 + nth).padStart(2, "0")}-00${label ? "_" + label : ""}.json`;
+          server.backups.push({
+            file, saved_at: `2026-11-19T08:${String(30 + nth).padStart(2, "0")}:00`, version: server.version, label,
+            presets_list: JSON.parse(JSON.stringify(body.presets)), settings: JSON.parse(JSON.stringify(body.settings))
+          });
+          return reply({ ok: true, file, path: server.backupFolder + "\\" + file, folder: server.backupFolder,
+            presets: body.presets.length, user_presets: body.presets.filter((x) => !x.builtin).length });
+        }
+        case "/backup/list": {
+          if (!server.backupAware) return reply({ detail: "Not Found" }, 404);
+          const found = server.backups.slice().reverse().map((b) => ({
+            file: b.file, saved_at: b.saved_at, version: b.version, label: b.label, size: 1000,
+            presets: b.presets_list.length, user_presets: b.presets_list.filter((x) => !x.builtin).length
+          }));
+          return reply({ ok: true, folder: server.backupFolder, backups: found });
+        }
+        case "/backup/read": {
+          const b = server.backups.find((x) => x.file === (body && body.file));
+          if (!b) return reply({ ok: false, error: "Такого бекапа в папці немає." }, 404);
+          return reply({ ok: true, file: b.file, saved_at: b.saved_at, version: b.version, label: b.label, folder: server.backupFolder,
+            presets: b.presets_list.length, presets_list: JSON.parse(JSON.stringify(b.presets_list)), settings: JSON.parse(JSON.stringify(b.settings)) });
+        }
+        case "/backup/open-folder":
+          server.folderOpened++;
+          return reply({ ok: true, folder: server.backupFolder, opened: true });
         case "/session/apply": {
           await waitOrAbort(server.applyDelay, init.signal);
           const meta = Buffer.from(JSON.stringify({ ok: true, width: W, height: H, channels: 4, bitDepth: 8, hasLayerMask: false, stats: {} }), "utf8");
@@ -287,6 +357,22 @@ function makeEnv(serverOpts = {}) {
       return btn;
     },
     clickPreset(name) { mouse(env.presetButton(name), "click"); },
+    // a key pressed in the big window, e.g. key("KeyZ", "я", { ctrlKey: true }); `target` = the element that has the focus
+    key(code, key, mods = {}, target = doc.body) {
+      const ev = new w.KeyboardEvent("keydown", Object.assign({ bubbles: true, cancelable: true, code, key }, mods));
+      target.dispatchEvent(ev);
+      return ev;
+    },
+    edits: () => requests.filter((r) => r.path === "/session/mask-edit"),
+    hint: () => el("dlgHoverHint").textContent,
+    footer: () => (el("footerStatus").classList.contains("visible") ? el("footerStatus").textContent : ""),
+    // the picture on screen: "edit-N" after the N-th mask edit the server answered, "" before any
+    picture() {
+      const src = String(el("dlgCompImg").src || "");
+      const b64 = src.split("base64,")[1] || "";
+      const text = Buffer.from(b64, "base64").toString("utf8");
+      return text.startsWith("edit-") ? text : "";
+    },
     async waitFor(cond, ms = 4000) {
       for (let waited = 0; waited < ms; waited += 20) {
         if (cond()) return true;
@@ -455,7 +541,7 @@ async function main() {
     await env.settle(600);
     env.click("dlgFracFine");
     await env.settle(600);
-    env.check("dlgChkSmoke", false);
+    env.check("dlgChkSmoke", true);
     await env.settle(600);
     const rs = env.recomputes();
     expect(rs.length === 3, `three recomputes expected, got ${rs.length}`);
@@ -463,7 +549,8 @@ async function main() {
     if (rs.length === 3) {
       expect(rs[0].body.params.removeStands === true, "stands removal must be on in the first");
       expect(rs[1].body.params.fracFine === false && rs[1].body.params.autoFractions === false, "fine fraction off, auto off in the second");
-      expect(rs[2].body.params.smokeOn === false, "smoke protection off in the third");
+      expect(rs[0].body.params.smokeOn === false && rs[1].body.params.smokeOn === false, "smoke protection is off until it is asked for");
+      expect(rs[2].body.params.smokeOn === true, "smoke protection on in the third");
     }
     env.click("dlgFracAuto");               // AUTO again: the settings look the same, the server must still be asked
     await env.settle(600);
@@ -677,7 +764,7 @@ async function main() {
       if (rc[0]) {
         const p = rc[0].body.params;
         expect(rc[0].body.quick === true, "the refresh must be the light one");
-        expect(p.spots === 92 && p.scuffs === 55 && p.seam === 90 && p.edge === 78 && p.smoke === 70 && p.grain === 95,
+        expect(p.spots === 80 && p.scuffs === 55 && p.seam === 90 && p.edge === 78 && p.smoke === 70 && p.grain === 95 && p.cycCurve === 65,
           "the values of 'Темний ключ' must be sent, got " + JSON.stringify(p));
         expect(p.autoFractions === true, "AUTO stays on for a preset with all three fractions");
       }
@@ -749,11 +836,15 @@ async function main() {
       await env.settle(900);
       const start = env.of("/session/start")[0];
       const sp = start.body.scenePresets || {};
-      expect(Object.keys(sp).sort().join() === "close,dark,default,medium,wide", "five sets must be sent, got " + Object.keys(sp).sort().join());
+      expect(Object.keys(sp).sort().join() === "close,dark,dark_close,dark_medium,dark_wide,default,medium,wide", "eight sets must be sent, got " + Object.keys(sp).sort().join());
       expect(sp.wide && sp.wide.spots === 85 && sp.wide.scuffs === 78 && sp.wide.edge === 66 && sp.wide.speedMode === "fast" && sp.wide.autoFractions === true,
         "the 'wide' set must be the preset 'Дальній план': " + JSON.stringify(sp.wide));
-      expect(sp.dark && sp.dark.spots === 92 && sp.close && sp.close.fracLarge === false && sp.close.autoFractions === false && sp.default && sp.default.spots === 75,
+      expect(sp.dark && sp.dark.spots === 80 && sp.close && sp.close.fracLarge === false && sp.close.autoFractions === false && sp.default && sp.default.spots === 75,
         "the other sets must be 'Темний ключ', 'Ближній план', 'Студія'");
+      expect(sp.dark_wide && sp.dark_wide.cycCurve === 65 && sp.dark_medium && sp.dark_medium.spots === 72 && sp.dark_medium.edge === 82 &&
+        sp.dark_close && sp.dark_close.fracLarge === false && sp.dark_close.autoFractions === false && sp.dark_close.seamOn === false,
+        "...and the three dark presets by framing: " + JSON.stringify([sp.dark_wide, sp.dark_medium, sp.dark_close]));
+      expect(Object.keys(sp).every((k) => sp[k].smokeOn === false), "no set asks for smoke protection");
       expect(env.state("activePresetId") === "wide_shot", "the active preset must be 'Дальній план', got " + env.state("activePresetId"));
       expect(env.el("dlgActivePresetName").textContent === "Дальній план", "the button must show it");
       expect(env.state("getSliderVal('gSlSpots')") === 85 && env.state("getSliderVal('gSlScuffs')") === 78, "the sliders must show its values");
@@ -782,15 +873,54 @@ async function main() {
       await env.close();
     });
 
-  await scenario("automatic preset: a dark frame takes 'Темний ключ'; a deleted preset falls back to 'Студія'",
+  await scenario("automatic preset: a dark frame takes the dark preset of its framing",
     { scene: { kind: "dark", framing: "wide", dark: true } }, async (env, expect) => {
-      env.state("presetsList = presetsList.filter((p) => p.id !== 'lowkey' && p.id !== 'wide_shot'); renderPresets();");
       await env.open();
       await env.settle(600);
-      const sp = env.of("/session/start")[0].body.scenePresets || {};
-      expect(!sp.dark && !sp.wide && sp.default, "deleted presets must not be offered: " + Object.keys(sp).join());
-      expect(env.state("activePresetId") === "std", "the fallback preset must be used, got " + env.state("activePresetId"));
+      const start = env.of("/session/start")[0];
+      expect(env.state("activePresetId") === "lowkey_wide", "a dark full-length frame must take 'Темний дальній план', got " + env.state("activePresetId"));
+      expect(start.used && start.used.spots === 80 && start.used.cycCurve === 65 && start.used.smokeOn === false, "...and be cleaned with its values: " + JSON.stringify(start.used));
+      expect(env.el("dlgActivePresetName").textContent === "Темний дальній план", "the button must show it: " + env.el("dlgActivePresetName").textContent);
+      expect(env.badge().includes("Темний дальній план") && env.badge().includes("темний фон") && env.badge().includes("повний зріст"),
+        "the note must name the preset, the dark backdrop and the framing: " + env.badge());
+      expect(env.recomputes().length === 0 && env.state("previewMatchesSettings()") === true, "the frame is already cleaned with this preset");
+    });
+
+  for (const [framing, id, name] of [["close", "lowkey_close", "Темний ближній план"], ["medium", "lowkey_medium", "Темний середній план"], ["none", "lowkey", "Темний ключ"]]) {
+    await scenario(`automatic preset: a dark frame, framing '${framing}' -> '${name}'`, { scene: { kind: "dark", framing, dark: true } }, async (env, expect) => {
+      await env.open();
+      await env.settle(500);
+      expect(env.state("activePresetId") === id, `expected ${id}, got ` + env.state("activePresetId"));
+      expect(env.badge().includes(name) && env.badge().includes("темний фон"), "the note: " + env.badge());
+      if (framing === "close") expect(!env.el("dlgFracAuto").classList.contains("active") && !env.el("dlgFracLarge").classList.contains("active"), "the dark close-up names its fractions: no large one, AUTO off");
+    });
+  }
+
+  await scenario("automatic preset: deleted dark presets fall back - the general dark one, then the framing, then 'Студія'",
+    { scene: { kind: "dark", framing: "wide", dark: true } }, async (env, expect) => {
+      env.state("presetsList = presetsList.filter((p) => p.id !== 'lowkey_wide'); renderPresets();");
+      await env.open();
+      await env.settle(500);
+      let sp = env.of("/session/start")[0].body.scenePresets || {};
+      expect(!sp.dark_wide && sp.dark, "a deleted preset must not be offered: " + Object.keys(sp).join());
+      expect(env.state("activePresetId") === "lowkey", "without 'Темний дальній план' the general dark preset is used, got " + env.state("activePresetId"));
+      env.el("retouchModal").close("cancel");
+      await env.waitFor(() => env.state("isBusy") === false);
+      env.state("presetsList = presetsList.filter((p) => !p.id.startsWith('lowkey') && p.id !== 'wide_shot'); renderPresets();");
+      await env.open();
+      await env.settle(500);
+      sp = env.of("/session/start")[1].body.scenePresets || {};
+      expect(Object.keys(sp).sort().join() === "close,default,medium", "only the presets that are left are offered: " + Object.keys(sp).sort().join());
+      expect(env.state("activePresetId") === "std", "the last fallback is 'Студія', got " + env.state("activePresetId"));
       expect(env.badge().includes("Студія") && env.badge().includes("темний фон"), "the note: " + env.badge());
+    });
+
+  await scenario("automatic preset with a server of an older version: a dark frame gets the general dark preset, nothing breaks",
+    { scene: { kind: "dark", framing: "wide", dark: true }, oldSceneRule: true }, async (env, expect) => {
+      await env.open();
+      await env.settle(500);
+      expect(env.state("activePresetId") === "lowkey", "expected 'Темний ключ', got " + env.state("activePresetId"));
+      expect(env.recomputes().length === 0 && env.state("previewMatchesSettings()") === true, "the frame counts as cleaned with it");
     });
 
   await scenario("automatic preset switched off: nothing is offered, the chosen preset stays", { scene: { kind: "wide", framing: "wide", dark: false } }, async (env, expect) => {
@@ -920,10 +1050,14 @@ async function main() {
   });
 
   // ---------------------------------------------------------------- defaults that changed since the PC saved its presets
+  // (what a PC of 4.3.0 holds: the eight built-in presets of that time - no corner tool anywhere, smoke protection on
+  //  everywhere, "Темний ключ" with dust 92 - and a preset of the user's own)
+  const IDS_OLD = ["std", "medium_shot", "closeup", "wide_shot", "lowkey", "smoke", "clean_stands", "gentle"];
   const presets430 = () => {
-    const list = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, "..", "server", "presets_defaults.json"), "utf8"));
-    list.forEach((p) => { p.cfg.cycCurve = 0; });
-    list.push({ id: "user_1", name: "Мій пресет", color: "#ffffff", builtin: false, cfg: Object.assign({}, list[0].cfg, { cycCurve: 0, spots: 33 }) });
+    const now = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, "..", "server", "presets_defaults.json"), "utf8"));
+    const list = IDS_OLD.map((id) => now.find((p) => p.id === id));
+    list.forEach((p) => { p.cfg.cycCurve = 0; p.cfg.smokeOn = true; if (p.id === "lowkey") p.cfg.spots = 92; });
+    list.push({ id: "user_1", name: "Мій пресет", color: "#ffffff", builtin: false, cfg: Object.assign({}, list[0].cfg, { cycCurve: 0, spots: 33, smokeOn: true }) });
     return list;
   };
   await scenario("a PC with the presets of 4.3.0: the new corner default reaches it once, the user's own values stay",
@@ -933,16 +1067,28 @@ async function main() {
       const cyc = (id) => env.state(`(presetsList.find((p) => p.id === ${JSON.stringify(id)}) || { cfg: {} }).cfg.cycCurve`);
       expect(cyc("wide_shot") === 65 && cyc("std") === 65 && cyc("medium_shot") === 65 && cyc("clean_stands") === 65,
         "the four presets with a floor must get 65: " + ["wide_shot", "std", "medium_shot", "clean_stands"].map(cyc).join());
-      expect(cyc("lowkey") === 0 && cyc("closeup") === 0 && cyc("user_1") === 0, "the other presets and the user's own one must stay: " + [cyc("lowkey"), cyc("closeup"), cyc("user_1")].join());
+      expect(cyc("lowkey") === 65, "since 4.5.0 the dark preset gets 65 as well: " + cyc("lowkey"));
+      expect(cyc("closeup") === 0 && cyc("smoke") === 0 && cyc("user_1") === 0, "the other presets and the user's own one must stay: " + [cyc("closeup"), cyc("smoke"), cyc("user_1")].join());
+      const cfgOf = (id) => env.state(`JSON.stringify((presetsList.find((p) => p.id === ${JSON.stringify(id)}) || { cfg: {} }).cfg)`);
+      expect(IDS_OLD.every((id) => JSON.parse(cfgOf(id)).smokeOn === (id === "smoke")), "smoke protection must go off in every built-in preset but the smoke one");
+      expect(JSON.parse(cfgOf("user_1")).smokeOn === true && JSON.parse(cfgOf("user_1")).spots === 33, "...and stay as saved in the user's own preset");
+      expect(JSON.parse(cfgOf("lowkey")).spots === 80, "'Темний ключ' must get dust 80: " + JSON.parse(cfgOf("lowkey")).spots);
+      expect(env.state("smokeEnabled") === false && !env.el("dlgChkSmoke").checked && env.el("gBtnSmoke").textContent === "Вимк.",
+        "the smoke controls of the active preset must go off: " + env.el("gBtnSmoke").textContent);
+      const ids = env.state("presetsList.map((p) => p.id).join()");
+      expect(ids === "std,medium_shot,closeup,wide_shot,lowkey,lowkey_medium,lowkey_close,lowkey_wide,smoke,clean_stands,gentle,user_1",
+        "the three dark presets must land under 'Темний ключ': " + ids);
       expect(env.state("activePresetId") === "wide_shot" && env.state("getSliderVal('gSlCyc')") === 65, "the slider of the active preset must follow, got " + env.state("getSliderVal('gSlCyc')"));
       expect(env.el("gValCyc").textContent === "65%", "...and show it: " + env.el("gValCyc").textContent);
       const onDisk = env.server.disk;
       expect(onDisk["presets_local.json"].find((p) => p.id === "wide_shot").cfg.cycCurve === 65, "the moved presets must be saved on the PC");
-      expect((onDisk["user_settings.json"].presetMoves || []).includes("cyc65"), "the settings must remember that the move was made: " + JSON.stringify(onDisk["user_settings.json"].presetMoves));
+      expect(["cyc65", "smokeOff", "lowkeySpots80", "lowkeyCyc65"].every((id) => (onDisk["user_settings.json"].presetMoves || []).includes(id)),
+        "the settings must remember that the moves were made: " + JSON.stringify(onDisk["user_settings.json"].presetMoves));
+      expect(onDisk["presets_local.json"].length === 12 && onDisk["presets_local.json"].find((p) => p.id === "std").cfg.smokeOn === false, "...and the presets on the PC must hold all of it");
       const sent = env.of("/presets").filter((r) => r.method === "POST");
       expect(sent.length >= 1 && sent[sent.length - 1].body.find((p) => p.id === "wide_shot").cfg.cycCurve === 65, "the server copy must get the moved presets too");
       await env.open();
-      expect(env.of("/session/start")[0].body.params.cycCurve === 65, "the first scan must go with the new value");
+      expect(env.of("/session/start")[0].body.params.cycCurve === 65 && env.of("/session/start")[0].body.params.smokeOn === false, "the first scan must go with the new values");
       // the user decides otherwise: 0 stays 0 from now on (the next start of Photoshop reads the files written here)
       env.state("setSliderVal('gSlCyc', 0); presetsList.find((p) => p.id === 'wide_shot').cfg.cycCurve = 0; persistPresets(); persistSettingsNow();");
       await sleep(200);
@@ -977,9 +1123,21 @@ async function main() {
   await scenario("a fresh installation: the built-in presets come with the corner default, nothing is 'moved'", { disk: {} }, async (env, expect) => {
     await sleep(500);
     expect(env.state("getSliderVal('gSlCyc')") === 65 && env.state("activePresetId") === "std", "the first preset is on the controls with its 65");
-    expect(env.state("appliedPresetMoves.includes('cyc65')") === true, "the move counts as made");
-    expect(env.state("presetsList.find((p) => p.id === 'lowkey').cfg.cycCurve") === 0, "'Темний ключ' keeps the corner");
+    expect(env.state("appliedPresetMoves.includes('cyc65') && appliedPresetMoves.includes('smokeOff') && appliedPresetMoves.includes('lowkeySpots80')") === true, "the moves count as made");
+    expect(env.state("presetsList.find((p) => p.id === 'closeup').cfg.cycCurve") === 0, "'Ближній план' keeps the corner");
+    expect(env.state("presetsList.length") === 11 && env.state("presetsList[5].id") === "lowkey_medium", "eleven built-in presets, the dark ones together");
+    expect(env.state("smokeEnabled") === false && !env.el("dlgChkSmoke").checked && !env.el("dlgWrapSmoke").classList.contains("active") &&
+      env.el("gBtnSmoke").textContent === "Вимк." && env.el("gValSmoke").textContent === "Вимк.", "smoke protection is off on a fresh installation");
   });
+
+  // The only start at which no preset and no saved value is put on the controls: what they show is what the panel
+  // is drawn with. Smoke protection must not be on there either.
+  await scenario("settings saved without the values of the controls (a file cut by hand): smoke protection is not switched on by itself",
+    { disk: { "user_settings.json": { schemaVersion: 5, presetMoves: ["cyc65", "smokeOff", "lowkeySpots80", "lowkeyCyc65"] } } }, async (env, expect) => {
+      await sleep(500);
+      expect(env.state("smokeEnabled") === false && !env.el("dlgChkSmoke").checked && !env.el("dlgWrapSmoke").classList.contains("active") &&
+        env.el("gBtnSmoke").textContent === "Вимк." && env.el("gValSmoke").textContent === "Вимк.", "smoke protection must stay off until it is asked for");
+    });
 
   // ---------------------------------------------------------------- smoke
   await scenario("smoke: every request asks to protect smoke only where there is smoke; the corner presets go with the floor",
@@ -988,9 +1146,10 @@ async function main() {
       const start = env.of("/session/start")[0];
       const sp = start.body.scenePresets || {};
       expect(start.body.params.smokeAuto === true, "the first scan must ask for it: " + JSON.stringify(start.body.params));
-      expect(Object.keys(sp).length === 5 && Object.keys(sp).every((k) => sp[k].smokeAuto === true), "...and so must every set of the automatic preset");
-      expect(sp.wide.cycCurve === 65 && sp.medium.cycCurve === 65 && sp.default.cycCurve === 65 && sp.dark.cycCurve === 0 && sp.close.cycCurve === 0,
-        "the corner line goes by default in 'Дальній план', 'Середній план', 'Студія' and stays in 'Темний ключ', 'Ближній план': "
+      expect(Object.keys(sp).length === 8 && Object.keys(sp).every((k) => sp[k].smokeAuto === true), "...and so must every set of the automatic preset");
+      expect(sp.wide.cycCurve === 65 && sp.medium.cycCurve === 65 && sp.default.cycCurve === 65 && sp.dark.cycCurve === 65 && sp.dark_wide.cycCurve === 65 &&
+        sp.dark_medium.cycCurve === 65 && sp.close.cycCurve === 0 && sp.dark_close.cycCurve === 0,
+        "the corner line goes by default wherever a floor is usually in the frame and stays in the two close-up presets: "
         + JSON.stringify(Object.keys(sp).map((k) => [k, sp[k].cycCurve])));
       expect(env.state("getSliderVal('gSlCyc')") === 65, "the slider must show the value of the applied preset");
       await env.drag("gSlSpots", 90);
@@ -1009,53 +1168,411 @@ async function main() {
       await env.open();
       await env.settle(300);
       expect(env.badge() === "", "a frame without smoke opens without a word about smoke: " + env.badge());
-      env.check("dlgChkSmoke", false);
+      expect(env.of("/session/start")[0].body.params.smokeOn === false && !env.el("dlgChkSmoke").checked, "the window opens with the protection off");
+      env.check("dlgChkSmoke", true);                        // "I shot with smoke"
+      expect(env.hint().includes("увімкнено") && env.hint().includes("оновлюю перегляд"), "ticking the box must say at once that the preview is being refreshed: " + env.hint());
       await env.settle(900);
       let rc = env.recomputes();
-      expect(rc.length === 1 && rc[0].body.params.smokeOn === false && rc[0].body.quick === true, "one light refresh with the protection off");
+      expect(rc.length === 1 && rc[0].body.params.smokeOn === true && rc[0].body.quick === true, "one light refresh with the protection on");
+      expect(env.badge().includes("Перегляд оновлено") && env.badge().includes("не знайдено") && env.badge().includes("нічого не змінює") && env.badge().includes("95–100"),
+        "the note must say that the preview was refreshed, that nothing changes and how to force the protection: " + env.badge());
+      expect(env.hint() === env.badge(), "the same words must stay in the hint strip after the note is gone: " + env.hint());
+      expect(env.el("dlgWrapSmoke").classList.contains("active") && env.el("gBtnSmoke").textContent === "Увімк.", "both smoke controls must show 'on'");
+      env.check("dlgChkSmoke", false);
+      await env.settle(900);
+      rc = env.recomputes();
+      expect(rc.length === 2 && rc[1].body.params.smokeOn === false, "one more refresh with the protection off");
       expect(env.badge().includes("вимкнено") && env.badge().includes("не знайдено") && env.badge().includes("той самий"),
         "the note must say the result is the same: " + env.badge());
       env.check("dlgChkSmoke", true);
       await env.settle(900);
-      rc = env.recomputes();
-      expect(rc.length === 2 && rc[1].body.params.smokeOn === true, "one more refresh with the protection on");
-      expect(env.badge().includes("не знайдено") && env.badge().includes("нічого не змінює") && env.badge().includes("95–100"),
-        "the note must say that nothing changes and how to force the protection: " + env.badge());
       await env.drag("gSlSmoke", 96);                        // "there is smoke, protect it anyway"
       await env.settle(1100);
       rc = env.recomputes();
-      expect(rc.length === 3 && rc[2].body.params.smoke === 96, "the slider gives one more refresh");
+      expect(rc.length === 4 && rc[3].body.params.smoke === 96 && rc[3].body.params.smokeOn === true, "the slider gives one more refresh");
       expect(env.badge().includes("95–100") && env.badge().includes("збережено") && env.badge().includes("0,48 %"),
         "the note must say that everything smoke-like is kept now: " + env.badge());
       await env.drag("gSlSpots", 90);                        // another control: no words about smoke
       await env.settle(1100);
-      expect(env.recomputes().length === 4, "the other slider refreshes as usual");
+      expect(env.recomputes().length === 5, "the other slider refreshes as usual");
       expect(!env.badge().includes("95–100"), "the smoke note must not come back after another control: " + env.badge());
     });
 
-  await scenario("a frame with smoke: said when the window opens, and when the protection is switched off",
+  await scenario("a frame with smoke, protection off (the usual state): the window says so at once; the tick protects the smoke",
     { frameSmoke: { share: 0.05, largest: 0.04, found: true }, scene: { kind: "wide", framing: "wide", dark: false } }, async (env, expect) => {
       await env.open();
       await env.settle(300);
-      expect(env.badge().includes("Авто-пресет") && env.badge().includes("Дим знайдено") && env.badge().includes("6,0 %"),
-        "the opening note must name the preset and the protected smoke: " + env.badge());
-      env.click("gBtnSmoke");                                // the switch in the fine settings
+      expect(env.badge().includes("Авто-пресет") && env.badge().includes("Схоже, у кадрі є дим") && env.badge().includes("5,0 %") && env.badge().includes("поставте галочку"),
+        "the opening note must name the preset and warn that the smoke is being cleaned: " + env.badge());
+      env.check("dlgChkSmoke", true);
       await env.settle(900);
-      const rc = env.recomputes();
-      expect(rc.length === 1 && rc[0].body.params.smokeOn === false, "one refresh with the protection off");
+      let rc = env.recomputes();
+      expect(rc.length === 1 && rc[0].body.params.smokeOn === true && rc[0].body.params.smokeAuto === true, "one refresh with the protection on");
+      expect(env.badge().includes("Дим знайдено") && env.badge().includes("6,0 %"), "the note must say that the smoke is protected now: " + env.badge());
+      expect(env.el("gBtnSmoke").textContent === "Увімк.", "the switch in the fine settings must follow the checkbox");
+      env.click("gBtnSmoke");                                // ...and the switch works the other way round
+      await env.settle(900);
+      rc = env.recomputes();
+      expect(rc.length === 2 && rc[1].body.params.smokeOn === false, "one refresh with the protection off");
       expect(env.badge().includes("вимкнено") && env.badge().includes("5,0 %") && env.badge().includes("чиститься"),
         "the note must warn that the smoke is cleaned now: " + env.badge());
       expect(!env.el("dlgChkSmoke").checked, "the checkbox on top must follow the switch");
     });
 
+  await scenario("the preset 'Зйомка з димом' keeps the protection on: said when the window opens",
+    { frameSmoke: { share: 0.05, largest: 0.04, found: true } }, async (env, expect) => {
+      env.check("dlgChkAutoPreset", false);
+      env.state("applyPreset(presetsList.find((p) => p.id === 'smoke')); renderPresets(); updateSliderVisuals();");
+      expect(env.el("dlgChkSmoke").checked && env.el("gBtnSmoke").textContent === "Увімк.", "the preset must switch the smoke controls on");
+      await env.open();
+      await env.settle(300);
+      const p = env.of("/session/start")[0].body.params;
+      expect(p.smokeOn === true && p.smoke === 95, "the first scan must protect smoke: " + JSON.stringify([p.smokeOn, p.smoke]));
+      expect(env.badge().includes("95–100") && env.badge().includes("збережено"), "the opening note must say that smoke is kept: " + env.badge());
+      env.click("dlgBtnPresets");
+      env.clickPreset("Студія (Стандарт)");
+      expect(!env.el("dlgChkSmoke").checked, "another preset switches the protection off again");
+    });
+
   await scenario("an older server that says nothing of smoke: no smoke notes, nothing breaks", {}, async (env, expect) => {
     env.check("dlgChkAutoPreset", false);
     await env.open();
-    env.check("dlgChkSmoke", false);
+    env.check("dlgChkSmoke", true);
     await env.settle(900);
     expect(env.recomputes().length === 1, "the refresh is still asked for");
     expect(env.badge() === "", "no note without an answer about smoke: " + env.badge());
     expect(env.state("sessState.smokeNote") === false, "the request for a note must be closed");
+  });
+
+  // ---------------------------------------------------------------- one step back / forward for the mask edits
+  const dim = (env, id) => env.el(id).classList.contains("is-dim");
+  const stroke = (env) => { env.press("dlgViewport", 100); env.move(120); env.release(); };
+
+  await scenario("Ctrl + Z and the two buttons: a mask edit is taken back and made again", {}, async (env, expect) => {
+    await env.open();
+    const ops = () => env.edits().map((r) => r.body.op).join();
+    expect(dim(env, "dlgBtnUndo") && dim(env, "dlgBtnRedo"), "a fresh window: nothing to step to, both buttons are dim");
+    stroke(env);                                             // an eraser stroke - a click on the photo by accident, say
+    await env.settle(200);
+    expect(ops() === "stroke", "the stroke must reach the server: " + ops());
+    expect(!dim(env, "dlgBtnUndo") && dim(env, "dlgBtnRedo"), "after an edit 'back' is bright and 'forward' dim");
+    expect(env.state("JSON.stringify(sessState.history)") === '{"undo":1,"redo":0}', "the counts: " + env.state("JSON.stringify(sessState.history)"));
+    const ev = env.key("KeyZ", "я", { ctrlKey: true });      // the Ukrainian layout: the key is told by its place
+    await env.settle(200);
+    expect(ev.defaultPrevented, "the key must not go on to Photoshop");
+    expect(ops() === "stroke,undo", "Ctrl + Z must ask for one step back: " + ops());
+    expect(env.picture() === "edit-2", "the picture of the step back must be on screen: " + env.picture());
+    expect(dim(env, "dlgBtnUndo") && !dim(env, "dlgBtnRedo"), "after the step back 'forward' is bright");
+    expect(env.hint().includes("скасовано") && env.hint().includes("Ctrl + Shift + Z"), "the hint must say what happened and how to get it back: " + env.hint());
+    env.key("KeyZ", "Z", { ctrlKey: true, shiftKey: true });
+    await env.settle(200);
+    expect(ops() === "stroke,undo,redo" && !dim(env, "dlgBtnUndo") && dim(env, "dlgBtnRedo"), "Ctrl + Shift + Z must make the edit again: " + ops());
+    expect(env.hint().includes("повернуто"), "the hint: " + env.hint());
+    env.click("dlgBtnUndo");
+    await env.settle(200);
+    expect(ops() === "stroke,undo,redo,undo", "the ↺ button does what Ctrl + Z does: " + ops());
+    env.key("KeyY", "н", { ctrlKey: true });
+    await env.settle(200);
+    expect(ops() === "stroke,undo,redo,undo,redo", "Ctrl + Y makes the edit again as well: " + ops());
+    env.click("dlgBtnRedo");                                 // nothing left to make again
+    await env.settle(200);
+    expect(env.edits().length === 6 && env.hint().includes("Повертати нічого"), "a press with nothing to step to must say so: " + env.hint());
+    // the keys keep their own meaning in a text field; a checkbox that was clicked last does not swallow them
+    env.click("dlgBtnPresets");
+    env.click("dlgBtnAddPreset");
+    env.key("KeyZ", "z", { ctrlKey: true }, env.el("dlgNewPresetName"));
+    await env.settle(150);
+    expect(env.edits().length === 6, "Ctrl + Z in the preset name field belongs to the field");
+    env.key("KeyZ", "z", { ctrlKey: true }, env.el("dlgChkMakeMask"));
+    await env.settle(150);
+    expect(env.edits().length === 7 && env.edits()[6].body.op === "undo", "Ctrl + Z with a checkbox in focus must still step back");
+    env.key("", "z", { metaKey: true });                     // a key event that carries no code: told by the letter
+    await env.settle(150);
+    expect(env.edits().length === 8 && env.hint().includes("Скасовувати нічого"), "Cmd / Ctrl + z without a key code works too; with nothing left it says so: " + env.hint());
+    env.key("KeyZ", "z", {});
+    env.key("KeyZ", "z", { ctrlKey: true, altKey: true });
+    await env.settle(150);
+    expect(env.edits().length === 8, "Z alone and Ctrl + Alt + Z are not steps");
+    env.click("dlgToolInvert");                              // every kind of edit can be taken back
+    await env.settle(150);
+    expect(env.state("sessState.history.undo") === 1 && !dim(env, "dlgBtnUndo"), "the inversion must count as a step");
+    await env.drag("gSlSpots", 90);                          // a refresh of the preview keeps the steps
+    await env.settle(900);
+    expect(env.recomputes().length === 1 && !dim(env, "dlgBtnUndo") && env.state("sessState.history.undo") === 1, "a refresh must keep the steps");
+    // the window is closed: the keys do nothing; the next window starts clean
+    env.el("retouchModal").close("cancel");
+    await env.waitFor(() => env.state("isBusy") === false);
+    const sent = env.edits().length;
+    env.key("KeyZ", "z", { ctrlKey: true });
+    await env.settle(150);
+    expect(env.edits().length === sent, "Ctrl + Z with the window closed must ask nothing");
+    env.server.edits = { undo: 0, redo: 0 };
+    await env.open();
+    expect(dim(env, "dlgBtnUndo") && dim(env, "dlgBtnRedo") && env.state("sessState.history.undo") === 0, "a new window: both buttons are dim again");
+  });
+
+  await scenario("mask edits reach the server one after another: a slow answer never covers a newer picture", { editDelays: [500, 20] }, async (env, expect) => {
+    await env.open();
+    stroke(env);                                             // answered after half a second
+    await sleep(40);
+    env.key("KeyZ", "z", { ctrlKey: true });                 // pressed while the stroke is still on its way
+    await env.settle(900);
+    const e = env.edits();
+    expect(e.length === 2 && e[0].body.op === "stroke" && e[1].body.op === "undo", "both edits must be sent, in the order they were made");
+    if (e.length === 2) expect(e[1].t >= e[0].tDone, `the step back must wait for the stroke: sent at ${e[1].t} ms, the stroke was answered at ${e[0].tDone} ms`);
+    expect(env.picture() === "edit-2", "the picture of the last edit must stay on screen: " + env.picture());
+    expect(env.state("JSON.stringify(sessState.history)") === '{"undo":0,"redo":1}', "the counts: " + env.state("JSON.stringify(sessState.history)"));
+    expect(env.hint().includes("скасовано"), "the stroke was there by then, so it was taken back: " + env.hint());
+  });
+
+  await scenario("a server before 4.5.0: a step back says that the server must be restarted", { historyAware: false }, async (env, expect) => {
+    await env.open();
+    stroke(env);
+    await env.settle(200);
+    expect(dim(env, "dlgBtnUndo"), "without an answer about the history the buttons stay dim");
+    env.key("KeyZ", "z", { ctrlKey: true });
+    await env.settle(200);
+    expect(env.edits().length === 2, "the request is still made");
+    expect(env.hint().includes("стару версію сервера") && env.hint().includes("restart_gpu_server.bat"), "the hint must say what to do: " + env.hint());
+  });
+
+  // ---------------------------------------------------------------- "Скинути пресет"
+  const shippedCfg = (id) => JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, "..", "server", "presets_defaults.json"), "utf8")).find((x) => x.id === id).cfg;
+  const cfgOf = (env, id) => JSON.parse(env.state(`JSON.stringify(presetsList.find((p) => p.id === ${JSON.stringify(id)}).cfg)`));
+
+  await scenario("'Скинути пресет': the second press gives the active built-in preset the values it ships with, and only that one",
+    { disk: {} }, async (env, expect) => {
+      env.check("dlgChkAutoPreset", false);
+      await sleep(300);
+      await env.open();
+      // the user tunes two presets and saves them
+      env.click("dlgBtnPresets");
+      env.clickPreset("Дальній план");
+      await env.settle(600);
+      await env.drag("gSlSpots", 40);
+      await env.settle(700);
+      env.click("gBtnSavePreset");
+      await env.settle(300);
+      env.click("dlgBtnPresets");
+      env.clickPreset("Студія (Стандарт)");
+      await env.settle(600);
+      await env.drag("gSlSpots", 30);
+      env.check("dlgChkSmoke", true);
+      await env.settle(900);
+      env.click("gBtnSavePreset");
+      await env.settle(300);
+      expect(cfgOf(env, "std").spots === 30 && cfgOf(env, "std").smokeOn === true && cfgOf(env, "wide_shot").spots === 40,
+        "the tuned values must be saved first: " + JSON.stringify([cfgOf(env, "std").spots, cfgOf(env, "std").smokeOn, cfgOf(env, "wide_shot").spots]));
+      const n0 = env.recomputes().length;
+      const reset = env.el("gBtnResetPreset");
+      expect(reset.textContent.includes("Скинути") && reset.textContent.includes("Студія") && !reset.classList.contains("is-dim"), "the button must name the active preset: " + reset.textContent);
+      env.click("gBtnResetPreset");                          // the first press only asks
+      await env.settle(300);
+      expect(cfgOf(env, "std").spots === 30 && reset.textContent.includes("ще раз") && reset.classList.contains("armed"), "one press must change nothing and ask for one more: " + reset.textContent);
+      expect(env.recomputes().length === n0 && env.hint().includes("ще раз"), "...and compute nothing: " + env.hint());
+      env.click("gBtnResetPreset");                          // the second one resets
+      await env.settle(900);
+      const shipped = shippedCfg("std");
+      const now = cfgOf(env, "std");
+      expect(Object.keys(shipped).length === Object.keys(now).length && Object.keys(shipped).every((k) => now[k] === shipped[k]), "the preset must hold exactly the values it ships with: " + JSON.stringify(now));
+      expect(env.state("getSliderVal('gSlSpots')") === 75 && !env.el("dlgChkSmoke").checked, "...and the controls must show them");
+      expect(cfgOf(env, "wide_shot").spots === 40, "another preset must keep what the user saved into it");
+      const rc = env.recomputes();
+      expect(rc.length === n0 + 1 && rc[n0].body.quick === true && rc[n0].body.params.spots === 75 && rc[n0].body.params.smokeOn === false, "one light refresh with the shipped values");
+      expect(!reset.classList.contains("armed") && reset.textContent.includes("Скинути"), "the button must be back to its usual words: " + reset.textContent);
+      expect(env.hint().includes("скинуто"), "the hint: " + env.hint());
+      expect(env.badge().includes("Студія"), "the note of a preset change must appear: " + env.badge());
+      const onDisk = env.server.disk["presets_local.json"];
+      expect(onDisk.find((x) => x.id === "std").cfg.spots === 75 && onDisk.find((x) => x.id === "wide_shot").cfg.spots === 40, "the presets on the PC must hold it");
+      const posted = env.of("/presets").filter((r) => r.method === "POST");
+      expect(posted.length >= 1 && posted[posted.length - 1].body.find((x) => x.id === "std").cfg.spots === 75, "...and the server copy too");
+      // a built-in preset the user renamed is still reset (it is found by its id); the name stays
+      env.state("presetsList.find((p) => p.id === 'wide_shot').name = 'Мій дальній'; applyPreset(presetsList.find((p) => p.id === 'wide_shot')); renderPresets();");
+      env.click("gBtnResetPreset");
+      env.click("gBtnResetPreset");
+      await env.settle(900);
+      expect(cfgOf(env, "wide_shot").spots === 85 && env.state("presetsList.find((p) => p.id === 'wide_shot').name") === "Мій дальній", "a renamed built-in preset must be reset, its name kept");
+      // a preset of the user's own has nothing to be reset to
+      env.state("presetsList.unshift({ id: 'usr_9', name: 'Мій', color: '#ffffff', builtin: false, cfg: Object.assign({}, presetsList[0].cfg, { spots: 11 }) }); applyPreset(presetsList[0]); renderPresets();");
+      expect(reset.classList.contains("is-dim"), "for the user's own preset the button is dim: " + reset.className);
+      env.click("gBtnResetPreset");
+      env.click("gBtnResetPreset");
+      await env.settle(300);
+      expect(cfgOf(env, "usr_9").spots === 11 && env.hint().includes("власний пресет"), "nothing must change, the hint explains why: " + env.hint());
+    });
+
+  await scenario("'Скинути пресет': a single press is forgotten after a few seconds, and does not pass on to another preset", {}, async (env, expect) => {
+    env.check("dlgChkAutoPreset", false);
+    await env.open();
+    await env.drag("gSlSpots", 40);
+    await env.settle(700);
+    env.click("gBtnSavePreset");
+    await env.settle(200);
+    const reset = env.el("gBtnResetPreset");
+    env.click("gBtnResetPreset");
+    expect(reset.classList.contains("armed"), "armed after one press");
+    env.click("gBtnSavePreset");                             // saving in between takes the press back
+    await env.settle(200);
+    expect(!reset.classList.contains("armed"), "'Зберегти' must take the press back");
+    env.click("gBtnResetPreset");
+    await sleep(6400);
+    expect(!reset.classList.contains("armed") && reset.textContent.includes("Скинути"), "the press must be forgotten after a few seconds: " + reset.textContent);
+    env.click("gBtnResetPreset");                            // counts as a first press again
+    await env.settle(200);
+    expect(cfgOf(env, "std").spots === 40 && reset.classList.contains("armed"), "a press after the pause must be a first one again");
+    env.click("dlgBtnPresets");
+    env.clickPreset("Дальній план");                         // another preset picked while the button waits
+    expect(!reset.classList.contains("armed") && reset.textContent.includes("Дальній"), "the press must not pass on to another preset: " + reset.textContent);
+    env.click("gBtnResetPreset");
+    await env.settle(300);
+    expect(cfgOf(env, "std").spots === 40 && reset.classList.contains("armed"), "...there it is a first press again; 'Студія' keeps the saved value");
+  });
+
+  // ---------------------------------------------------------------- backup of the settings
+  const backupRows = (env) => Array.from(env.doc.querySelectorAll("#backupList .backup-row"));
+
+  await scenario("backup: everything is saved into a file through the server and restored from it after a second click", { disk: {} }, async (env, expect) => {
+    await sleep(400);
+    // what is worth keeping: a preset of the user's own, a tuned built-in one, a deleted one, the switches
+    env.state(`(function () {
+      presetsList.unshift({ id: "usr_7", name: "Мій сірий фон", color: "#54d182", builtin: false, cfg: Object.assign({}, presetsList[0].cfg, { spots: 44, smokeOn: true }) });
+      presetsList.find((p) => p.id === "wide_shot").cfg.scuffs = 12;
+      presetsList = presetsList.filter((p) => p.id !== "gentle");
+      deletedDefaultIds.push("gentle");
+      applyPreset(presetsList[0]);
+      setAutoPreset(false);
+      makeMaskDefault = true;
+      speedMode = "quality";
+      sessState.brushSize = 61;
+      renderPresets();
+      updateSliderVisuals();
+    })()`);
+    const kept = env.state("JSON.stringify([presetsList, buildSettingsSnapshot()])");
+    const box = env.el("panelBackupBox");
+    env.click("btnBackupSave");
+    await env.settle(300);
+    const saves = env.of("/backup/save");
+    expect(saves.length === 1 && saves[0].body.label === "" && JSON.stringify([saves[0].body.presets, saves[0].body.settings]) === kept,
+      "the backup must carry every preset and the whole settings snapshot");
+    expect(env.footer().includes("Бекап збережено") && env.footer().includes("пресетів 11") && env.footer().includes("ваших: 1"), "the panel must say what was saved: " + env.footer());
+    expect(box.classList.contains("visible") && box.textContent.includes(env.server.backupFolder) && box.textContent.includes(env.server.backups[0].file),
+      "...and where the file is: " + box.textContent);
+    env.click("btnBackupOpenFolder");
+    await env.settle(150);
+    expect(env.server.folderOpened === 1 && env.footer().includes("відкрито"), "the folder must be opened through the server: " + env.footer());
+    env.click("btnBackupClose");
+    expect(!box.classList.contains("visible"), "'Закрити' must hide the box");
+
+    // everything is lost (a reinstalled Photoshop: only the built-in presets, the settings as shipped)
+    env.state(`(function () {
+      presetsList = JSON.parse(JSON.stringify(DEFAULT_PRESETS));
+      deletedDefaultIds = [];
+      applyPreset(presetsList[0]);
+      setAutoPreset(true);
+      makeMaskDefault = false;
+      speedMode = "fast";
+      sessState.brushSize = 28;
+      renderPresets();
+      updateSliderVisuals();
+    })()`);
+    env.click("btnBackupRestore");
+    await env.settle(300);
+    expect(box.classList.contains("visible") && backupRows(env).length === 1, "the list of backups must appear: " + box.textContent);
+    const line = backupRows(env)[0] ? backupRows(env)[0].textContent : "";
+    expect(line.includes("19.11.2026 08:31") && line.includes("пресетів: 11") && line.includes("ваших: 1"), "a line must show the date and what the backup holds: " + line);
+    backupRows(env)[0].click();                              // the first click only asks
+    await env.settle(200);
+    expect(env.of("/backup/read").length === 0 && env.state("presetsList.length") === 11 && !env.state("presetsList.some((p) => p.id === 'usr_7')"), "one click must change nothing");
+    expect(backupRows(env)[0].classList.contains("armed") && backupRows(env)[0].textContent.includes("ще раз"), "...and ask for one more: " + backupRows(env)[0].textContent);
+    backupRows(env)[0].click();                              // the second one restores
+    await env.settle(600);
+    const reads = env.of("/backup/read");
+    expect(reads.length === 1 && reads[0].body.file === env.server.backups[0].file, "the second click must read that backup");
+    expect(env.state("JSON.stringify([presetsList, buildSettingsSnapshot()])") === kept, "the presets and the settings must be exactly as they were saved");
+    expect(env.state("autoPreset") === false && env.state("makeMaskDefault") === true && env.state("speedMode") === "quality" && env.state("sessState.brushSize") === 61 &&
+      env.state("activePresetId") === "usr_7" && env.state("deletedDefaultIds.join()") === "gentle", "the switches, the active preset and the deleted preset must be back");
+    expect(env.state("getSliderVal('gSlSpots')") === 44 && env.el("dlgChkSmoke").checked && !env.el("dlgChkAutoPreset").checked && env.el("dlgChkMakeMask").checked &&
+      env.el("dlgActivePresetName").textContent === "Мій сірий фон", "the controls must show it: " + env.el("dlgActivePresetName").textContent);
+    const copy = env.of("/backup/save")[1];
+    expect(copy && copy.body.label === "before-restore" && copy.body.presets.length === 11 && !copy.body.presets.some((x) => x.id === "usr_7"),
+      "what was there before the restore must be kept as one more backup");
+    const posted = env.of("/presets").filter((r) => r.method === "POST");
+    const settingsPosted = env.of("/settings").filter((r) => r.method === "POST");
+    expect(posted.length >= 1 && posted[posted.length - 1].body.some((x) => x.id === "usr_7") && copy && posted[posted.length - 1].t >= copy.tDone,
+      "the server copy must get the restored presets, after the safety copy was written");
+    expect(settingsPosted.length >= 1 && settingsPosted[settingsPosted.length - 1].body.autoPreset === false && settingsPosted[settingsPosted.length - 1].body.activePresetId === "usr_7",
+      "...and the restored settings");
+    expect(env.server.disk["presets_local.json"].some((x) => x.id === "usr_7") && env.server.disk["user_settings.json"].makeMaskDefault === true, "the files on the PC must hold them too");
+    expect(env.footer().includes("Відновлено") && env.footer().includes("19.11.2026 08:31") && env.footer().includes("копія перед відновленням"), "the panel must say what was done: " + env.footer());
+    expect(!box.classList.contains("visible"), "the list must close after the restore");
+    env.click("btnBackupRestore");                           // the list now holds the automatic copy too, marked as such
+    await env.settle(300);
+    expect(backupRows(env).length === 2 && backupRows(env)[0].textContent.includes("копія перед відновленням") && !backupRows(env)[1].textContent.includes("копія"),
+      "the automatic copy must be listed and marked: " + backupRows(env).map((n) => n.textContent).join(" | "));
+    env.click("btnBackupRestore");
+    await env.settle(150);
+    expect(!box.classList.contains("visible"), "a second press on the button must hide the list");
+    // the restored state opens the window as usual
+    await env.open();
+    const p0 = env.of("/session/start")[0].body.params;
+    expect(p0.spots === 44 && p0.smokeOn === true && p0.speedMode === "quality", "the first scan must go with the restored values: " + JSON.stringify([p0.spots, p0.smokeOn, p0.speedMode]));
+  });
+
+  await scenario("backup: a server before 4.5.0, a file that cannot be written, an empty folder, a broken file - the panel says what to do",
+    { backupAware: false }, async (env, expect) => {
+      await sleep(300);
+      const box = env.el("panelBackupBox");
+      env.click("btnBackupSave");
+      await env.settle(300);
+      expect(env.footer().includes("Бекап не збережено") && env.footer().includes("стару версію сервера") && env.footer().includes("restart_gpu_server.bat"),
+        "an older server: the panel must say that it has to be restarted: " + env.footer());
+      expect(!box.classList.contains("visible"), "no box without a backup");
+      env.click("btnBackupRestore");
+      await env.settle(300);
+      expect(env.footer().includes("стару версію сервера") && !box.classList.contains("visible"), "the same for the list: " + env.footer());
+      env.server.backupAware = true;
+      env.server.backupSaveFails = true;
+      env.click("btnBackupSave");
+      await env.settle(300);
+      expect(env.footer().includes("Бекап не збережено") && env.footer().includes("диск недоступний"), "the reason the server gives must be shown: " + env.footer());
+      env.server.backupSaveFails = false;
+      env.click("btnBackupRestore");
+      await env.settle(300);
+      expect(box.classList.contains("visible") && backupRows(env).length === 0 && box.textContent.includes("Бекапів ще немає") && box.textContent.includes(env.server.backupFolder),
+        "an empty folder: the box must say so and name the folder: " + box.textContent);
+      env.click("btnBackupRestore");
+      // a file that holds nothing usable: nothing is replaced
+      env.server.backups.push({ file: "broken.json", saved_at: "2026-11-10T09:00:00", version: "4.5.0", label: "", presets_list: [{ id: "x" }], settings: {} });
+      const before = env.state("JSON.stringify(presetsList)");
+      env.click("btnBackupRestore");
+      await env.settle(300);
+      backupRows(env)[0].click();
+      await env.settle(150);
+      backupRows(env)[0].click();
+      await env.settle(400);
+      expect(env.footer().includes("Бекап не відновлено") && env.state("JSON.stringify(presetsList)") === before, "a broken backup must change nothing: " + env.footer());
+    });
+
+  await scenario("restoring a backup made by an older version: the defaults that changed since and the new built-in presets are added", { disk: {} }, async (env, expect) => {
+    await sleep(400);
+    env.server.backups.push({
+      file: "CleanVinylPro2_backup_old.json", saved_at: "2026-11-01T10:00:00", version: "4.4.0", label: "", presets_list: presets430(),
+      settings: { schemaVersion: 5, activePresetId: "lowkey", autoPreset: true, presetMoves: [], knownDefaultIds: IDS_OLD.slice(), deletedDefaultIds: [], cfg: Object.assign({}, presets430()[4].cfg) }
+    });
+    env.click("btnBackupRestore");
+    await env.settle(300);
+    backupRows(env)[0].click();
+    await env.settle(150);
+    backupRows(env)[0].click();
+    await env.settle(600);
+    const ids = env.state("presetsList.map((p) => p.id).join()");
+    expect(ids === "std,medium_shot,closeup,wide_shot,lowkey,lowkey_medium,lowkey_close,lowkey_wide,smoke,clean_stands,gentle,user_1", "the dark presets by framing must be added: " + ids);
+    const lk = cfgOf(env, "lowkey"), mine = cfgOf(env, "user_1");
+    expect(lk.spots === 80 && lk.cycCurve === 65 && lk.smokeOn === false && cfgOf(env, "smoke").smokeOn === true, "the changed defaults must reach the restored presets: " + JSON.stringify([lk.spots, lk.cycCurve, lk.smokeOn]));
+    expect(mine.spots === 33 && mine.smokeOn === true && mine.cycCurve === 0, "the user's own preset must be as it was saved");
+    expect(env.state("activePresetId") === "lowkey" && env.state("getSliderVal('gSlSpots')") === 80 && env.state("getSliderVal('gSlCyc')") === 65 && !env.el("dlgChkSmoke").checked,
+      "the controls of the active preset must follow");
+    expect(env.server.disk["user_settings.json"].presetMoves.length === 4, "the moves must be remembered: " + JSON.stringify(env.server.disk["user_settings.json"].presetMoves));
   });
 
   const failed = results.filter((r) => r.problems.length);
@@ -1065,7 +1582,7 @@ async function main() {
   }
   console.log(failed.length
     ? `plugin preview: ${failed.length} of ${results.length} scenarios FAILED`
-    : `plugin preview: ${results.length} scenarios pass (drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes)`);
+    : `plugin preview: ${results.length} scenarios pass (drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes, steps back and forward, preset reset, backup)`);
   process.exit(failed.length ? 1 : 0);
 }
 

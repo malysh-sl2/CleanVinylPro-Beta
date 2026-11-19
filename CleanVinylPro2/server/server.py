@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 import json
 import os
+import re
 import struct
 import sys
 import threading
@@ -61,7 +62,7 @@ from engine import CleanVinylEngine, DEFAULT_IDLE_UNLOAD_SEC
 
 APP_ID = "cleanvinylpro2"  # tells this program apart from the original Clean Vinyl Pro (port 18745)
 APP_PORT = 18746
-APP_VERSION = "4.4.0"
+APP_VERSION = "4.5.0"
 # Settings written by plugin builds older than this schema still carry the former 30 s idle-unload default
 SETTINGS_SCHEMA_IDLE_120 = 5
 LEGACY_IDLE_UNLOAD_SEC = 30.0
@@ -103,6 +104,83 @@ def _user_presets_path() -> str:
 
 def _user_settings_path() -> str:
     return os.path.join(_resolve_user_data_dir(), "user_settings.json")
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Backups of the settings. Everything the plugin remembers (the presets and the settings snapshot) is written into
+# one JSON file in <program folder>/backup - a folder that stays where it is when Photoshop is reinstalled and that
+# the owner can copy to another disk. The plugin itself may not write outside its own data folder.
+BACKUP_DIR_NAME = "backup"
+BACKUP_FILE_PREFIX = "CleanVinylPro2_backup_"
+BACKUP_KIND = "cleanvinylpro2-settings-backup"
+BACKUP_FORMAT = 1
+BACKUP_MAX_BYTES = 8 * 1024 * 1024   # a real backup is a few dozen KB
+BACKUP_LIST_MAX = 200                # newest files looked at when the folder is listed
+BACKUP_AUTO_KEEP = 10                # copies made automatically before a restore: only the newest are kept
+
+
+def _backup_dir() -> str:
+    env_dir = os.environ.get("CLEANVINYL_BACKUP_DIR", "").strip()
+    return env_dir or os.path.join(cvpaths.app_root(), BACKUP_DIR_NAME)
+
+
+def _backup_summary(path: str) -> dict | None:
+    """What a backup file holds, or None when the file is not a backup of this program."""
+    try:
+        size = os.path.getsize(path)
+        if size <= 0 or size > BACKUP_MAX_BYTES:
+            return None
+        with open(path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    if not isinstance(data, dict) or data.get("kind") != BACKUP_KIND:
+        return None
+    presets, settings = data.get("presets"), data.get("settings")
+    if not isinstance(presets, list) or not presets or not isinstance(settings, dict):
+        return None
+    if not all(isinstance(x, dict) and x.get("id") and isinstance(x.get("cfg"), dict) for x in presets):
+        return None
+    saved_at = data.get("saved_at")
+    if not isinstance(saved_at, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", saved_at):
+        saved_at = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(os.path.getmtime(path)))
+    return {
+        "file": os.path.basename(path),
+        "saved_at": saved_at,
+        "version": str(data.get("version") or ""),
+        "label": str(data.get("label") or ""),
+        "presets": len(presets),
+        "user_presets": sum(1 for x in presets if not x.get("builtin")),
+        "size": size,
+    }
+
+
+def _backup_files(folder: str) -> list:
+    """*.json files of the backup folder, newest first (by the time the file was written)."""
+    try:
+        names = [n for n in os.listdir(folder) if n.lower().endswith(".json")]
+    except OSError:
+        return []
+    stamped = []
+    for n in names:
+        full = os.path.join(folder, n)
+        try:
+            if os.path.isfile(full):
+                stamped.append((os.path.getmtime(full), n))
+        except OSError:
+            pass
+    stamped.sort(reverse=True)
+    return [n for _, n in stamped[:BACKUP_LIST_MAX]]
+
+
+def _prune_auto_backups(folder: str, label: str) -> None:
+    """Keeps the newest BACKUP_AUTO_KEEP files the program made by itself under `label`; files made by the owner stay."""
+    mine = [n for n in _backup_files(folder) if n.startswith(BACKUP_FILE_PREFIX) and n.endswith("_" + label + ".json")]
+    for n in mine[BACKUP_AUTO_KEEP:]:
+        try:
+            os.remove(os.path.join(folder, n))
+        except OSError:
+            pass
 
 
 def _idle_unload_from_settings(data, default_sec: float = DEFAULT_IDLE_UNLOAD_SEC) -> float:
@@ -204,6 +282,7 @@ def health():
                 "version": APP_VERSION,
                 "install_dir": install_dir,
                 "models_dir": MODELS_DIR,
+                "backup_dir": _backup_dir(),
                 "error": ENGINE_ERROR or "Моделі не завантажені",
             },
         )
@@ -214,6 +293,7 @@ def health():
         "version": APP_VERSION,
         "install_dir": install_dir,
         "models_dir": MODELS_DIR,
+        "backup_dir": _backup_dir(),
         "gpu": eng.gpu_name,
         "provider": eng.provider_name,
         "gpu_error": eng.gpu_error,
@@ -325,6 +405,100 @@ async def save_settings(request: Request):
             except Exception:
                 pass
     return {"ok": True}
+
+
+@app.post("/backup/save")
+async def backup_save(request: Request):
+    """
+    Body: {"presets": [...], "settings": {...}, "label": ""} - what the plugin holds right now. Written as one file
+    into the backup folder. "label" (letters, digits, "-") marks a copy the program makes by itself, for example
+    "before-restore"; only the newest of those are kept.
+    """
+    raw = await request.body()
+    if len(raw) > BACKUP_MAX_BYTES:
+        return JSONResponse(status_code=413, content={"ok": False, "error": "Завеликий обсяг налаштувань для бекапа."})
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Очікується JSON."})
+    presets = data.get("presets") if isinstance(data, dict) else None
+    settings = data.get("settings") if isinstance(data, dict) else None
+    if not isinstance(presets, list) or not presets or not isinstance(settings, dict):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "У запиті немає пресетів або налаштувань."})
+    if not all(isinstance(x, dict) and x.get("id") and isinstance(x.get("cfg"), dict) for x in presets):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Список пресетів пошкоджено."})
+    label = re.sub(r"[^A-Za-z0-9-]", "", str(data.get("label") or ""))[:24]
+
+    folder = _backup_dir()
+    now = time.localtime()
+    stem = BACKUP_FILE_PREFIX + time.strftime("%Y-%m-%d_%H-%M-%S", now)
+    try:
+        os.makedirs(folder, exist_ok=True)
+        name, n = stem + (("_" + label) if label else "") + ".json", 1
+        while os.path.exists(os.path.join(folder, name)):   # two backups within one second
+            n += 1
+            name = f"{stem}-{n}" + (("_" + label) if label else "") + ".json"
+        _atomic_write_json(os.path.join(folder, name), {
+            "kind": BACKUP_KIND,
+            "format": BACKUP_FORMAT,
+            "app": APP_ID,
+            "version": APP_VERSION,
+            "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S", now),
+            "label": label,
+            "presets": presets,
+            "settings": settings,
+        })
+        if label:
+            _prune_auto_backups(folder, label)
+    except OSError as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "error": f"Не вдалося записати бекап у «{folder}»: {exc}"})
+    return {"ok": True, "file": name, "path": os.path.join(folder, name), "folder": folder,
+            "presets": len(presets), "user_presets": sum(1 for x in presets if not x.get("builtin"))}
+
+
+@app.get("/backup/list")
+def backup_list():
+    """The backups found in the backup folder, newest first. Files that are not backups of this program are skipped."""
+    folder = _backup_dir()
+    found = [s for s in (_backup_summary(os.path.join(folder, n)) for n in _backup_files(folder)) if s]
+    found.sort(key=lambda s: s["saved_at"], reverse=True)
+    return {"ok": True, "folder": folder, "backups": found}
+
+
+@app.post("/backup/read")
+async def backup_read(request: Request):
+    """Body: {"file": "<name from /backup/list>"} -> the presets and the settings stored in that backup."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    name = body.get("file") if isinstance(body, dict) else None
+    folder = _backup_dir()
+    # Only a file that really lies in the backup folder, named exactly as the folder lists it (never a path)
+    if not isinstance(name, str) or not name or name not in _backup_files(folder):
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Такого бекапа в папці немає."})
+    path = os.path.join(folder, name)
+    summary = _backup_summary(path)
+    if summary is None:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Файл не є бекапом налаштувань цієї програми або пошкоджений."})
+    with open(path, "r", encoding="utf-8-sig") as f:
+        data = json.load(f)
+    return {"ok": True, **summary, "path": path, "folder": folder, "presets_list": data["presets"], "settings": data["settings"]}
+
+
+@app.post("/backup/open-folder")
+async def backup_open_folder():
+    """Shows the backup folder in Windows Explorer (the plugin cannot open a folder by itself)."""
+    folder = _backup_dir()
+    opened = False
+    try:
+        os.makedirs(folder, exist_ok=True)
+        if sys.platform == "win32":
+            os.startfile(folder)  # noqa: S606 - a folder of this program, opened in Explorer
+            opened = True
+    except Exception:
+        opened = False
+    return {"ok": True, "folder": folder, "opened": opened}
 
 
 @app.post("/process")

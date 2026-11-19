@@ -5,6 +5,7 @@ import sys
 import time
 import threading
 import uuid
+import warnings
 import cv2
 import numpy as np
 
@@ -1112,6 +1113,63 @@ class CleanVinylEngine:
     # ------------------------------------------------------------------
     # 4. Dust, Crumbs, Hair & Scuff Spots Detector
     # ------------------------------------------------------------------
+    # Local noise against the noise of the whole frame (their ratio, cell by cell).
+    # An evenly lit backdrop: the ratio stays within about 0.9-1.25, and the frame noise is the right measure
+    # everywhere. Nothing changes below GRAIN_LOCAL_FROM; the local value is used in full from GRAIN_LOCAL_FULL up
+    # (a rare cell).
+    # A frame lit unevenly - a dark backdrop with a pool of light, a dark wall over a lit floor: the frame noise is
+    # the noise of its dark majority, the lit parts reach 1.6-2.1. There the local value is used wherever it is the
+    # higher one. "Unevenly" is read from the ratio that a tenth of the backdrop exceeds: from GRAIN_UNEVEN_FROM
+    # (still even) to GRAIN_UNEVEN_FULL.
+    GRAIN_LOCAL_FROM = 1.30
+    GRAIN_LOCAL_FULL = 1.60
+    GRAIN_UNEVEN_FROM = 1.28
+    GRAIN_UNEVEN_FULL = 1.45
+    GRAIN_LOCAL_CELLS = 45  # cells along the long side of the frame
+
+    @classmethod
+    def _local_grain_gain(cls, hp_abs: np.ndarray, valid: np.ndarray, grain_frame: float) -> np.ndarray | None:
+        """
+        How much noisier every part of the frame is than the frame as a whole (>= 1), on a coarse grid; None when
+        no part is - the usual case of an evenly lit backdrop, where the dust search then works exactly as before.
+        hp_abs: |pixel - its smoothed neighbourhood| on the grid the frame noise was measured on,
+        valid: the pixels that count (not the person), grain_frame: the noise of the whole frame (same measure).
+        The noise of a camera grows with the light, so a pool of light on a dark backdrop is far noisier than the
+        dark wall the frame noise is measured on. The local value is a median, cell by cell: dust and edges, which
+        are a small part of a cell, do not raise it.
+        """
+        hh, ww = hp_abs.shape[:2]
+        b = max(8, int(round(max(hh, ww) / float(cls.GRAIN_LOCAL_CELLS))))
+        ny, nx = -(-hh // b), -(-ww // b)
+        if ny < 2 or nx < 2:
+            return None
+        cells = np.full((ny * b, nx * b), np.nan, dtype=np.float32)
+        cells[:hh, :ww] = np.where(valid, hp_abs, np.float32(np.nan))
+        cells = cells.reshape(ny, b, nx, b).transpose(0, 2, 1, 3).reshape(ny, nx, b * b)
+        seen = np.count_nonzero(~np.isnan(cells), axis=2)
+        enough = seen >= 0.25 * b * b
+        if not enough.any():
+            return None
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # cells with nothing but the person in them
+            med = np.nanmedian(cells, axis=2).astype(np.float32) * np.float32(1.4826)
+        del cells
+        # cells that are mostly the person take the value of their neighbours
+        wgt = enough.astype(np.float32)
+        num = cv2.GaussianBlur(np.where(enough, med, np.float32(0.0)), (0, 0), 1.0)
+        den = cv2.GaussianBlur(wgt, (0, 0), 1.0)
+        loc = np.where(enough, med, np.where(den > 1e-3, num / np.maximum(den, 1e-3), np.float32(grain_frame)))
+        loc = cv2.GaussianBlur(loc.astype(np.float32), (0, 0), 0.8)
+        ratio = loc / np.float32(max(float(grain_frame), 1e-6))
+        uneven = float(np.clip((float(np.percentile(ratio[enough], 90)) - cls.GRAIN_UNEVEN_FROM)
+                               / (cls.GRAIN_UNEVEN_FULL - cls.GRAIN_UNEVEN_FROM), 0.0, 1.0))
+        start = cls.GRAIN_LOCAL_FROM + (1.0 - cls.GRAIN_LOCAL_FROM) * uneven
+        full = cls.GRAIN_LOCAL_FULL + (1.0 - cls.GRAIN_LOCAL_FULL) * uneven
+        if float(ratio.max()) <= start:
+            return None
+        share = np.clip((ratio - start) / max(full - start, 1e-6), 0.0, 1.0)
+        return (1.0 + share * np.maximum(ratio - 1.0, 0.0)).astype(np.float32)
+
     def _detect_spots_mask(
         self,
         img_rgb_u8: np.ndarray,
@@ -1124,7 +1182,14 @@ class CleanVinylEngine:
         frac_fine: bool = True,
         frac_med: bool = True,
         frac_large: bool = True,
+        local_grain: bool = False,
     ):
+        """
+        local_grain: the fine pass judges every place against the noise found THERE, wherever that is clearly above
+        the noise of the frame as a whole (see _local_grain_gain). A dark frame with a pool of light needs it: the
+        frame noise is measured on the dark majority, the lit floor is twice as noisy, and that plain noise was
+        taken for dust all over the pool. Where the noise is even the thresholds are exactly the former ones.
+        """
         if not (frac_fine or frac_med or frac_large) or spots_strength <= 0:
             return np.zeros(img_rgb_u8.shape[:2], dtype=np.uint8), 1.5
 
@@ -1243,7 +1308,23 @@ class CleanVinylEngine:
 
         thr_strong = max(8, int(round(6.0 * grain_full * sens)))
         thr_hair = max(5, int(round(3.8 * grain_full * sens)))
-        fine_strong = ((bh_full > thr_strong) | (th_full > max(12, int(round(7.5 * grain_full * sens))))).astype(np.uint8)
+        thr_top = max(12, int(round(7.5 * grain_full * sens)))
+        thr_top_shadow = int(round(1.65 * max(12, 7.5 * grain_full * sens)))
+        thr_strong_shadow = int(round(thr_strong * 1.85))
+        gain_s = self._local_grain_gain(hp_full, fg_sub, grain_full) if (local_grain and np.any(fg_sub)) else None
+        if gain_s is not None:
+            # the same thresholds, computed with the noise of every place instead of the noise of the frame
+            def thr_map(base: float, floor: float, mult: float = 1.0):
+                t = cv2.resize(np.maximum(floor, base * gain_s) * mult, (fw, fh), interpolation=cv2.INTER_LINEAR)
+                return np.clip(np.rint(t), 0, 255).astype(np.uint8)
+
+            g_sens = grain_full * sens
+            thr_strong = thr_map(6.0 * g_sens, 8.0)
+            thr_hair = thr_map(3.8 * g_sens, 5.0)
+            thr_top = thr_map(7.5 * g_sens, 12.0)
+            thr_top_shadow = thr_map(7.5 * g_sens, 12.0, 1.65)
+            thr_strong_shadow = np.clip(np.rint(thr_strong.astype(np.float32) * 1.85), 0, 255).astype(np.uint8)
+        fine_strong = ((bh_full > thr_strong) | (th_full > thr_top)).astype(np.uint8)
         fine_soft = (bh_full > thr_hair).astype(np.uint8)
 
         stand_work_bad = cv2.resize(st_m, (fw, fh), interpolation=cv2.INTER_LINEAR) > 75
@@ -1256,7 +1337,7 @@ class CleanVinylEngine:
         hard_bad_work = fg_work_bad | stand_work_bad | (smoke_work_bad & y_smoke_protect) | dark_bg_bad
 
         fine_strong[hard_bad_work] = 0
-        fine_strong[shadow_work_bad & (bh_full <= int(round(thr_strong * 1.85))) & (th_full <= int(round(1.65 * max(12, 7.5 * grain_full * sens))))] = 0
+        fine_strong[shadow_work_bad & (bh_full <= thr_strong_shadow) & (th_full <= thr_top_shadow)] = 0
         fine_soft[hard_bad_work | shadow_work_bad] = 0
         pad_b = max(4, min(14, int(0.012 * min(fh, fw))))
         for arr in (fine_strong, fine_soft):
@@ -1821,11 +1902,22 @@ class CleanVinylEngine:
                 # on one of its sides and used to be taken for the corner.)
                 # Looked for in every stripe on its own: when the candidate line is not quite parallel to such a
                 # thin line, the stripes meet its two steps at different rows.
+                # The light itself may climb or fall across the candidate line (a vignette, a pool of light), and
+                # that slope adds to the steps of one direction and takes from the steps of the other: a faint
+                # joint on a floor that darkens towards the camera kept more of its "down" step than of its "up"
+                # step and passed for a one-way step, a corner. So the slope is taken out first. It is measured on
+                # each side of the candidate line apart, between two bands of ONE side: neither a step at the line
+                # nor a thin line next to it gets into it.
+                f0, f1 = r2 // 2 + 3, r2 + 10
+                slope_dn = (band_mean(f1 - 2, f1) - band_mean(f0, f0 + 2)) / float(f1 - f0 - 2)
+                slope_up = (band_mean(-(f0 + 2), -f0) - band_mean(-f1, -(f1 - 2))) / float(f1 - f0 - 2)
+                far_ok = shifted(seg_ok, f1) & shifted(seg_ok, -f1) & shifted(seg_ok, f0) & shifted(seg_ok, -f0)
+                tilt = np.where(far_ok, 0.5 * (slope_dn + slope_up) * (2 * r1), 0.0).astype(np.float32)
                 back = np.zeros_like(step)
                 for dy in range(-(r2 + 2), r2 + 3):
                     if dy != 0:
-                        back = np.maximum(back, -sgn[:, None] * shifted(step, dy))
-                forth = (np.maximum(0.0, sgn[:, None] * step) * okb).sum(axis=1)
+                        back = np.maximum(back, -sgn[:, None] * (shifted(step, dy) - tilt))
+                forth = (np.maximum(0.0, sgn[:, None] * (step - tilt)) * okb).sum(axis=1)
                 one_way = np.clip((0.8 - (back * okb).sum(axis=1) / np.maximum(forth, 1e-3)) / 0.4, 0.0, 1.0)
                 sc_r = (np.abs(mean_sharp) * np.clip((consist - 0.5) / 0.35, 0.0, 1.0) * cov ** 0.75
                         * (1.0 - 3.0 * abs(a)) * (cov >= 0.25) * keeps * abrupt * one_way)
@@ -1891,6 +1983,36 @@ class CleanVinylEngine:
         if not np.any(seen):
             return True
         return float(np.mean(selection_alpha[ys, xs][seen] > half_on)) >= 0.9
+
+    @staticmethod
+    def _whole_line_repair_only(seam_mask: np.ndarray, line: dict, fg_u8: np.ndarray, need: float = 0.85) -> np.ndarray:
+        """
+        The wall-floor corner when no tool takes it: the corner tool is at 0, or the selection holds only a part of
+        the line. The seam search may still mark it. Repaired along its whole visible length it stays a clean line,
+        as before. Repaired in pieces it becomes a dashed, hard-edged remainder (a dark backdrop, where the corner
+        is a thin line here and nothing there). So a repair inside the corner strip is kept only when it covers at
+        least `need` of the line that is visible next to the person; otherwise the strip is left as it was shot.
+        `line`: as _corner_line_of_frame gives it; `seam_mask` is edited in place and returned.
+        """
+        h, w = seam_mask.shape[:2]
+        half = float(line["half"])
+        yc = float(line["row"]) + float(line["slope"]) * (np.arange(w, dtype=np.float32) - (w - 1) / 2.0)
+        y_lo = int(max(0, np.floor(float(yc.min()) - half)))
+        y_hi = int(min(h, np.ceil(float(yc.max()) + half) + 1))
+        if y_hi <= y_lo:
+            return seam_mask
+        slab = seam_mask[y_lo:y_hi]  # a view: clearing it clears the mask
+        strip = np.abs(np.arange(y_lo, y_hi, dtype=np.float32)[:, None] - yc[None, :]) <= half
+        marked = (slab > 0) & strip
+        if not marked.any():
+            return seam_mask
+        yi = np.round(yc).astype(np.int64)
+        cols = np.flatnonzero((yi >= 0) & (yi < h))
+        seen = cols[fg_u8[yi[cols], cols] < 40]  # the columns where the line is not behind the person
+        if seen.size == 0 or float(marked.any(axis=0)[seen].mean()) >= need:
+            return seam_mask
+        slab[strip] = 0
+        return seam_mask
 
     def _corner_line_of_frame(self, img_rgb_u8: np.ndarray, eff_fg_u8: np.ndarray, stand_protect_s: np.ndarray,
                               smoke_s: np.ndarray) -> dict | None:
@@ -2680,12 +2802,14 @@ class CleanVinylEngine:
                 seam_mask = np.zeros((h, w), dtype=np.uint8)
                 if seam_on and seam_eff > 0 and frac_large:
                     corner_line = None
-                    if cyc_str > 0:  # the wall-floor corner is left to the corner tool, exactly as in process()
+                    if cyc_str > 0 or seam_join:  # the wall-floor corner, treated exactly as in process()
                         corner_line = self._corner_line_of_frame(img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_s)
                     seam_mask = self._detect_vinyl_seam_mask(
                         img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_s, seam_eff, edge_prot, fast_mode=False,
-                        join=seam_join, skip_line=corner_line,
+                        join=seam_join, skip_line=(corner_line if cyc_str > 0 else None),
                     )
+                    if cyc_str <= 0 and corner_line is not None:
+                        seam_mask = self._whole_line_repair_only(seam_mask, corner_line, eff_fg_for_spots)
                     seam_mask[core_mask_u8 > 140] = 0
 
                 spot_mask, _ = self._detect_spots_mask(
@@ -2699,6 +2823,7 @@ class CleanVinylEngine:
                     frac_fine=frac_fine,
                     frac_med=frac_med,
                     frac_large=frac_large,
+                    local_grain=bool(params.get("grainLocal", True)),
                 )
 
                 action_bin = np.maximum(seam_mask, spot_mask)
@@ -2955,6 +3080,8 @@ class CleanVinylEngine:
             fast_mode = speed_mode == "fast"
             # "seamJoin": the pieces of one floor line on both sides of the person are judged together
             seam_join = bool(params.get("seamJoin", True))
+            # "grainLocal": dust is judged against the noise of the place it lies in (see _detect_spots_mask)
+            grain_local = bool(params.get("grainLocal", True))
 
             frac_fine = bool(params.get("fracFine", True))
             frac_med = bool(params.get("fracMed", True))
@@ -3008,20 +3135,26 @@ class CleanVinylEngine:
 
             k_fg = self._fg_stage_key(edge_prot)
             k_maps = (k_fg, smoke_str, smoke_on, smoke_auto, keep_shadow)
-            # With the corner tool on, the wall-floor corner is left to it: the seam search skips that strip.
+            # The wall-floor corner and the seam search. With the corner tool on, the line is left to that tool: the
+            # seam search skips its strip. With the tool at 0 (or when the selection holds only a part of the line,
+            # so the tool leaves it) the seam search may take the line for a joint, as it always could - but only
+            # whole: a line repaired in pieces is a dashed, hard-edged remainder, and that is what a dark backdrop
+            # gave (see _whole_line_repair_only). "seamJoin" off = the former way, pieces included.
             seam_wanted = seam_on and seam_eff > 0 and frac_large
             corner_skip = bool(cyc_str > 0 and seam_wanted)
+            corner_whole = bool(seam_wanted and seam_join)
+            corner_wanted = bool(cyc_str > 0 or corner_whole)
             # What gets found does not depend on the speed mode any more (both use the thorough search); the speed mode
             # only chooses HOW the found defects are repaired, so it enters the cache at the "heal" stage.
             k_detect = (
                 k_maps, remove_stands, seam_on, (seam_eff if seam_on else 0.0),
-                spots_eff, frac_fine, frac_med, frac_large, (seam_join if seam_on else True), corner_skip,
+                spots_eff, frac_fine, frac_med, frac_large, (seam_join if seam_on else True), corner_skip, grain_local,
             )
             # The two searches inside "detect" are also remembered one by one: moving the dust slider does not look
             # for the seam again, and the other way round.
             k_seam = (k_maps, remove_stands, seam_eff, seam_join, corner_skip)
             k_corner = (k_maps, remove_stands)  # the wall-floor corner of the untouched frame
-            k_spots = (k_maps, remove_stands, spots_eff, frac_fine, frac_med, frac_large)
+            k_spots = (k_maps, remove_stands, spots_eff, frac_fine, frac_med, frac_large, grain_local)
             k_heal = (k_detect, fast_mode, grain_keep)
             # Order of the tone stages: corner -> stains -> blur. The corner goes first: once the wall-floor step is a
             # smooth slope, the stain stage sees no edge there and evens the backdrop across it.
@@ -3041,7 +3174,7 @@ class CleanVinylEngine:
 
             if analysis_only and sc is not None:
                 r_fg, r_maps, r_det, r_cor = sc.get("fg"), sc.get("maps"), sc.get("detect"), sc.get("corner")
-                cor_ok = cyc_str <= 0 or (r_cor is not None and r_cor[0] == k_corner)
+                cor_ok = not corner_wanted or (r_cor is not None and r_cor[0] == k_corner)
                 if (r_fg is not None and r_fg[0] == k_fg and r_maps is not None and r_maps[0] == k_maps
                         and r_det is not None and r_det[0] == k_detect and cor_ok):
                     # everything was found already for these settings: no pixel has to be read
@@ -3076,6 +3209,7 @@ class CleanVinylEngine:
             grain_sigma = 1.5
             smoke_info = None  # what was seen of smoke (see _compute_protection_maps_small); None = not looked for
             corner_line = None  # the wall-floor corner (_corner_line_of_frame); None = not looked for or not there
+            corner_frame = None  # the same before the selection rule (the line as the frame has it)
             dress_src_1024 = None
             dress_tex_1024 = None
             if dress_strength > 0:
@@ -3143,14 +3277,15 @@ class CleanVinylEngine:
                             _sc_put("maps", k_maps, (stand_protect_s, stand_remove_s, smoke_s, shadow_s, smoke_info))
                         eff_stand_protect = np.zeros_like(stand_protect_s) if remove_stands else stand_protect_s
                         eff_fg_for_spots = core_mask_u8 if remove_stands else fg_mask_u8
-                        if cyc_str > 0:
+                        if corner_wanted:
                             rec = _sc_get("corner", k_corner)
                             if rec is not None:
-                                (corner_line,) = rec
+                                (corner_frame,) = rec
                             else:
-                                corner_line = self._corner_line_of_frame(img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_s)
-                                _sc_put("corner", k_corner, (corner_line,))
-                            corner_line = corner_of_this_run(corner_line, eff_fg_for_spots)
+                                corner_frame = self._corner_line_of_frame(img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_s)
+                                _sc_put("corner", k_corner, (corner_frame,))
+                            if cyc_str > 0:
+                                corner_line = corner_of_this_run(corner_frame, eff_fg_for_spots)
                     else:
                         stand_remove_s = np.zeros((1, 1), dtype=np.uint8)
 
@@ -3180,6 +3315,8 @@ class CleanVinylEngine:
                                         img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_s, seam_eff, edge_prot, fast_mode=False,
                                         join=seam_join, skip_line=(corner_line if corner_skip else None),
                                     )
+                                    if corner_whole and corner_frame is not None and corner_line is None:
+                                        seam_mask = self._whole_line_repair_only(seam_mask, corner_frame, eff_fg_for_spots)
                                     seam_mask[core_mask_u8 > 140] = 0
                                     _sc_put("seam", k_seam, (seam_mask,))
 
@@ -3199,6 +3336,7 @@ class CleanVinylEngine:
                                         frac_fine=frac_fine,
                                         frac_med=frac_med,
                                         frac_large=frac_large,
+                                        local_grain=grain_local,
                                     )
                                     _sc_put("spots", k_spots, (spot_mask, grain_sigma))
 
@@ -3488,6 +3626,7 @@ class CleanVinylEngine:
                     frac_fine=frac_fine,
                     frac_med=frac_med,
                     frac_large=frac_large,
+                    local_grain=grain_local,
                 )
                 spot2_mask[heal_mask > 0] = 0
                 if np.any(spot2_mask > 0):
@@ -3590,6 +3729,28 @@ class CleanVinylEngine:
     def _encode_b64_jpg(bgr_u8: np.ndarray, quality: int = 90) -> str:
         ok, buf = cv2.imencode(".jpg", bgr_u8, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
         return base64.b64encode(buf.tobytes()).decode("ascii") if ok else ""
+
+    # JPEG quality of the pictures the big window shows. At 90 a smooth dark backdrop comes out as flat 8x8 blocks
+    # one grey level apart: on a black or dark grey backdrop that is one step in fifteen, and the window showed
+    # "patches with hard edges" that are in neither the photo nor the layer. At 100 the fine noise that hides those
+    # steps survives. A frame counts as dark when PREVIEW_DARK_SHARE of it is darker than PREVIEW_DARK_LEVEL (0..255);
+    # light frames keep 90 (the steps cannot be seen there, and the pictures stay five times smaller).
+    PREVIEW_JPEG_QUALITY = 90
+    PREVIEW_JPEG_QUALITY_DARK = 100
+    PREVIEW_DARK_LEVEL = 56
+    PREVIEW_DARK_SHARE = 0.20
+
+    @classmethod
+    def _preview_quality(cls, orig_small_bgr: np.ndarray, asked=None) -> int:
+        """The JPEG quality for the previews of this frame; `asked` ("previewQuality" of the request) overrules it."""
+        if asked is not None:
+            try:
+                return int(np.clip(int(asked), 50, 100))
+            except (TypeError, ValueError):
+                pass
+        gray = cv2.cvtColor(orig_small_bgr, cv2.COLOR_BGR2GRAY)
+        dark = int(np.count_nonzero(gray < cls.PREVIEW_DARK_LEVEL))
+        return cls.PREVIEW_JPEG_QUALITY_DARK if dark >= cls.PREVIEW_DARK_SHARE * gray.size else cls.PREVIEW_JPEG_QUALITY
 
     @staticmethod
     def _encode_green_mask_png(mask_u8: np.ndarray) -> str:
@@ -3707,11 +3868,124 @@ class CleanVinylEngine:
                     0, 255,
                 ).astype(np.uint8)
 
-            out["comp_jpg_b64"] = self._encode_b64_jpg(comp_bgr, quality=90)
+            quality = int(sess.get("preview_q", self.PREVIEW_JPEG_QUALITY))
+            out["comp_jpg_b64"] = self._encode_b64_jpg(comp_bgr, quality=quality)
             out["overlay_jpg_b64"] = self._encode_overlay_jpg(
-                comp_bgr, eff_mask, quality=90, marked_u8=(None if marked_mask is eff_mask else marked_mask)
+                comp_bgr, eff_mask, quality=quality, marked_u8=(None if marked_mask is eff_mask else marked_mask)
             )
         return out
+
+    # ---- brush / eraser history ("undo") --------------------------------------------------------------------------
+    EDIT_HISTORY_MAX = 40                      # steps that can be taken back
+    EDIT_HISTORY_MAX_BYTES = 96 * 1024 * 1024  # ...as long as they fit into this much memory
+
+    @staticmethod
+    def _pack_plane(arr: np.ndarray):
+        """A mostly empty mask in a compact form: None, or (y0, y1, x0, x1, copy of the part that is not zero)."""
+        rows = np.flatnonzero(arr.any(axis=1))
+        if rows.size == 0:
+            return None
+        cols = np.flatnonzero(arr.any(axis=0))
+        y0, y1, x0, x1 = int(rows[0]), int(rows[-1]) + 1, int(cols[0]), int(cols[-1]) + 1
+        return y0, y1, x0, x1, arr[y0:y1, x0:x1].copy()
+
+    @staticmethod
+    def _pack_diff(cur: np.ndarray, base: np.ndarray):
+        """Where `cur` differs from `base`: None, or (y0, y1, x0, x1, copy of that part of `cur`)."""
+        diff = cv2.absdiff(cur, base)
+        if diff.ndim == 3:
+            diff = diff.max(axis=2)
+        rows = np.flatnonzero(diff.any(axis=1))
+        if rows.size == 0:
+            return None
+        cols = np.flatnonzero(diff.any(axis=0))
+        y0, y1, x0, x1 = int(rows[0]), int(rows[-1]) + 1, int(cols[0]), int(cols[-1]) + 1
+        return y0, y1, x0, x1, cur[y0:y1, x0:x1].copy()
+
+    def _edit_snapshot(self, sess: dict) -> dict:
+        """
+        Everything the brush, the eraser, "fill", "clear" and "invert" change, as it is right now (see _edit_restore).
+        The two edit layers are stored by their non-empty part, the preview by what the brush redrew in it.
+        """
+        return {
+            "paint": self._pack_plane(sess["user_paint_u8"]),
+            "erase": self._pack_plane(sess["user_erase_u8"]),
+            "inverted": bool(sess.get("inverted")),
+            "detached": bool(sess.get("mask_detached")),
+            # (these two arrays are replaced, never edited in place - keeping the reference is enough)
+            "auto": sess["auto_mask_small_u8"],
+            "repair": sess.get("repair_mask_small_u8"),
+            "gen": int(sess.get("base_gen", 0)),
+            "preview": self._pack_diff(sess["clean_paint_small_bgr"], sess["clean_base_small_bgr"]),
+        }
+
+    @staticmethod
+    def _snapshot_bytes(snap: dict) -> int:
+        return sum(rec[4].nbytes for rec in (snap["paint"], snap["erase"], snap["preview"]) if rec is not None)
+
+    def _paint_preview_from_base(self, sess: dict) -> np.ndarray:
+        """
+        The cleaned preview with the brush strokes redrawn on it: what the window shows inside painted zones until
+        Apply repairs them for real. Built from the clean preview and the paint layer alone.
+        """
+        out = sess["clean_base_small_bgr"].copy()
+        if np.any(sess["user_paint_u8"] > 16):
+            paint_bin = (sess["user_paint_u8"] > 64).astype(np.uint8)
+            inpainted = cv2.inpaint(out, paint_bin, inpaintRadius=7, flags=cv2.INPAINT_TELEA)
+            p_alpha = cv2.GaussianBlur(paint_bin.astype(np.float32), (5, 5), 0)[:, :, None]
+            out = np.clip(out.astype(np.float32) * (1.0 - p_alpha) + inpainted.astype(np.float32) * p_alpha, 0, 255).astype(np.uint8)
+        return out
+
+    def _edit_restore(self, sess: dict, snap: dict) -> None:
+        """
+        Puts the edit layers back the way `snap` holds them.
+        The frame was not recomputed since: the mask and the preview come back exactly as they were.
+        The sliders were moved since: the strokes are put back onto the frame as it is computed now.
+        """
+        for key, name in (("paint", "user_paint_u8"), ("erase", "user_erase_u8")):
+            arr = sess[name]
+            arr[:] = 0
+            if snap[key] is not None:
+                y0, y1, x0, x1, part = snap[key]
+                arr[y0:y1, x0:x1] = part
+        sess["inverted"] = bool(snap["inverted"])
+        if snap["gen"] == int(sess.get("base_gen", 0)):
+            sess["auto_mask_small_u8"] = snap["auto"]
+            sess["repair_mask_small_u8"] = snap["repair"]
+            sess["mask_detached"] = bool(snap["detached"])
+            preview = sess["clean_base_small_bgr"].copy()
+            if snap["preview"] is not None:
+                y0, y1, x0, x1, part = snap["preview"]
+                preview[y0:y1, x0:x1] = part
+            sess["clean_paint_small_bgr"] = preview
+        else:
+            sess["clean_paint_small_bgr"] = self._paint_preview_from_base(sess)
+
+    def _edit_history_push(self, sess: dict) -> None:
+        """Remembers the state before an edit; whatever was taken back before can no longer be redone."""
+        hist = sess.setdefault("history", {"undo": [], "redo": []})
+        hist["redo"].clear()
+        undo = hist["undo"]
+        undo.append(self._edit_snapshot(sess))
+        total = sum(self._snapshot_bytes(s) for s in undo)
+        while len(undo) > 1 and (len(undo) > self.EDIT_HISTORY_MAX or total > self.EDIT_HISTORY_MAX_BYTES):
+            total -= self._snapshot_bytes(undo.pop(0))
+
+    def _edit_history_step(self, sess: dict, back: bool) -> bool:
+        """One step back (undo) or forward again (redo). False when there is nothing to step to."""
+        hist = sess.setdefault("history", {"undo": [], "redo": []})
+        src, dst = (hist["undo"], hist["redo"]) if back else (hist["redo"], hist["undo"])
+        if not src:
+            return False
+        snap = src.pop()
+        dst.append(self._edit_snapshot(sess))
+        self._edit_restore(sess, snap)
+        return True
+
+    @staticmethod
+    def _edit_history_counts(sess: dict) -> dict:
+        hist = sess.get("history") or {}
+        return {"undo": len(hist.get("undo", ())), "redo": len(hist.get("redo", ()))}
 
     def _analyze_auto_fractions(self, img_rgb_u8: np.ndarray, fg_mask_u8: np.ndarray, core_mask_u8: np.ndarray, edge_prot: float) -> dict:
         """
@@ -3890,7 +4164,7 @@ class CleanVinylEngine:
             fl("spots", 75), fl("scuffs", 65), fl("blur", 0), fl("cycCurve", 0), fl("feather", 60),
             bool(p.get("seamOn", True)), fl("seam", 85), fl("edge", 70),
             bool(p.get("smokeOn", True)), fl("smoke", 80), fl("grain", 90),
-            CleanVinylEngine._smoke_auto(p), bool(p.get("seamJoin", True)),
+            CleanVinylEngine._smoke_auto(p), bool(p.get("seamJoin", True)), bool(p.get("grainLocal", True)),
             bool(p.get("shadow", True)), bool(p.get("removeStands", False)),
             max(100.0, fl("master", 100)),
             "fast" if str(p.get("speedMode", "quality")).lower() == "fast" else "quality",
@@ -4042,6 +4316,7 @@ class CleanVinylEngine:
                 cleaned_rgba, out_cache.get("heal_mask_full"), sess["preview_w"], sess["preview_h"], ps_max,
                 tone=self._tone_stages_on(sess["params"]), heal_pass2=out_cache.get("heal_mask_pass2"),
             )
+            sess["base_gen"] = int(sess.get("base_gen", 0)) + 1
         sess["base_stale"] = False
 
     def start_session(
@@ -4088,7 +4363,10 @@ class CleanVinylEngine:
                     scene = self._scene_info(fg_raw_1024, orig_rgb_u8, w, h)
                     scene["applied"] = None
                     if isinstance(scene_presets, dict):
-                        for key in (scene["kind"], scene["framing"], "default"):
+                        # A dark backdrop has its own sets by framing ("dark_close", "dark_medium", "dark_wide"); the
+                        # general dark set stands in for a missing one, then the set of the framing.
+                        keys = ("dark_" + scene["framing"], "dark") if scene["dark"] else ()
+                        for key in keys + (scene["framing"], "default"):
                             if isinstance(scene_presets.get(key), dict):
                                 p = dict(scene_presets[key])
                                 scene["applied"] = key
@@ -4186,13 +4464,16 @@ class CleanVinylEngine:
                     "proxy": proxy,
                     "base_stale": False,     # True: the preview is ahead of `cleaned_base_rgba` (quick preview)
                     "mask_detached": False,  # True: the mask on screen was flattened by "invert + brush"
+                    "base_gen": 0,           # goes up every time the frame is computed anew (see _edit_restore)
+                    "history": {"undo": [], "redo": []},  # brush / eraser steps that can be taken back
+                    "preview_q": self._preview_quality(orig_small_bgr, p.get("previewQuality")),
                 }
                 self._active_session = sess
 
                 dress_on = bool(p.get("dressSmooth", False))
                 dress_str = float(p.get("dressStrength", 45))
                 previews = self._render_session_previews(sess, dress_on, dress_str, need_comp=True, need_mask=False)
-                orig_jpg_b64 = self._encode_b64_jpg(orig_small_bgr, quality=90)
+                orig_jpg_b64 = self._encode_b64_jpg(orig_small_bgr, quality=sess["preview_q"])
 
                 elapsed_ms = int((time.perf_counter() - t0) * 1000)
                 stats["elapsed_ms"] = elapsed_ms
@@ -4288,23 +4569,19 @@ class CleanVinylEngine:
                     sess["base_stale"] = False
                 sess["mask_detached"] = False  # the automatic mask is back on screen
                 sess["clean_base_small_bgr"] = clean_small_bgr
-                sess["clean_paint_small_bgr"] = clean_small_bgr.copy()
                 sess["auto_mask_small_u8"] = auto_mask_small
                 sess["repair_mask_small_u8"] = repair_mask_small
                 sess["params"] = p
+                sess["base_gen"] = int(sess.get("base_gen", 0)) + 1  # the steps taken before belong to the former frame
+                if "previewQuality" in p:
+                    sess["preview_q"] = self._preview_quality(sess["orig_small_bgr"], p.get("previewQuality"))
 
                 if not preserve_edits:
                     sess["user_paint_u8"][:] = 0
                     sess["user_erase_u8"][:] = 0
                     sess["inverted"] = False
-                elif np.any(sess["user_paint_u8"] > 16):
-                    paint_bin = (sess["user_paint_u8"] > 64).astype(np.uint8)
-                    inpainted = cv2.inpaint(sess["clean_paint_small_bgr"], paint_bin, inpaintRadius=7, flags=cv2.INPAINT_TELEA)
-                    p_alpha = cv2.GaussianBlur(paint_bin.astype(np.float32), (5, 5), 0)[:, :, None]
-                    sess["clean_paint_small_bgr"] = np.clip(
-                        sess["clean_paint_small_bgr"].astype(np.float32) * (1.0 - p_alpha) + inpainted.astype(np.float32) * p_alpha,
-                        0, 255,
-                    ).astype(np.uint8)
+                    sess["history"] = {"undo": [], "redo": []}  # the edits were dropped on purpose
+                sess["clean_paint_small_bgr"] = self._paint_preview_from_base(sess)
 
                 dress_on = bool(p.get("dressSmooth", False))
                 dress_str = float(p.get("dressStrength", 45))
@@ -4326,6 +4603,7 @@ class CleanVinylEngine:
                     "smoke": stats.get("smoke"),
                     "mask_share": previews["mask_share"],
                     "layer_share": previews["layer_share"],
+                    "history": self._edit_history_counts(sess),
                 }
         finally:
             self._end_job()
@@ -4349,6 +4627,14 @@ class CleanVinylEngine:
                 pw, ph = sess["preview_w"], sess["preview_h"]
                 paint_u8 = sess["user_paint_u8"]
                 erase_u8 = sess["user_erase_u8"]
+
+                # "undo" / "redo": one step of the brush, the eraser, fill / clear / invert back, or forward again.
+                # Every other edit first remembers the state it is about to change.
+                stepped = None
+                if op in ("undo", "redo"):
+                    stepped = self._edit_history_step(sess, back=(op == "undo"))
+                elif op in ("fill", "clear", "invert", "reset_auto") or (op == "stroke" and points):
+                    self._edit_history_push(sess)
 
                 if op == "fill":
                     paint_u8[:] = 255
@@ -4416,7 +4702,11 @@ class CleanVinylEngine:
                             ).astype(np.uint8)
 
                 previews = self._render_session_previews(sess, dress_smooth, dress_strength, need_comp=True, need_mask=False)
-                return {"ok": True, "inverted": bool(sess.get("inverted", False)), **previews}
+                out = {"ok": True, "inverted": bool(sess.get("inverted", False)), **previews,
+                       "history": self._edit_history_counts(sess)}
+                if stepped is not None:
+                    out["stepped"] = bool(stepped)  # False: there was nothing to take back / to redo
+                return out
         finally:
             self._end_job()
 

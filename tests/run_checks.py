@@ -36,6 +36,11 @@ Part 2 - what Clean Vinyl Pro 2 does differently, each with its own measurable p
             included; two different lines are not joined; works together with the wall-floor corner
   mask      the whole backdrop is evened: the mask view tells "found and repaired" from "evened", the brush
             repairs what it paints, the eraser leaves alone what it erases
+  dark      a dark backdrop with a pool of light: the noise of the lit part is not taken for dust (it is judged
+            against the noise found there), real dust is still found, an evenly lit frame is searched exactly as
+            before; the pictures of the big window keep the fine noise of a dark frame (JPEG 100 instead of 90)
+  undo      the big window: every mask edit (brush, eraser, fill, clear, invert) can be taken back and made again,
+            also after the sliders were moved; Apply after a step back == Apply without that edit
 
 Part 3 - the program around the engine:
   server    settings migration, binary packets, one version everywhere, and no name / port shared with the
@@ -105,7 +110,8 @@ def _quiet(fn, *a, **k):
 
 def _legacy(p: dict) -> dict:
     """The parameters under which Clean Vinyl Pro 2 must still give the pixels of v3.2.1 (see the header)."""
-    return dict(p, speedMode="quality", smokeOn=False, cycCurve=0, dressSmooth=False, scuffs=0, seamJoin=False)
+    return dict(p, speedMode="quality", smokeOn=False, cycCurve=0, dressSmooth=False, scuffs=0, seamJoin=False,
+                grainLocal=False, previewQuality=90)
 
 
 def _legacy_window(p: dict) -> dict:
@@ -1142,6 +1148,29 @@ def check_scene():
         if r1["scene"]["applied"] != used or r1["comp_jpg_b64"] != r2["comp_jpg_b64"] or e1._active_session["params"] != e2._active_session["params"]:
             bad.append(f"sets {sorted(presets)}: used '{r1['scene']['applied']}', expected '{used}'")
 
+    # 3b. a dark backdrop has its own sets by framing: "dark_<framing>" first, then the general "dark", then the set
+    #     of the framing, then "default". A light frame never takes a dark set.
+    dark_img = (img * 0.12).astype(np.uint8)
+    dsets = dict(sets,
+                 dark_wide=dict(sets["dark"], spots=80, cycCurve=65),
+                 dark_medium=dict(sets["dark"], spots=72, edge=82),
+                 dark_close=dict(sets["dark"], spots=62, edge=86, seamOn=False, fracLarge=False, autoFractions=False))
+    for name, matte, want in (("whole figure", sil, "dark_wide"), ("cut at the waist", _people_matte(w, h, 0.50, 0.86), "dark_medium"),
+                              ("close-up", _people_matte(w, h, 0.27, 0.85), "dark_close"), ("nobody", np.zeros((1024, 1024), np.float32), "dark")):
+        e1, r1 = opened(dark_img, matte, dsets)
+        e2, r2 = opened(dark_img, matte, None, dsets[want])
+        if r1["scene"]["applied"] != want or r1["scene"]["kind"] != "dark":
+            bad.append(f"dark backdrop, {name}: used the set '{r1['scene']['applied']}' (expected '{want}')")
+        elif any(r1[k] != r2[k] for k in same) or e1._active_session["params"] != e2._active_session["params"]:
+            bad.append(f"dark backdrop, {name}: the window differs from the one opened with the set '{want}' by hand")
+    for dropped, want in ((("dark_wide",), "dark"), (("dark_wide", "dark"), "wide"), (("dark_wide", "dark", "wide"), "default")):
+        e1, r1 = opened(dark_img, sil, {k: v for k, v in dsets.items() if k not in dropped})
+        if r1["scene"]["applied"] != want:
+            bad.append(f"dark backdrop without the sets {dropped}: used '{r1['scene']['applied']}', expected '{want}'")
+    e1, r1 = opened(img, sil, dsets)
+    if r1["scene"]["applied"] != "wide":
+        bad.append(f"a light frame took the set '{r1['scene']['applied']}' although only a dark backdrop has dark sets")
+
     # 4. "how much of the frame was found and repaired" (the bright green of the mask; the plugin's notes are built
     #    on it): reported after every step and equal to the mask on screen. More about the two greens: check_mask.
     e1, r1 = opened(img, sil, None)
@@ -1197,7 +1226,8 @@ def check_scene():
             sys.stdout = real_out
             srv.ENGINE, srv.ENGINE_ERROR = keep
     report("scene", not bad, f"{n_frames} silhouettes framed right (whole figure / waist / close-up, both orientations, 1-2 people); dark key by the "
-                             f"backdrop (limit {limit:.0f}); opening with the automatic preset == opening with that preset by hand, layer included{note}"
+                             f"backdrop (limit {limit:.0f}), with its own set for every framing; opening with the automatic preset == opening with "
+                             f"that preset by hand, layer included{note}"
            if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
@@ -1557,11 +1587,26 @@ def check_seam():
     r = run(frame=dict(weak_left=0.5))
     if not both_gone(r):
         bad.append(f"one side twice fainter than the other: covered {r['cover']}, line {r['before']} -> {r['after']} levels")
-    # 4. however visible the joint is: a faint one and a really dark one (the dark one used to be left in the photo)
+    # 4. however visible the joint is: a faint one and a really dark one (the dark one used to be left in the photo).
+    #    With the corner tool on as well: on a floor that darkens towards the camera a faint joint used to pass for
+    #    the wall-floor corner, and was then smeared instead of repaired.
     for dark in (2.5, 30.0):
-        r = run(frame=dict(left=(0.0, 0.30), right=(0.72, 1.0), dark=dark))
-        if min(r["cover"]) < 0.9:
-            bad.append(f"a joint {dark:.1f} levels dark: covered {r['cover']}")
+        for cyc in (0, 65):
+            r = run(frame=dict(left=(0.0, 0.30), right=(0.72, 1.0), dark=dark), cycCurve=cyc)
+            if min(r["cover"]) < 0.9 or r["stats"].get("corner_row") is not None:
+                bad.append(f"a joint {dark:.1f} levels dark, cyclorama {cyc}: covered {r['cover']}, 'corner' at {r['stats'].get('corner_row')}")
+    # ...and the corner finder itself: no frame with nothing but a joint may give it a line
+    worst = 0.0
+    for seed in (7, 8, 9):
+        for dark in (1.5, 2.5, 4.0):
+            img_j, sil_j, _ = _joint_frame(1500, 2000, left=(0.0, 0.30), right=(0.72, 1.0), dark=dark, seed=seed)
+            eng_j = H.make_engine(E, sil_j)
+            fg_j, core_j = eng_j._clean_fg_mask(_quiet(eng_j._predict_fg_raw, img_j), 1500, 2000, 70.0)
+            st_j, _, sk_j, _ = eng_j._compute_protection_maps_small(img_j, fg_j, core_j, 80.0, False, True)
+            if eng_j._corner_line_of_frame(img_j, fg_j, st_j, sk_j) is not None:
+                worst = max(worst, dark)
+    if worst:
+        bad.append(f"a faint floor joint (up to {worst} levels dark) was taken for the wall-floor corner")
     # 5. together with the wall-floor corner: the corner is found where it is, the joint is repaired on both sides
     for cyc in (0, 65):
         r = run(frame=dict(corner=True), cycCurve=cyc)
@@ -1605,11 +1650,60 @@ def check_seam():
         if not cyc and marked < 0.5 * w * 4:
             bad.append(f"corner with a crease, cyclorama off: the crease must be repaired as a line, {marked} px marked")
 
+    # A soft corner (a step the seam search does not take for a line) with a crease along its right third only. A
+    # dark backdrop gives that: the corner is a thin line here and nothing there. With the corner tool off nobody
+    # takes the line, and a line repaired in pieces is a dashed, hard-edged remainder - so nothing inside the corner
+    # strip may be repaired at all.
+    soft = 1.0 / (1.0 + np.exp(-np.clip((yy - 0.62) * 220.0, -50, 50)))
+    lum_p = np.broadcast_to((150.0 * (1 - soft) + 172.0 * soft) * (1.0 - 0.22 * (((xx - 0.5) * 2) ** 2) - 0.10 * (((yy - 0.45) * 2) ** 2)), (h, w)).astype(np.float32).copy()
+    lum_p[int(h * 0.62) - 1:int(h * 0.62) + 1, int(w * 0.66):] -= 8.0
+    part = np.clip(cv2.GaussianBlur(lum_p, (0, 0), 0.8)[..., None] * np.float32([1.02, 1.0, 0.97]) + rng.standard_normal((h, w, 3)).astype(np.float32) * 1.8, 0, 255).astype(np.uint8)
+    person_p = cv2.resize(sil_std, (w, h)) > 0.5
+    part[person_p] = (40, 40, 46)
+    seen_p = ~person_p[int(h * 0.62)]
+
+    def strip_marked(rule_on, **over):
+        """(pixels marked for repair inside the corner strip, share of the visible corner they cover)"""
+        eng_p = H.make_engine(E, sil_std)
+        if not rule_on:  # the search as it is without the "whole line or nothing" rule
+            eng_p._whole_line_repair_only = lambda mask, line, fg, need=0.85: mask
+        oc_p = {}
+        _quiet(eng_p.process, part, 8, dict(base, speedMode="fast", **over), out_cache=oc_p)
+        m = oc_p["heal_mask_full"][strip] > 0
+        return int(m.sum()), float(m.any(axis=0)[seen_p].mean())
+
+    (pieces, cover_p), (kept_p, _) = strip_marked(False), strip_marked(True)
+    if pieces < 2000 or not 0.25 < cover_p < 0.75:
+        bad.append(f"the test frame is not what it should be: without the rule the seam search marks {pieces} px, {cover_p * 100:.0f}% of the corner")
+    if kept_p != 0:
+        bad.append(f"corner creased on one side, cyclorama off: {kept_p} px of it are repaired (a dashed remainder); it must be the whole line or nothing")
+    if strip_marked(True, cycCurve=65)[0] != 0:
+        bad.append("corner creased on one side, cyclorama 65: the corner strip belongs to the corner tool, nothing may be marked in it")
+    # the rule itself: a line repaired along (nearly) all of its visible length stays, a part of it goes
+    for cover, slope, expect_kept in ((1.0, 0.0, True), (0.9, 0.02, True), (0.6, 0.0, False), (0.3, -0.03, False)):
+        mh, mw = 600, 900
+        m = np.zeros((mh, mw), np.uint8)
+        fgm = np.zeros((mh, mw), np.uint8)
+        fgm[:, 380:520] = 255                                   # the person hides the middle of the line
+        line = {"row": 300.0, "slope": slope, "half": 14.0}
+        xs = np.arange(mw)
+        seen = np.flatnonzero(fgm[300, :] < 40)
+        for x in seen[: int(round(cover * seen.size))]:
+            yc = int(round(300.0 + slope * (x - (mw - 1) / 2.0)))
+            m[yc - 2:yc + 3, x] = 1
+        m[80:90, 100:300] = 1                                    # a joint elsewhere on the floor: never touched
+        before = m.copy()
+        got = ENG._whole_line_repair_only(m, line, fgm)
+        strip_px = int(np.count_nonzero(got[250:350]))
+        if not np.array_equal(got[:200], before[:200]) or (strip_px > 0) != expect_kept or (expect_kept and not np.array_equal(got, before)):
+            bad.append(f"whole-line rule: a repair over {cover * 100:.0f}% of the visible corner (slope {slope}) -> {'kept' if strip_px else 'dropped'}")
+
     # a floor joint without any corner in the frame is not a corner (it used to be taken for one and smeared)
     r = run(cycCurve=65)
     if r["stats"].get("corner_row") is not None or not both_gone(r):
         bad.append(f"a joint in a frame without a corner: 'corner' at {r['stats'].get('corner_row')}, joint covered {r['cover']}")
-    report("seam", not bad, "; ".join(notes) + "; two different lines and a lone short piece are left alone; faint and dark joints alike"
+    report("seam", not bad, "; ".join(notes) + "; two different lines and a lone short piece are left alone; faint and dark joints alike, "
+           "with the corner tool on or off; a corner is repaired as a whole line or not at all"
            if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
@@ -2052,6 +2146,115 @@ def _http_quick_round_trip(client, srv, packet, split, bad) -> int:
     return n
 
 
+def _http_backup_round_trip(client, srv, bad) -> int:
+    """
+    Backups of the settings: what the plugin sends is written as one file into the backup folder, listed and given
+    back unchanged; only files of that folder can be read; files that are not backups are skipped; of the copies
+    the program makes by itself before a restore only the newest are kept. Returns the number of requests made.
+    """
+    import tempfile
+    n = 0
+    tmp = tempfile.mkdtemp(prefix="cv_backup_")
+    folder = os.path.join(tmp, "backup")
+    keep_env = os.environ.get("CLEANVINYL_BACKUP_DIR")
+    os.environ["CLEANVINYL_BACKUP_DIR"] = folder
+    try:
+        with open(os.path.join(H.SERVER_DIR, "presets_defaults.json"), "r", encoding="utf-8") as f:
+            presets = json.load(f)
+        presets.insert(0, {"id": "usr_1", "name": "Мій пресет", "color": "#54d182", "builtin": False, "cfg": {"spots": 50, "smokeOn": True}})
+        settings = {"schemaVersion": 5, "activePresetId": "usr_1", "autoPreset": False, "cfg": {"spots": 50}, "presetMoves": ["cyc65"]}
+
+        def get(path):
+            nonlocal n
+            n += 1
+            return client.get(path)
+
+        def post(path, **kw):
+            nonlocal n
+            n += 1
+            return client.post(path, **kw)
+
+        if get("/health").json().get("backup_dir") != folder:
+            bad.append("backup: /health must name the backup folder")
+        r = get("/backup/list")
+        if r.status_code != 200 or r.json() != {"ok": True, "folder": folder, "backups": []} or os.path.exists(folder):
+            bad.append(f"backup: an empty list for a folder that does not exist yet (and no folder made by looking): {r.status_code} {r.text[:120]}")
+        r1 = post("/backup/save", json={"presets": presets, "settings": settings})
+        j1 = r1.json()
+        on_disk = {}
+        path1 = os.path.join(folder, j1.get("file", "?"))
+        if r1.status_code != 200 or not j1.get("ok") or j1.get("path") != path1 or j1.get("folder") != folder or not os.path.isfile(path1) \
+                or j1.get("presets") != len(presets) or j1.get("user_presets") != 1 or not re.fullmatch(r"CleanVinylPro2_backup_\d{4}-\d\d-\d\d_\d\d-\d\d-\d\d\.json", j1.get("file", "")):
+            bad.append(f"backup: /backup/save answer {r1.status_code} {r1.text[:200]}")
+        else:
+            with open(path1, "r", encoding="utf-8") as f:
+                on_disk = json.load(f)
+            if on_disk.get("presets") != presets or on_disk.get("settings") != settings or on_disk.get("version") != srv.APP_VERSION or on_disk.get("kind") != srv.BACKUP_KIND:
+                bad.append("backup: the file does not hold what was sent")
+        j2 = post("/backup/save", json={"presets": presets, "settings": settings}).json()     # within the same second: another name
+        j3 = post("/backup/save", json={"presets": presets[1:], "settings": settings, "label": "before-restore/../x y"}).json()
+        names = {j1.get("file"), j2.get("file"), j3.get("file")}
+        if len(names) != 3 or not str(j3.get("file", "")).endswith("_before-restorexy.json") or os.sep in str(j3.get("file")) or len(os.listdir(folder)) != 3:
+            bad.append(f"backup: three saves must give three plain file names inside the folder: {sorted(map(str, names))}")
+        # what is not a backup of this program is skipped; a file the owner renamed is still a backup
+        with open(os.path.join(folder, "notes.json"), "w", encoding="utf-8") as f:
+            f.write('{"a": 1}')
+        with open(os.path.join(folder, "broken.json"), "w", encoding="utf-8") as f:
+            f.write("{not json")
+        with open(os.path.join(folder, "other program.json"), "w", encoding="utf-8") as f:   # the same shape, made by something else
+            json.dump({"kind": "settings-of-another-program", "presets": presets, "settings": settings}, f)
+        with open(os.path.join(tmp, "outside.json"), "w", encoding="utf-8") as f:
+            json.dump(on_disk, f)
+        os.replace(path1, os.path.join(folder, "мій бекап (копія).json"))
+        listed = get("/backup/list").json().get("backups", [])
+        if sorted(b["file"] for b in listed) != sorted(["мій бекап (копія).json", j2.get("file"), j3.get("file")]):
+            bad.append(f"backup: the list must hold the three backups and nothing else: {[b['file'] for b in listed]}")
+        elif not all(re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", b["saved_at"]) and b["version"] == srv.APP_VERSION for b in listed) \
+                or sorted((b["presets"], b["user_presets"], b["label"]) for b in listed) != sorted([(len(presets), 1, ""), (len(presets), 1, ""), (len(presets) - 1, 0, "before-restorexy")]):
+            bad.append(f"backup: the list must say when each backup was made and what it holds: {listed}")
+        r = post("/backup/read", json={"file": "мій бекап (копія).json"})
+        jr = r.json()
+        if r.status_code != 200 or jr.get("presets_list") != presets or jr.get("settings") != settings or jr.get("presets") != len(presets):
+            bad.append(f"backup: /backup/read must give back exactly what was saved: {r.status_code}")
+        for name, want in (("../outside.json", 404), (os.path.join(tmp, "outside.json"), 404), ("nope.json", 404), ("", 404), (None, 404),
+                           ("notes.json", 400), ("broken.json", 400), ("other program.json", 400)):
+            r = post("/backup/read", json={"file": name})
+            if r.status_code != want or r.json().get("ok") is not False or "presets_list" in r.json():
+                bad.append(f"backup: /backup/read of {name!r} answered {r.status_code}, expected {want}")
+        for body, want in (({"presets": [], "settings": {}}, 400), ({"presets": [{"id": "a"}], "settings": {}}, 400), ({"presets": presets}, 400), ([1, 2], 400)):
+            r = post("/backup/save", json=body)
+            if r.status_code != want or r.json().get("ok") is not False:
+                bad.append(f"backup: /backup/save of a broken request answered {r.status_code}")
+        if post("/backup/save", content=b"{not json").status_code != 400 or len(os.listdir(folder)) != 6:
+            bad.append("backup: a broken request must write nothing")
+        # copies made before a restore: the newest few stay, the owner's backups are never removed
+        for _ in range(srv.BACKUP_AUTO_KEEP + 3):
+            post("/backup/save", json={"presets": presets, "settings": settings, "label": "before-restore"})
+        left = os.listdir(folder)
+        if sum(x.endswith("_before-restore.json") for x in left) != srv.BACKUP_AUTO_KEEP or not {"мій бекап (копія).json", j2.get("file"), j3.get("file")} <= set(left):
+            bad.append(f"backup: {srv.BACKUP_AUTO_KEEP} automatic copies must stay and every other backup: {sorted(left)}")
+        r = post("/backup/open-folder")
+        if r.status_code != 200 or r.json().get("folder") != folder or r.json().get("opened") is not (sys.platform == "win32"):
+            bad.append(f"backup: /backup/open-folder {r.status_code} {r.text[:120]}")
+        # the folder cannot be written: the answer says so instead of a crash
+        blocked = os.path.join(tmp, "a file, not a folder")
+        with open(blocked, "w", encoding="utf-8") as f:
+            f.write("x")
+        os.environ["CLEANVINYL_BACKUP_DIR"] = os.path.join(blocked, "backup")
+        r = post("/backup/save", json={"presets": presets, "settings": settings})
+        if r.status_code != 500 or r.json().get("ok") is not False or not r.json().get("error"):
+            bad.append(f"backup: a folder that cannot be made must give an error with a reason: {r.status_code} {r.text[:120]}")
+        if get("/backup/list").json().get("backups") != []:
+            bad.append("backup: a folder that cannot be read lists nothing")
+    finally:
+        if keep_env is None:
+            os.environ.pop("CLEANVINYL_BACKUP_DIR", None)
+        else:
+            os.environ["CLEANVINYL_BACKUP_DIR"] = keep_env
+        shutil.rmtree(tmp, ignore_errors=True)
+    return n
+
+
 def check_http():
     if SRV_OLD is None:
         report("http", True, "SKIPPED - v3.2.1 is not available (tests/baseline_v321 is missing)")
@@ -2081,8 +2284,9 @@ def check_http():
     def norm(d):
         # ("quick" is new: a recompute says whether it only refreshed the preview; "scene", "smoke", "mask_share" and
         #  "layer_share" are new: the answer describes the frame, what was seen of smoke, and how much of the frame
-        #  was found and repaired / is covered by the layer)
-        d = {k: v for k, v in d.items() if k not in ("session_id", "mask_png_b64", "quick", "scene", "smoke", "mask_share", "layer_share")}
+        #  was found and repaired / is covered by the layer; "history" is new: how many mask edits can be taken
+        #  back and made again)
+        d = {k: v for k, v in d.items() if k not in ("session_id", "mask_png_b64", "quick", "scene", "smoke", "mask_share", "layer_share", "history")}
         if "stats" in d:
             d["stats"] = {k: v for k, v in d["stats"].items() if k not in ("elapsed_ms", "reused_stages", "smoke")}
         return d
@@ -2200,6 +2404,7 @@ def check_http():
                 # light preview: "quick" in /session/recompute, the current settings inside /session/apply
                 if (w, h) == cases[0][:2]:
                     n += _http_quick_round_trip(cn, srv, packet, split, bad)
+                    n += _http_backup_round_trip(cn, srv, bad)
                 # format 5:7
                 r = cn.post("/extend-canvas", content=packet({"width": w, "height": h, "channels": img.shape[2], "bitDepth": bd,
                                                               "params": {"ratioShort": 5, "ratioLong": 7}, "jobId": "f"}, img))
@@ -2228,6 +2433,333 @@ def check_http():
     report("http", not bad, f"{n} HTTP requests: legacy regime answered identically to the v3.2.1 server, new endpoints answer correctly" if not bad else f"DIFFERENT: {bad}")
 
 
+# ----------------------------------------------------------------------------------------------------------------------
+# A dark backdrop: dust against the noise of the place, the pictures of the big window
+# ----------------------------------------------------------------------------------------------------------------------
+def _low_key_frame(w, h, kind="floor", seed=3, dust=24):
+    """
+    A frame whose noise grows with the light, as the noise of a camera does (white, the same in the three channels,
+    plus a little colour noise): about 1.2 levels where the backdrop is nearly black, 2.6 where it is lit.
+      "floor"  a dark wall over a lit floor, the left part of the floor darker - a low-key shot. Most of the frame is
+               dark, so the noise of the frame as a whole is the noise of the dark part;
+      "even"   the same light everywhere (the brightness of the lit floor);
+      "vignette" a light backdrop that gets a quarter darker towards the corners - an ordinary studio frame.
+    `dust`: real specks (30-45 levels darker or lighter, 4-10 px across) drawn where the frame is lit.
+    The frame is big on purpose: the two passes of the dust search work at different scales, and only on a frame of
+    about this size do they see what they see on a real 20-megapixel photo.
+    Returns (frame, silhouette 1024, how lit every pixel is 0..1, person (bool), centres of the specks).
+    """
+    rng = np.random.default_rng(seed)
+    yy = np.linspace(0, 1, h, dtype=np.float32)[:, None]
+    xx = np.linspace(0, 1, w, dtype=np.float32)[None, :]
+    if kind == "floor":
+        light = 1.0 / (1.0 + np.exp(-(yy - 0.58) * 9.0)) * (0.55 + 0.45 * xx)
+    elif kind == "even":
+        light = np.ones((h, w), np.float32)
+    else:
+        light = 1.0 - 0.25 * (((xx - 0.5) * 2) ** 2 + ((yy - 0.5) * 2) ** 2) / 2.0
+    light = np.broadcast_to(light, (h, w)).astype(np.float32)
+    lum = 16.0 + 105.0 * light
+    sigma = 0.4 + 0.2 * np.sqrt(lum)
+    img = lum[..., None] * np.float32([1.02, 1.0, 0.97])
+    img = img + (rng.standard_normal((h, w, 1)).astype(np.float32) + 0.25 * rng.standard_normal((h, w, 3)).astype(np.float32)) * sigma[..., None]
+    _, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=1)
+    person = cv2.resize(sil, (w, h)) > 0.5
+    centres, tries = [], 0
+    while len(centres) < dust and tries < 5000:
+        tries += 1
+        cx, cy = int(rng.integers(60, w - 60)), int(rng.integers(int(h * 0.70), h - 60))
+        if light[cy, cx] < 0.6 or person[cy - 40:cy + 40, cx - 40:cx + 40].any() or any((cx - a) ** 2 + (cy - b) ** 2 < 90 ** 2 for a, b in centres):
+            continue
+        spot = np.zeros((h, w), np.float32)
+        cv2.circle(spot, (cx, cy), int(rng.choice([2, 3, 3, 4, 5])) * max(1, w // 1500), 1.0, -1, lineType=cv2.LINE_AA)
+        img -= float(rng.integers(30, 46)) * (1 if rng.random() < 0.7 else -1) * spot[..., None]
+        centres.append((cx, cy))
+    img = np.clip(img, 0, 255)
+    img[person] = (70, 62, 58)
+    return img.astype(np.uint8), sil, light, person, centres
+
+
+def check_dark():
+    bad, notes = [], []
+    w, h = 2800, 4200
+    base = dict(H.STD, spots=80, scuffs=0, blur=0, cycCurve=0, seamOn=False, smokeOn=False, speedMode="fast")
+
+    # 1. a dark wall over a lit floor: plain noise of the lit part is not dust
+    img, sil, light, person, centres = _low_key_frame(w, h, "floor")
+    away = ~(cv2.dilate(person.astype(np.uint8), np.ones((41, 41), np.uint8)) > 0)
+    near = np.zeros((h, w), np.uint8)
+    for cx, cy in centres:
+        cv2.circle(near, (cx, cy), 40, 1, -1)
+    lit = (light > 0.6) & away & (near == 0)       # the lit floor without the drawn dust and the person
+    got = {}
+    for local in (False, True):
+        oc = {}
+        _quiet(H.make_engine(E, sil).process, img, 8, dict(base, grainLocal=local), out_cache=oc)
+        heal = oc["heal_mask_full"] > 0
+        got[local] = (float(heal[lit].mean()), sum(bool(heal[cy, cx]) for cx, cy in centres), heal)
+    oc = {}
+    _quiet(H.make_engine(E, sil).process, img, 8, dict(base), out_cache=oc)
+    if not np.array_equal(oc["heal_mask_full"] > 0, got[True][2]):
+        bad.append("judging dust against the local noise must be the default (no 'grainLocal' in the request)")
+    was, now = got[False][0], got[True][0]
+    if was < 0.30:
+        bad.append(f"the test frame is not what it should be: judged against the noise of the frame only {was * 100:.1f}% of the lit floor is 'dust'")
+    if now > 0.02 or now > was / 20.0:
+        bad.append(f"lit floor of a dark frame: {now * 100:.1f}% of it is marked as dust (it was {was * 100:.0f}% with the noise of the whole frame)")
+    if got[True][1] < len(centres) - 1:
+        bad.append(f"real dust in the lit floor: only {got[True][1]} of {len(centres)} specks found")
+    dark_part = (light < 0.05) & away
+    if not np.array_equal(got[False][2][dark_part], got[True][2][dark_part]):
+        bad.append("the dark part of the frame must be searched exactly as before")
+    notes.append(f"lit floor of a dark frame: {was * 100:.0f}% -> {now * 100:.2f}% of it taken for dust, {got[True][1]} of {len(centres)} real specks found")
+
+    # 2. where the light is even nothing changes: the search gives the very same mask as before
+    for kind in ("even", "vignette"):
+        img_e, sil_e, _, _, cen_e = _low_key_frame(w, h, kind, seed=5)
+        eng = H.make_engine(E, sil_e)
+        fg, core = eng._clean_fg_mask(_quiet(eng._predict_fg_raw, img_e), w, h, 70.0)
+        st, _, sk, shd = eng._compute_protection_maps_small(img_e, fg, core, 80.0, False, True)
+        a, _ = eng._detect_spots_mask(img_e, fg, st, sk, shd, 80.0, fast_mode=False, local_grain=False)
+        b, _ = eng._detect_spots_mask(img_e, fg, st, sk, shd, 80.0, fast_mode=False, local_grain=True)
+        if not np.array_equal(a, b):
+            bad.append(f"evenly lit frame ('{kind}'): the dust mask differs on {int((a != b).sum())} px from the search of before")
+        if sum(bool(b[cy, cx]) for cx, cy in cen_e) < len(cen_e) - 1:
+            bad.append(f"evenly lit frame ('{kind}'): real dust is not found")
+    notes.append("evenly lit frames: the same mask as before")
+
+    # 2b. the rule itself, on drawn noise maps: 45 x 30 cells of known noise, the noise of the frame as a whole is 1
+    def gain_of(cells):
+        hp = np.abs(np.random.default_rng(11).standard_normal((600, 900)).astype(np.float32)) * np.kron(cells, np.ones((20, 20), np.float32))
+        return ENG._local_grain_gain(hp, np.ones((600, 900), bool), 1.0)
+
+    plain = np.ones((30, 45), np.float32)
+    # an ordinary frame, a tenth of it noticeably noisier than the rest (his light-grey sample is like that)
+    cells = plain.copy()
+    cells[10:20, 5:19] = 1.15
+    if gain_of(cells) is not None:
+        bad.append("an ordinary frame with a part 15% noisier than the rest must be searched exactly as before")
+    # an evenly lit frame with one small patch far noisier: only that patch is judged more strictly, and only partly
+    cells = plain.copy()
+    cells[12:18, 20:26] = 1.42
+    g = gain_of(cells)
+    if g is None or g.shape != (30, 45) or not 1.05 < float(g[14:16, 22:24].mean()) < 1.30 or float(g[:8].max()) != 1.0 or float(g[:, :14].max()) != 1.0:
+        bad.append(f"a small noisier patch on an evenly lit frame: gain {None if g is None else (round(float(g[14:16, 22:24].mean()), 2), float(g[:8].max()))}"
+                   ", expected about 1.17 in the patch and exactly 1 elsewhere")
+    # a low-key frame, the lit two fifths twice as noisy as the dark majority: the lit part is judged by its own noise
+    cells = plain.copy()
+    cells[18:] = 1.9
+    g = gain_of(cells)
+    if g is None or not 1.75 < float(g[22:].mean()) < 2.05 or float(g[:14].max()) > 1.15 or float(g.min()) < 1.0:
+        bad.append(f"a low-key frame: gain {None if g is None else (round(float(g[22:].mean()), 2), round(float(g[:14].max()), 2))}, expected about 1.9 in the lit part and 1 in the dark one")
+
+    # 3. the pictures of the big window: a dark frame keeps its fine noise (JPEG 100), a light one stays at 90
+    import base64
+
+    def opened(frame, matte, **over):
+        eng = H.make_engine(E, matte)
+        r = _quiet(eng.start_session, frame, 8, dict(base, **over))
+        return eng, r
+
+    def fine_kept(eng, r, key="orig_jpg_b64"):
+        """How much of the pixel-to-pixel noise of the dark wall is left in the picture the window gets."""
+        s = eng._active_session
+        src = cv2.cvtColor(s["orig_small_bgr"], cv2.COLOR_BGR2GRAY).astype(np.float32)
+        pic = cv2.imdecode(np.frombuffer(base64.b64decode(r[key]), np.uint8), cv2.IMREAD_GRAYSCALE).astype(np.float32)
+        ph, pw = src.shape
+        wall = (slice(int(ph * 0.05), int(ph * 0.45)), slice(int(pw * 0.05), int(pw * 0.30)))
+        return float(np.abs(np.diff(pic[wall], axis=1)).mean() / max(1e-6, np.abs(np.diff(src[wall], axis=1)).mean()))
+
+    small, sil_s, _, _, _ = _low_key_frame(1500, 2000, "floor", seed=4, dust=6)
+    light_frame, sil_l = H.make_studio_image(1500, 2000, n_dust=40, n_hair=3, seed=5)
+    e_dark, r_dark = opened(small, sil_s)
+    e_90, r_90 = opened(small, sil_s, previewQuality=90)
+    e_light, r_light = opened(light_frame, sil_l)
+    q = lambda e: e._active_session.get("preview_q")  # noqa: E731
+    if q(e_dark) != ENG.PREVIEW_JPEG_QUALITY_DARK or q(e_light) != ENG.PREVIEW_JPEG_QUALITY or q(e_90) != 90:
+        bad.append(f"preview quality: dark frame {q(e_dark)}, light frame {q(e_light)}, dark frame with 'previewQuality' 90 -> {q(e_90)}")
+    k100, k90 = fine_kept(e_dark, r_dark), fine_kept(e_90, r_90)
+    if k100 < 0.85 or k90 > 0.6:
+        bad.append(f"dark frame: the picture keeps {k100 * 100:.0f}% of the fine noise (must keep it), at quality 90 {k90 * 100:.0f}% (the test expects a visible loss there)")
+    if fine_kept(e_dark, r_dark, "comp_jpg_b64") < 0.6:
+        bad.append("dark frame: the picture of the cleaned photo lost its fine noise")
+    sid = r_dark["session_id"]
+    r_re = _quiet(e_dark.recompute_session, sid, dict(base, spots=60), True, None, True)
+    r_ed = _quiet(e_dark.edit_session_mask, sid, "stroke", [{"x": 0.2, "y": 0.2, "norm": 1}], 20, True, False, 45.0)
+    if min(fine_kept(e_dark, r_re, "comp_jpg_b64"), fine_kept(e_dark, r_ed, "comp_jpg_b64")) < 0.6 or q(e_dark) != ENG.PREVIEW_JPEG_QUALITY_DARK:
+        bad.append("dark frame: a refresh or a brush stroke brought the coarse picture back")
+    for asked, want in ((70, 70), (5, 50), (300, 100), ("abc", ENG.PREVIEW_JPEG_QUALITY_DARK), (None, ENG.PREVIEW_JPEG_QUALITY_DARK)):
+        e_x, _ = opened(small, sil_s, previewQuality=asked)
+        if q(e_x) != want:
+            bad.append(f"'previewQuality' {asked!r} -> {q(e_x)}, expected {want}")
+    notes.append(f"window pictures of a dark frame keep {k100 * 100:.0f}% of the fine noise (at JPEG 90: {k90 * 100:.0f}%), a light frame stays at JPEG 90")
+    report("dark", not bad, "; ".join(notes) if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Steps back and forward for the mask edits of the big window
+# ----------------------------------------------------------------------------------------------------------------------
+def check_undo():
+    bad = []
+    w, h = 1500, 2000
+    img, sil = H.make_studio_image(w, h, n_dust=60, n_hair=4, seed=77)
+    params = dict(H.STD, speedMode="fast", smokeAuto=True)
+
+    def opened():
+        eng = H.make_engine(E, sil)
+        return eng, _quiet(eng.start_session, img, 8, dict(params))
+
+    def state(eng):
+        s = eng._active_session
+        return (s["user_paint_u8"].copy(), s["user_erase_u8"].copy(), bool(s.get("inverted", False)), s["clean_paint_small_bgr"].copy(),
+                s["auto_mask_small_u8"].copy(), s["repair_mask_small_u8"].copy(), bool(s.get("mask_detached", False)))
+
+    def same(a, b):
+        return all(np.array_equal(x, y) if isinstance(x, np.ndarray) else x == y for x, y in zip(a, b))
+
+    def edit(eng, sid, op, pts=None, erase=True, radius=24):
+        return _quiet(eng.edit_session_mask, sid, op, pts, radius, erase, False, 45.0)
+
+    def line(x0, y0, x1, y1):
+        return [{"x": x0, "y": y0, "norm": 1}, {"x": x1, "y": y1, "norm": 1}]
+
+    pics = ("comp_jpg_b64", "overlay_jpg_b64")
+    eng, r0 = opened()
+    sid = r0["session_id"]
+    s0 = state(eng)
+
+    # 1. nothing to take back on a fresh window
+    r = edit(eng, sid, "undo")
+    if r.get("stepped") is not False or r.get("history") != {"undo": 0, "redo": 0} or not same(state(eng), s0) or any(r[k] != r0[k] for k in pics):
+        bad.append(f"a step back on a fresh window must change nothing: {r.get('stepped')}, {r.get('history')}")
+
+    # 2. every kind of edit goes back to exactly what was there, and forward again to exactly what it made
+    edits = [("eraser stroke", "stroke", line(0.15, 0.80, 0.35, 0.86), True),
+             ("brush stroke", "stroke", line(0.70, 0.30, 0.85, 0.36), False),
+             ("fill", "fill", None, True), ("clear", "clear", None, True), ("invert", "invert", None, True),
+             ("stroke on an inverted mask", "stroke", line(0.20, 0.20, 0.30, 0.25), True)]
+    trail = [(s0, r0)]
+    for name, op, pts, erase in edits:
+        r = edit(eng, sid, op, pts, erase)
+        if r.get("history") != {"undo": len(trail), "redo": 0} or "stepped" in r:
+            bad.append(f"{name}: history {r.get('history')} after {len(trail)} edits")
+        if same(state(eng), trail[-1][0]):
+            bad.append(f"the test is not what it should be: the {name} changed nothing")
+        trail.append((state(eng), r))
+    for i in range(len(edits) - 1, -1, -1):          # all the way back
+        r = edit(eng, sid, "undo")
+        if r.get("stepped") is not True or r.get("history") != {"undo": i, "redo": len(edits) - i}:
+            bad.append(f"step back over the {edits[i][0]}: {r.get('stepped')}, {r.get('history')}")
+        if not same(state(eng), trail[i][0]):
+            bad.append(f"step back over the {edits[i][0]}: the mask or the preview is not what it was before that edit")
+        elif any(r[k] != trail[i][1][k] for k in pics):
+            bad.append(f"step back over the {edits[i][0]}: the pictures are not the ones shown before that edit")
+    for i in range(1, len(edits) + 1):                # and forward again
+        r = edit(eng, sid, "redo")
+        if r.get("stepped") is not True or not same(state(eng), trail[i][0]) or any(r[k] != trail[i][1][k] for k in pics):
+            bad.append(f"step forward over the {edits[i - 1][0]}: not what that edit had made")
+    if edit(eng, sid, "redo").get("stepped") is not False:
+        bad.append("a step forward with nothing taken back must say so")
+
+    # 3. a new edit after a step back: what was taken back can no longer be made again
+    eng, r0 = opened()
+    sid = r0["session_id"]
+    edit(eng, sid, "stroke", line(0.15, 0.80, 0.35, 0.86), True)
+    edit(eng, sid, "undo")
+    r = edit(eng, sid, "stroke", line(0.60, 0.80, 0.80, 0.86), True)
+    if r.get("history") != {"undo": 1, "redo": 0} or edit(eng, sid, "redo").get("stepped") is not False:
+        bad.append(f"a new edit after a step back must drop the steps forward: {r.get('history')}")
+    # ...and the history is not endless
+    for i in range(ENG.EDIT_HISTORY_MAX + 8):
+        r = edit(eng, sid, "stroke", [{"x": 0.1 + 0.015 * i, "y": 0.5, "norm": 1}], True, 10)
+    if r.get("history") != {"undo": ENG.EDIT_HISTORY_MAX, "redo": 0}:
+        bad.append(f"{ENG.EDIT_HISTORY_MAX + 9} edits must leave {ENG.EDIT_HISTORY_MAX} steps: {r.get('history')}")
+
+    # 4. the sliders were moved in between (light and full recompute): the edit is still taken back, and the window
+    #    is then exactly the window of a session that never had that edit; Apply gives the same layer as well
+    moved = dict(params, spots=92, edge=80)
+    for quick in (True, False):
+        eng, r0 = opened()
+        sid = r0["session_id"]
+        twin, t0 = opened()
+        edit(eng, sid, "stroke", line(0.15, 0.80, 0.35, 0.86), True)       # erased by accident
+        edit(eng, sid, "stroke", line(0.70, 0.30, 0.85, 0.36), False)      # painted by accident
+        r_re = _quiet(eng.recompute_session, sid, dict(moved), True, None, quick)
+        t_re = _quiet(twin.recompute_session, t0["session_id"], dict(moved), True, None, quick)
+        if r_re.get("history") != {"undo": 2, "redo": 0} or t_re.get("history") != {"undo": 0, "redo": 0}:
+            bad.append(f"{'light' if quick else 'full'} recompute: the steps must survive it: {r_re.get('history')}")
+        if any(r_re[k] == t_re[k] for k in pics):
+            bad.append("the test is not what it should be: the two strokes do not show after the recompute")
+        edit(eng, sid, "undo")
+        r = edit(eng, sid, "undo")
+        if r.get("history") != {"undo": 0, "redo": 2} or not same(state(eng), state(twin)) or any(r[k] != t_re[k] for k in pics):
+            bad.append(f"{'light' if quick else 'full'} recompute, then two steps back: the window differs from one that never had the strokes")
+        a = _quiet(eng.apply_session, sid, 100.0, False, False, 45.0, None, dict(moved))
+        b = _quiet(twin.apply_session, t0["session_id"], 100.0, False, False, 45.0, None, dict(moved))
+        if not np.array_equal(a[0], b[0]):
+            bad.append(f"{'light' if quick else 'full'} recompute, two steps back, Apply: the layer differs from the layer without the strokes")
+    # a recompute that drops the edits on purpose drops their history too
+    eng, r0 = opened()
+    sid = r0["session_id"]
+    edit(eng, sid, "stroke", line(0.15, 0.80, 0.35, 0.86), True)
+    r = _quiet(eng.recompute_session, sid, dict(moved), False, None, True)
+    if r.get("history") != {"undo": 0, "redo": 0} or edit(eng, sid, "undo").get("stepped") is not False:
+        bad.append(f"a recompute without the edits must clear the steps: {r.get('history')}")
+
+    # 5. a step forward, then Apply: the layer of the edit (the eraser leaves the zone alone)
+    eng, r0 = opened()
+    sid = r0["session_id"]
+    twin, t0 = opened()
+    for e, s in ((eng, sid), (twin, t0["session_id"])):
+        edit(e, s, "stroke", line(0.15, 0.80, 0.35, 0.86), True)
+    edit(eng, sid, "undo")
+    edit(eng, sid, "redo")
+    a = _quiet(eng.apply_session, sid, 100.0, False, False, 45.0)
+    b = _quiet(twin.apply_session, t0["session_id"], 100.0, False, False, 45.0)
+    if not np.array_equal(a[0], b[0]):
+        bad.append("back and forward again, Apply: the layer differs from the layer of the edit itself")
+
+    # 6. over HTTP, the way the plugin asks
+    note = ""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            from fastapi.testclient import TestClient
+    except Exception:
+        TestClient = None
+        note = "; HTTP part SKIPPED (pip install httpx)"
+    if TestClient is not None:
+        srv = H.load_server()
+        keep = srv.ENGINE, srv.ENGINE_ERROR
+        real_out = sys.stdout
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+        try:
+            srv.ENGINE, srv.ENGINE_ERROR = H.make_engine(E, sil), None
+            with TestClient(srv.app) as client:
+                meta = json.dumps({"width": w, "height": h, "channels": 3, "bitDepth": 8, "hasSelection": False, "jobId": "u", "params": params}).encode("utf-8")
+                j0 = client.post("/session/start", content=struct.pack("<I", len(meta)) + meta + np.ascontiguousarray(img).tobytes()).json()
+                post = lambda **body: client.post("/session/mask-edit", json=dict(body, session_id=j0["session_id"])).json()  # noqa: E731
+                j1 = post(op="stroke", points=line(0.15, 0.80, 0.35, 0.86), radius_px=24, erase=True)
+                j2 = post(op="undo")
+                j3 = post(op="redo")
+                j4 = post(op="undo")
+                j5 = post(op="undo")
+                if j1.get("history") != {"undo": 1, "redo": 0} or j2.get("stepped") is not True or j2.get("history") != {"undo": 0, "redo": 1} or j2["comp_jpg_b64"] != j0["comp_jpg_b64"]:
+                    bad.append(f"HTTP: a stroke, then a step back: {j1.get('history')}, {j2.get('stepped')}, {j2.get('history')}")
+                if j3.get("stepped") is not True or j3["comp_jpg_b64"] != j1["comp_jpg_b64"] or j4.get("stepped") is not True or j5.get("stepped") is not False:
+                    bad.append(f"HTTP: forward, back, back: {j3.get('stepped')}, {j4.get('stepped')}, {j5.get('stepped')}")
+                jr = client.post("/session/recompute", json=dict(session_id=j0["session_id"], params=dict(params, spots=85), preserve_edits=True, quick=True)).json()
+                if jr.get("history") != {"undo": 0, "redo": 1}:
+                    bad.append(f"HTTP: /session/recompute must report the steps: {jr.get('history')}")
+        finally:
+            sys.stdout.close()
+            sys.stdout = real_out
+            srv.ENGINE, srv.ENGINE_ERROR = keep
+    report("undo", not bad, f"{len(edits)} kinds of mask edits go back and forward exactly; also after the sliders were moved (light and full recompute); "
+                            f"Apply after a step back == Apply without the edit; {ENG.EDIT_HISTORY_MAX} steps are kept{note}"
+           if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
 def check_plugin():
     root = H.REPO_ROOT
     r = subprocess.run([sys.executable, os.path.join(root, "tools", "build_ccx.py"), "--check"], capture_output=True, text=True)
@@ -2254,6 +2786,7 @@ GROUPS = [("convert", check_convert), ("process", check_process), ("stage", chec
           ("white", check_white), ("gpu", check_gpu),
           ("cyc", check_cyc), ("dress", check_dress), ("speed", check_speed), ("smoke", check_smoke), ("empty", check_empty),
           ("format", check_format), ("scene", check_scene), ("stains", check_stains), ("seam", check_seam), ("mask", check_mask),
+          ("dark", check_dark), ("undo", check_undo),
           ("server", check_server), ("http", check_http),
           ("folders", lambda: IC.check_folders(report)), ("install", lambda: IC.check_install(report)),
           ("bat", lambda: IC.check_bat(report)), ("plugin", check_plugin)]

@@ -6,7 +6,7 @@ const uxpShell = uxp.shell;
 const CANDIDATE_URLS = ["http://127.0.0.1:18746", "http://localhost:18746"];
 // The same number as in manifest.json and server.py. A server of another version still answers (for example the
 // previous one that was left running after an update) - the panel then says how to restart it.
-const PLUGIN_VERSION = "4.4.0";
+const PLUGIN_VERSION = "4.5.0";
 let SERVER_URL = CANDIDATE_URLS[0];
 
 const DEFAULT_PRESETS = [
@@ -15,35 +15,56 @@ const DEFAULT_PRESETS = [
     name: "Студія (Стандарт)",
     color: "#4da3ff",
     builtin: true,
-    cfg: { spots: 75, scuffs: 65, blur: 0, cycCurve: 65, feather: 60, seamOn: true, seam: 85, edge: 70, smokeOn: true, smoke: 80, grain: 90, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
+    cfg: { spots: 75, scuffs: 65, blur: 0, cycCurve: 65, feather: 60, seamOn: true, seam: 85, edge: 70, smokeOn: false, smoke: 80, grain: 90, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
   },
   {
     id: "medium_shot",
     name: "Середній план",
     color: "#59b5ff",
     builtin: true,
-    cfg: { spots: 75, scuffs: 65, blur: 10, cycCurve: 65, feather: 65, seamOn: true, seam: 78, edge: 74, smokeOn: true, smoke: 80, grain: 92, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
+    cfg: { spots: 75, scuffs: 65, blur: 10, cycCurve: 65, feather: 65, seamOn: true, seam: 78, edge: 74, smokeOn: false, smoke: 80, grain: 92, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
   },
   {
     id: "closeup",
     name: "Ближній план",
     color: "#3bc9db",
     builtin: true,
-    cfg: { spots: 62, scuffs: 48, blur: 18, cycCurve: 0, feather: 78, seamOn: false, seam: 0, edge: 84, smokeOn: true, smoke: 80, grain: 94, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: false, dressSmooth: false, dressStrength: 35, cleanPasses: 1 }
+    cfg: { spots: 62, scuffs: 48, blur: 18, cycCurve: 0, feather: 78, seamOn: false, seam: 0, edge: 84, smokeOn: false, smoke: 80, grain: 94, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: false, dressSmooth: false, dressStrength: 35, cleanPasses: 1 }
   },
   {
     id: "wide_shot",
     name: "Дальній план",
     color: "#7c8cff",
     builtin: true,
-    cfg: { spots: 85, scuffs: 78, blur: 0, cycCurve: 65, feather: 55, seamOn: true, seam: 90, edge: 66, smokeOn: true, smoke: 80, grain: 90, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
+    cfg: { spots: 85, scuffs: 78, blur: 0, cycCurve: 65, feather: 55, seamOn: true, seam: 90, edge: 66, smokeOn: false, smoke: 80, grain: 90, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
   },
   {
     id: "lowkey",
     name: "Темний ключ",
     color: "#9d7cff",
     builtin: true,
-    cfg: { spots: 92, scuffs: 55, blur: 0, cycCurve: 0, feather: 65, seamOn: true, seam: 90, edge: 78, smokeOn: true, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
+    cfg: { spots: 80, scuffs: 55, blur: 0, cycCurve: 65, feather: 65, seamOn: true, seam: 90, edge: 78, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
+  },
+  {
+    id: "lowkey_medium",
+    name: "Темний середній план",
+    color: "#b190ff",
+    builtin: true,
+    cfg: { spots: 72, scuffs: 50, blur: 0, cycCurve: 65, feather: 68, seamOn: true, seam: 80, edge: 82, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
+  },
+  {
+    id: "lowkey_close",
+    name: "Темний ближній план",
+    color: "#c7a6ff",
+    builtin: true,
+    cfg: { spots: 62, scuffs: 45, blur: 0, cycCurve: 0, feather: 78, seamOn: false, seam: 0, edge: 86, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: false, dressSmooth: false, dressStrength: 35, cleanPasses: 1 }
+  },
+  {
+    id: "lowkey_wide",
+    name: "Темний дальній план",
+    color: "#8468e8",
+    builtin: true,
+    cfg: { spots: 80, scuffs: 55, blur: 0, cycCurve: 65, feather: 65, seamOn: true, seam: 90, edge: 78, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
   },
   {
     id: "smoke",
@@ -57,14 +78,14 @@ const DEFAULT_PRESETS = [
     name: "Без стійок (AI)",
     color: "#f2a649",
     builtin: true,
-    cfg: { spots: 78, scuffs: 70, blur: 0, cycCurve: 65, feather: 60, seamOn: true, seam: 85, edge: 72, smokeOn: true, smoke: 80, grain: 90, shadow: true, removeStands: true, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
+    cfg: { spots: 78, scuffs: 70, blur: 0, cycCurve: 65, feather: 60, seamOn: true, seam: 85, edge: 72, smokeOn: false, smoke: 80, grain: 90, shadow: true, removeStands: true, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
   },
   {
     id: "gentle",
     name: "Делікатний (точки)",
     color: "#e57399",
     builtin: true,
-    cfg: { spots: 60, scuffs: 25, blur: 0, cycCurve: 0, feather: 65, seamOn: false, seam: 0, edge: 85, smokeOn: true, smoke: 85, grain: 95, shadow: true, removeStands: false, master: 90, fracFine: true, fracMed: false, fracLarge: false, dressSmooth: false, dressStrength: 35, cleanPasses: 1 }
+    cfg: { spots: 60, scuffs: 25, blur: 0, cycCurve: 0, feather: 65, seamOn: false, seam: 0, edge: 85, smokeOn: false, smoke: 85, grain: 95, shadow: true, removeStands: false, master: 90, fracFine: true, fracMed: false, fracLarge: false, dressSmooth: false, dressStrength: 35, cleanPasses: 1 }
   }
 ];
 
@@ -72,7 +93,7 @@ let presetsList = JSON.parse(JSON.stringify(DEFAULT_PRESETS));
 let activePresetId = presetsList[0].id;
 let presetsEditMode = false;
 let seamEnabled = true;
-let smokeEnabled = true;
+let smokeEnabled = false; // smoke is looked for and protected only when asked: the checkbox, or the preset "Зйомка з димом"
 let fracFine = true;
 let fracMed = true;
 let fracLarge = true;
@@ -93,10 +114,20 @@ let settingsMigrated = false;
 // would never reach an installed copy. Each entry moves one value, once: in the listed built-in presets, and on
 // the slider itself when one of those presets is the active one - and only where the stored value is still the
 // former default (a value the user chose stays). The moves already made are remembered in the settings.
+// (a move of a switch has no slider: the switch is found by the key in PRESET_SWITCHES)
 const PRESET_DEFAULT_MOVES = [
   // 4.4.0: the wall-floor line is removed by default wherever a floor is usually in the frame
-  { id: "cyc65", presets: ["std", "medium_shot", "wide_shot", "clean_stands"], key: "cycCurve", slider: "gSlCyc", from: 0, to: 65 }
+  { id: "cyc65", presets: ["std", "medium_shot", "wide_shot", "clean_stands"], key: "cycCurve", slider: "gSlCyc", from: 0, to: 65 },
+  // 4.5.0: smoke protection is off until it is asked for ("Зйомка з димом" keeps it)
+  { id: "smokeOff", presets: ["std", "medium_shot", "closeup", "wide_shot", "lowkey", "clean_stands", "gentle"], key: "smokeOn", from: true, to: false },
+  // 4.5.0: dust is judged against the noise of each part of the frame; on a dark backdrop 92 marks plain noise
+  { id: "lowkeySpots80", presets: ["lowkey"], key: "spots", slider: "gSlSpots", from: 92, to: 80 },
+  // 4.5.0: ...and the wall-floor line goes on a dark backdrop as well
+  { id: "lowkeyCyc65", presets: ["lowkey"], key: "cycCurve", slider: "gSlCyc", from: 0, to: 65 }
 ];
+const PRESET_SWITCHES = {
+  smokeOn: { get: () => smokeEnabled, set: (v) => { smokeEnabled = !!v; } }
+};
 let appliedPresetMoves = [];
 let makeMaskDefault = false;
 let deletedDefaultIds = [];
@@ -158,6 +189,9 @@ let sessState = {
   scanAborted: false,
   isApplying: false,
   recomputing: false,
+  // Steps of the mask edits (brush, eraser, fill, clear, invert) that can be taken back / made again. The server
+  // keeps the history and says the two numbers with every answer about the mask.
+  history: { undo: 0, redo: 0 },
   pendingRecompute: false,
   pendingRecomputePreserve: true,
   pendingRecomputeQuick: false,
@@ -500,7 +534,7 @@ function normalizedPresetConfig(cfg) {
     seamOn: flag(c.seamOn, true),
     seam: clampSliderVal("gSlSeam", c.seam ?? 85),
     edge: clampSliderVal("gSlEdge", c.edge ?? 70),
-    smokeOn: flag(c.smokeOn, true),
+    smokeOn: flag(c.smokeOn, false),
     smoke: clampSliderVal("gSlSmoke", c.smoke ?? 80),
     smokeAuto: true,
     grain: clampSliderVal("gSlGrain", c.grain ?? 90),
@@ -582,8 +616,12 @@ function presetRequestParams(p) {
 
 // Which preset suits which kind of frame. The server looks at the frame (dark backdrop / close-up / cut at the
 // waist or knees / whole figure) and uses the matching set of values before it cleans anything. Presets are found
-// by id: a renamed or edited one keeps working, a deleted one is simply not offered ("default" is used instead).
-const AUTO_PRESET_BY_SCENE = { dark: "lowkey", close: "closeup", medium: "medium_shot", wide: "wide_shot", default: "std" };
+// by id: a renamed or edited one keeps working, a deleted one is simply not offered. On a dark backdrop the server
+// tries "dark_<framing>", then "dark", then the framing, then "default"; on a light one the framing, then "default".
+const AUTO_PRESET_BY_SCENE = {
+  dark_close: "lowkey_close", dark_medium: "lowkey_medium", dark_wide: "lowkey_wide", dark: "lowkey",
+  close: "closeup", medium: "medium_shot", wide: "wide_shot", default: "std"
+};
 const SCENE_WORDS = {
   dark: "темний фон",
   close: "ближній план",
@@ -606,8 +644,10 @@ function buildScenePresets() {
 }
 
 function autoPresetNote(scene, preset) {
-  const kind = scene && scene.dark ? "dark" : ((scene && scene.framing) || "none");
-  return `Авто-пресет: «${preset.name}» — ${SCENE_WORDS[kind] || SCENE_WORDS.none}. Інший можна вибрати у списку пресетів.`;
+  const framing = (scene && scene.framing) || "none";
+  let seen = SCENE_WORDS[framing] || SCENE_WORDS.none;
+  if (scene && scene.dark) seen = SCENE_WORDS[framing] && framing !== "none" ? `${SCENE_WORDS.dark}, ${SCENE_WORDS[framing]}` : SCENE_WORDS.dark;
+  return `Авто-пресет: «${preset.name}» — ${seen}. Інший можна вибрати у списку пресетів.`;
 }
 
 function setAutoPreset(on) {
@@ -733,12 +773,18 @@ function appendNewDefaultPresets() {
     knownDefaultIds = ["std", "lowkey", "smoke", "clean_stands", "gentle"];
   }
   let added = false;
-  DEFAULT_PRESETS.forEach((dp) => {
+  DEFAULT_PRESETS.forEach((dp, i) => {
     const already = presetsList.some((p) => p.id === dp.id);
     const del = deletedDefaultIds.includes(dp.id);
     const known = knownDefaultIds.includes(dp.id);
     if (!already && !del && !known) {
-      presetsList.push(JSON.parse(JSON.stringify(dp)));
+      // A new built-in preset goes right under the built-in one it follows in the default list (the dark presets
+      // by framing land under "Темний ключ"); at the end of the list when none of those is there any more.
+      let at = -1;
+      for (let k = i - 1; k >= 0 && at < 0; k--) at = presetsList.findIndex((p) => p.id === DEFAULT_PRESETS[k].id);
+      const copy = JSON.parse(JSON.stringify(dp));
+      if (at >= 0) presetsList.splice(at + 1, 0, copy);
+      else presetsList.push(copy);
       added = true;
     }
     if (!known) knownDefaultIds.push(dp.id);
@@ -753,14 +799,20 @@ function applyPresetDefaultMoves() {
   PRESET_DEFAULT_MOVES.forEach((m) => {
     if (appliedPresetMoves.includes(m.id)) return;
     appliedPresetMoves.push(m.id);
+    const isFormer = (v) => (typeof m.from === "boolean" ? !!v === m.from : Number(v) === m.from);
     presetsList.forEach((p) => {
       if (!p || !p.builtin || !p.cfg || !m.presets.includes(p.id)) return;
-      if (Number(p.cfg[m.key] ?? m.from) !== m.from) return;
+      if (!isFormer(p.cfg[m.key] ?? m.from)) return;
       p.cfg[m.key] = m.to;
       changed = true;
     });
-    if (m.presets.includes(activePresetId) && getSliderVal(m.slider) === m.from) {
+    if (!m.presets.includes(activePresetId)) return;
+    const sw = PRESET_SWITCHES[m.key];
+    if (m.slider && getSliderVal(m.slider) === m.from) {
       setSliderVal(m.slider, m.to);
+      changed = true;
+    } else if (!m.slider && sw && sw.get() === m.from) {
+      sw.set(m.to);
       changed = true;
     }
   });
@@ -905,6 +957,16 @@ function renderPresets() {
     if (el("gBtnSavePreset")) {
       const shortName = active.name.length > 20 ? active.name.slice(0, 19) + "…" : active.name;
       el("gBtnSavePreset").textContent = `💾 Зберегти у «${shortName}»`;
+    }
+    if (el("gBtnResetPreset")) {
+      const shortName = active.name.length > 20 ? active.name.slice(0, 19) + "…" : active.name;
+      const canReset = !!defaultPresetOf(active.id);
+      const armed = canReset && resetPresetArmedId === active.id;
+      el("gBtnResetPreset").textContent = armed
+        ? `Натисніть ще раз — скинути «${shortName}»`
+        : canReset ? `↺ Скинути «${shortName}» до стандартних` : "↺ Скинути до стандартних (не для власних пресетів)";
+      el("gBtnResetPreset").classList.toggle("is-dim", !canReset);
+      el("gBtnResetPreset").classList.toggle("armed", armed);
     }
   }
 
@@ -1285,6 +1347,205 @@ async function unloadVramManual() {
 }
 
 // ------------------------------------------------------------------
+// Backup of everything the plugin remembers (presets + settings) into a file, and back
+// ------------------------------------------------------------------
+// The plugin may write only into its own data folder, and a reinstall of Photoshop can wipe that one. So the file
+// is written by the server into <program folder>/backup; the panel shows where it is and can open the folder.
+// A file put into that folder by hand (from another PC, from a flash drive) is offered for a restore as well.
+let backupBusy = false;
+let backupArmedFile = null;  // the backup whose line was clicked once (the second click restores it)
+
+// "2026-11-19T08:35:12" -> "19.11.2026 08:35"
+function backupStamp(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(iso || ""));
+  return m ? `${m[3]}.${m[2]}.${m[1]} ${m[4]}:${m[5]}` : String(iso || "");
+}
+
+async function backupFetch(path, body) {
+  let r;
+  try {
+    r = await fetch(`${SERVER_URL}${path}`, body === undefined ? undefined : {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+  } catch (_) {
+    throw new Error("сервер не відповідає. Перевірте, чи він запущений (індикатор угорі панелі).");
+  }
+  let d = null;
+  try { d = await r.json(); } catch (_) {}
+  if (r.status === 404 && !(d && d.error)) {
+    throw new Error("запущено стару версію сервера, вона ще не вміє робити бекапи. Перезапустіть сервер (restart_gpu_server.bat) і повторіть.");
+  }
+  if (!r.ok || !d || d.ok === false) throw new Error((d && d.error) || `помилка сервера (${r.status})`);
+  return d;
+}
+
+// The box under the two backup buttons: a few lines of text (one <div> per line) and, for a restore, the list
+function showBackupBox(mode, lines, backups, folder) {
+  const box = el("panelBackupBox");
+  if (!box) return;
+  const textEl = el("backupBoxText");
+  textEl.innerHTML = "";
+  (lines || []).forEach((line) => {
+    const row = document.createElement("div");
+    row.className = line.path ? "backup-path" : "backup-line";
+    row.textContent = line.path || line;
+    textEl.appendChild(row);
+  });
+  const listEl = el("backupList");
+  listEl.innerHTML = "";
+  (backups || []).forEach((b) => {
+    const row = document.createElement("div");
+    row.setAttribute("role", "button");
+    row.tabIndex = 0;
+    const armed = backupArmedFile === b.file;
+    row.className = "backup-row" + (armed ? " armed" : "");
+    const mine = b.user_presets > 0 ? ` (ваших: ${b.user_presets})` : "";
+    const auto = b.label === "before-restore" ? " · копія перед відновленням" : "";
+    row.textContent = armed
+      ? `Натисніть ще раз — відновити бекап від ${backupStamp(b.saved_at)}`
+      : `${backupStamp(b.saved_at)} · пресетів: ${b.presets}${mine}${auto}`;
+    row.addEventListener("click", () => onBackupRowClick(b, backups, folder));
+    listEl.appendChild(row);
+  });
+  box.dataset.mode = mode;
+  box.classList.add("visible");
+}
+
+function hideBackupBox() {
+  backupArmedFile = null;
+  const box = el("panelBackupBox");
+  if (!box) return;
+  box.dataset.mode = "";
+  box.classList.remove("visible");
+}
+
+function backupPayload(label) {
+  return { presets: presetsList, settings: buildSettingsSnapshot(), label: label || "" };
+}
+
+// "💾 Бекап налаштувань"
+async function saveSettingsBackup() {
+  if (backupBusy) return;
+  const ready = await ensureServerForAction("btnBackupSave", "Бекап");
+  if (!ready || backupBusy) return;
+  backupBusy = true;
+  try {
+    const d = await backupFetch("/backup/save", backupPayload(""));
+    backupArmedFile = null;
+    setFooterStatus(`✓ Бекап збережено: пресетів ${d.presets}${d.user_presets > 0 ? ` (ваших: ${d.user_presets})` : ""} і всі налаштування.`, "success");
+    showBackupBox("saved", [
+      "Файл бекапа:",
+      { path: d.path },
+      "Тримайте його копію ще й на іншому диску чи флешці — тоді налаштування переживуть і перевстановлення Windows.",
+      "Щоб відновити: покладіть файл у цю саму папку й натисніть «📂 Відновити»."
+    ], [], d.folder);
+  } catch (err) {
+    setFooterStatus("Бекап не збережено: " + (err && err.message ? err.message : String(err)), "error");
+  } finally {
+    backupBusy = false;
+  }
+}
+
+function showBackupList(backups, folder) {
+  const lines = backups.length > 0
+    ? ["Виберіть бекап. Поточні пресети й налаштування буде замінено тими, що у файлі; їхня копія збережеться поруч сама."]
+    : ["Бекапів ще немає. Папка для них:", { path: folder }, "Натисніть «💾 Бекап налаштувань» — або покладіть сюди файл бекапа й натисніть «📂 Відновити» ще раз."];
+  showBackupBox("list", lines, backups, folder);
+}
+
+// "📂 Відновити": shows the backups of the folder (a second press hides the list)
+async function openBackupList() {
+  if (backupBusy) return;
+  const box = el("panelBackupBox");
+  if (box && box.classList.contains("visible") && box.dataset.mode === "list") {
+    hideBackupBox();
+    return;
+  }
+  const ready = await ensureServerForAction("btnBackupRestore", "Список бекапів");
+  if (!ready || backupBusy) return;
+  backupBusy = true;
+  try {
+    const d = await backupFetch("/backup/list");
+    backupArmedFile = null;
+    showBackupList(Array.isArray(d.backups) ? d.backups : [], d.folder || "");
+    setFooterStatus("");
+  } catch (err) {
+    setFooterStatus("Не вдалося прочитати список бекапів: " + (err && err.message ? err.message : String(err)), "error");
+  } finally {
+    backupBusy = false;
+  }
+}
+
+// The presets and the settings of a backup in place of the current ones. False: the file holds nothing usable.
+async function applySettingsBackup(d) {
+  const list = Array.isArray(d && d.presets_list)
+    ? d.presets_list.filter((x) => x && typeof x === "object" && x.id && x.name && x.cfg && typeof x.cfg === "object")
+    : [];
+  if (list.length === 0 || !d.settings || typeof d.settings !== "object") return false;
+  presetsList = JSON.parse(JSON.stringify(list));
+  hasLocalPresets = true;
+  hasLocalSettings = true;
+  activePresetId = presetsList[0].id;
+  deletedDefaultIds = [];
+  knownDefaultIds = [];
+  applySettingsSnapshot(d.settings);
+  if (!d.settings.cfg || typeof d.settings.cfg !== "object") {
+    applyPreset(presetsList.find((x) => x.id === activePresetId) || presetsList[0]);
+  }
+  // A backup made by an older version: the defaults that changed since then, the built-in presets added since then
+  applyPresetDefaultMoves();
+  appendNewDefaultPresets();
+  settingsMigrated = false;
+  renderPresets();
+  updateSliderVisuals();
+  updateFractionButtonsUI();
+  await persistPresets();
+  await persistSettingsNow();
+  return true;
+}
+
+// A line of the list: the first click asks for one more, the second one restores that backup
+async function onBackupRowClick(b, backups, folder) {
+  if (backupBusy) return;
+  if (backupArmedFile !== b.file) {
+    backupArmedFile = b.file;
+    showBackupList(backups, folder);
+    return;
+  }
+  backupArmedFile = null;
+  backupBusy = true;
+  try {
+    const d = await backupFetch("/backup/read", { file: b.file });
+    // What is about to be replaced is kept as one more backup (the newest few of these copies stay in the folder)
+    let kept = true;
+    try { await backupFetch("/backup/save", backupPayload("before-restore")); } catch (_) { kept = false; }
+    if (!(await applySettingsBackup(d))) throw new Error("у файлі немає пресетів або налаштувань.");
+    hideBackupBox();
+    setFooterStatus(
+      `✓ Відновлено бекап від ${backupStamp(d.saved_at)}: пресетів ${presetsList.length} і всі налаштування.` +
+      (kept ? " Те, що було до цього, збережено в папці бекапів як «копія перед відновленням»." : ""),
+      "success"
+    );
+  } catch (err) {
+    showBackupList(backups, folder);
+    setFooterStatus("Бекап не відновлено: " + (err && err.message ? err.message : String(err)), "error");
+  } finally {
+    backupBusy = false;
+  }
+}
+
+async function openBackupFolder() {
+  try {
+    const d = await backupFetch("/backup/open-folder", {});
+    setFooterStatus(d.opened ? "Папку з бекапами відкрито у Провіднику Windows." : `Папка з бекапами: ${d.folder}`, "info");
+  } catch (err) {
+    setFooterStatus("Не вдалося відкрити папку: " + (err && err.message ? err.message : String(err)), "error");
+  }
+}
+
+// ------------------------------------------------------------------
 // Pure JS UTF-8 & Binary Helpers
 // ------------------------------------------------------------------
 function utf8Encode(str) {
@@ -1577,30 +1838,145 @@ function getNormalizedStagePoint(clientX, clientY) {
 // ------------------------------------------------------------------
 // Interactive Session Server Calls
 // ------------------------------------------------------------------
-async function sendMaskEditOp(op, points = null) {
-  if (!sessState.id) return;
-  try {
-    const r = await fetch(`${SERVER_URL}/session/mask-edit`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        session_id: sessState.id,
-        op,
-        points,
-        radius_px: sessState.brushSize,
-        erase: sessState.tool === "eraser",
-        dressSmooth: dressSmoothEnabled,
-        dressStrength: getSliderVal("gSlDress")
-      })
-    });
-    if (r.ok) {
-      const d = await r.json();
+// Mask edits reach the server one after another, in the order they were made: an answer that comes late must
+// never put an older picture over a newer one (several Ctrl + Z in a row, a stroke right after a step back).
+// Resolves with the server's answer, or null when there was none.
+let maskEditQueue = Promise.resolve(null);
+
+function sendMaskEditOp(op, points = null) {
+  if (!sessState.id) return Promise.resolve(null);
+  const body = {
+    session_id: sessState.id,
+    op,
+    points,
+    radius_px: sessState.brushSize,
+    erase: sessState.tool === "eraser",
+    dressSmooth: dressSmoothEnabled,
+    dressStrength: getSliderVal("gSlDress")
+  };
+  const run = () => postMaskEdit(body);
+  maskEditQueue = maskEditQueue.then(run, run);
+  return maskEditQueue;
+}
+
+async function postMaskEdit(body) {
+  let d = null;
+  if (sessState.id === body.session_id) {
+    try {
+      const r = await fetch(`${SERVER_URL}/session/mask-edit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      if (r.ok) d = await r.json();
+    } catch (_) {
+      d = null;
+    }
+    if (d && sessState.id === body.session_id) {
       if (d.comp_jpg_b64 && el("dlgCompImg")) el("dlgCompImg").src = "data:image/jpeg;base64," + d.comp_jpg_b64;
       if (d.overlay_jpg_b64 && el("dlgOverlayImg")) el("dlgOverlayImg").src = "data:image/jpeg;base64," + d.overlay_jpg_b64;
       if (typeof d.mask_share === "number") sessState.maskShare = d.mask_share;
+      if (d.history) setEditHistory(d.history);
     }
-  } catch (_) {}
+  }
   clearStrokeDots();
+  return d;
+}
+
+// How many mask edits can be taken back / made again: the two buttons of the left bar are bright when there is
+// something to step to. (They stay clickable when dim - a press then says in words that there is nothing.)
+function setEditHistory(h) {
+  const count = (v) => Math.max(0, Math.round(Number(v) || 0));
+  sessState.history = { undo: count(h && h.undo), redo: count(h && h.redo) };
+  [["dlgBtnUndo", sessState.history.undo], ["dlgBtnRedo", sessState.history.redo]].forEach(([id, n]) => {
+    const b = el(id);
+    if (!b) return;
+    b.classList.toggle("is-dim", n === 0);
+  });
+}
+
+// A line of text for the user of the big window: the hint strip at the bottom and, when the fine settings are
+// open, their own hint box (it covers the strip on a small window).
+function sayInWindow(text) {
+  if (el("dlgHoverHint")) el("dlgHoverHint").textContent = text;
+  const gearPop = el("dlgGearPopover");
+  if (el("gTipBox") && gearPop && gearPop.classList.contains("visible")) el("gTipBox").textContent = text;
+}
+
+// Ctrl + Z / the ↺ button (back = true), Ctrl + Shift + Z, Ctrl + Y / the ↻ button (back = false)
+async function stepMaskEdit(back) {
+  if (!sessState.open || !sessState.id || sessState.isApplying || sessState.isDrawing) return false;
+  const d = await sendMaskEditOp(back ? "undo" : "redo");
+  if (!d) return false;
+  if (typeof d.stepped !== "boolean") {
+    sayInWindow("Крок назад недоступний: запущено стару версію сервера. Перезапустіть його (restart_gpu_server.bat).");
+    return false;
+  }
+  if (!d.stepped) {
+    sayInWindow(back
+      ? "Скасовувати нічого: правок маски (пензель, гумка, заливка, інверсія) ще не було."
+      : "Повертати нічого: скасованих кроків немає.");
+    return false;
+  }
+  const left = back ? sessState.history.undo : sessState.history.redo;
+  const more = left > 0 ? ` (можна ще ${left})` : "";
+  sayInWindow(back
+    ? `↺ Останню правку маски скасовано${more}. Повернути її: Ctrl + Shift + Z або кнопка ↻.`
+    : `↻ Скасовану правку повернуто${more}.`);
+  return true;
+}
+
+// ------------------------------------------------------------------
+// "Скинути пресет": the values a built-in preset ships with
+// ------------------------------------------------------------------
+let resetPresetArmedId = null;  // the preset whose reset button was pressed once (the second press does it)
+let resetPresetTimer = null;
+const RESET_PRESET_CONFIRM_MS = 6000;
+
+function defaultPresetOf(id) {
+  return DEFAULT_PRESETS.find((dp) => dp.id === id) || null;
+}
+
+function disarmPresetReset() {
+  if (resetPresetTimer) clearTimeout(resetPresetTimer);
+  resetPresetTimer = null;
+  if (resetPresetArmedId === null) return;
+  resetPresetArmedId = null;
+  renderPresets();
+}
+
+// First press: asks for one more (a reset replaces the values the user saved into this preset). Second press within
+// a few seconds: the active preset gets the values it ships with; they go onto the controls and into the preview.
+// Only this one preset changes. A preset the user made has no shipped values - the button says so.
+async function resetActivePresetToDefault() {
+  const active = presetsList.find((p) => p.id === activePresetId);
+  if (!active) return false;
+  const shipped = defaultPresetOf(active.id);
+  if (!shipped) {
+    disarmPresetReset();
+    sayInWindow(`«${active.name}» — ваш власний пресет: стандартних значень у нього немає. Скинути можна пресети, що постачаються з програмою.`);
+    return false;
+  }
+  if (resetPresetArmedId !== active.id) {
+    if (resetPresetTimer) clearTimeout(resetPresetTimer);
+    resetPresetArmedId = active.id;
+    resetPresetTimer = setTimeout(disarmPresetReset, RESET_PRESET_CONFIRM_MS);
+    renderPresets();
+    sayInWindow(`Скинути «${active.name}» до стандартних значень? Натисніть кнопку ще раз. Зміниться лише цей пресет.`);
+    return false;
+  }
+  if (resetPresetTimer) clearTimeout(resetPresetTimer);
+  resetPresetTimer = null;
+  resetPresetArmedId = null;
+  active.cfg = JSON.parse(JSON.stringify(shipped.cfg));
+  applyPreset(active);
+  renderPresets();
+  sayInWindow(`✓ Пресет «${active.name}» скинуто до стандартних значень.`);
+  announcePresetClick(active);
+  refreshPreviewAfterClick(false);
+  await persistPresets();
+  await persistSettingsNow();
+  return true;
 }
 
 async function sendDressPreviewUpdate() {
@@ -1723,12 +2099,18 @@ function smokeNoteText(sm) {
       : "Захист диму вимкнено. Диму в кадрі й так не знайдено — результат той самий.";
   }
   if (!sm.found && sm.auto) {
-    return "Диму в кадрі не знайдено, тому захист диму тут нічого не змінює. Дим є, але ледь помітний? Поставте «Захист диму» на 95–100 %.";
+    return "Перегляд оновлено. Диму в кадрі не знайдено, тому захист диму тут нічого не змінює — картинка та сама. Дим є, але ледь помітний? Поставте «Захист диму» на 95–100 %.";
   }
   if (!(sm.protected > 0)) return "Захист диму увімкнено, але схожих на дим ділянок у кадрі немає.";
   return sm.auto
     ? `Дим знайдено й захищено: ${percentOfFrame(sm.protected)} кадру не чиститься.`
     : `Захист диму на 95–100 %: збережено все, що схоже на дим (${percentOfFrame(sm.protected)} кадру), навіть світлі розводи.`;
+}
+
+// The window has just opened with the smoke protection off (the usual state) and the frame seems to have smoke:
+// without these words the smoke would be cleaned away silently.
+function smokeOffHintText(sm) {
+  return `Схоже, у кадрі є дим (${percentOfFrame(sm.share)} кадру), а захист диму вимкнено — дим чиститься як звичайний фон. Щоб його зберегти, поставте галочку з димом угорі.`;
 }
 
 // A smoke control was used: once the refreshed preview is back, say what the server saw of smoke. (On most frames
@@ -1870,6 +2252,7 @@ async function recomputeInteractiveSession(preserveEdits = true, quick = false) 
       }
       if (d.comp_jpg_b64 && el("dlgCompImg")) el("dlgCompImg").src = "data:image/jpeg;base64," + d.comp_jpg_b64;
       if (d.overlay_jpg_b64 && el("dlgOverlayImg")) el("dlgOverlayImg").src = "data:image/jpeg;base64," + d.overlay_jpg_b64;
+      if (d.history) setEditHistory(d.history);  // the brush strokes live on through a refresh, and so do their steps
       sessState.lastStats = d.stats || null;
       sessState.previewSyncedSig = untouched ? previewSettingsSignature() : sigAtSend;
       if (sessState.presetNote && untouched) {
@@ -1878,8 +2261,11 @@ async function recomputeInteractiveSession(preserveEdits = true, quick = false) 
         sessState.smokeNote = false;
         showPreviewNote(presetNoteText(note, d.mask_share));
       } else if (sessState.smokeNote && untouched) {
+        // (also in the hint strip: the note in the corner goes away by itself, the strip stays until the next hint)
         sessState.smokeNote = false;
-        showPreviewNote(smokeNoteText(d.smoke));
+        const smokeText = smokeNoteText(d.smoke);
+        showPreviewNote(smokeText, 12000);
+        if (smokeText) sayInWindow(smokeText);
       } else if (sessState.note) {
         showPreviewNote("");  // the note on screen described the picture that has just been replaced
       }
@@ -2038,6 +2424,7 @@ async function openInteractiveWorkspace() {
   sessState.previewSyncedSig = "";
   sessState.previewForce = false;
   sessState.quickUnsupported = false;
+  setEditHistory(null);
   pendingApplyPayload = null;
   updatePreviewBadge();
 
@@ -2114,7 +2501,9 @@ async function openInteractiveWorkspace() {
       if (typeof res.mask_share === "number") sessState.maskShare = res.mask_share;
       // Smoke in the frame changes what is cleaned, so it is said right away (no smoke - the usual case - no words)
       const smokeSeen = res.smoke || (res.scene && res.scene.smoke) || null;
-      const smokeNote = untouched && smokeSeen && smokeSeen.on && smokeSeen.protected > 0 ? smokeNoteText(smokeSeen) : "";
+      let smokeNote = "";
+      if (untouched && smokeSeen && smokeSeen.on && smokeSeen.protected > 0) smokeNote = smokeNoteText(smokeSeen);
+      else if (untouched && smokeSeen && !smokeSeen.on && smokeSeen.found) smokeNote = smokeOffHintText(smokeSeen);
       if (autoNote || smokeNote) showPreviewNote([autoNote, smokeNote].filter(Boolean).join(" "), smokeNote ? 12000 : 8000);
 
       if (el("dlgOrigImg")) el("dlgOrigImg").src = "data:image/jpeg;base64," + res.orig_jpg_b64;
@@ -2925,6 +3314,10 @@ function initEvents() {
   el("btnPanelHelp").addEventListener("click", () => {
     el("panelHelpBox").classList.toggle("visible");
   });
+  el("btnBackupSave").addEventListener("click", pressOrTakeBack("btnBackupSave", saveSettingsBackup));
+  el("btnBackupRestore").addEventListener("click", pressOrTakeBack("btnBackupRestore", openBackupList));
+  el("btnBackupOpenFolder").addEventListener("click", openBackupFolder);
+  el("btnBackupClose").addEventListener("click", hideBackupBox);
 
   // Modal Topbar Controls
   // "До / Після": the photo as it was <-> the cleaned photo. "Маска": the red/green mask <-> the cleaned photo.
@@ -2964,11 +3357,11 @@ function initEvents() {
     scheduleSaveSettings();
     askSmokeNote();
     refreshPreviewAfterClick(false);
-    if (el("dlgHoverHint")) {
-      el("dlgHoverHint").textContent = smokeEnabled
-        ? "✓ Захист диму увімкнено"
-        : "Захист диму вимкнено (повзунок у налаштуваннях неактивний)";
-    }
+    // (what the server finds is said once the refreshed preview is back - see smokeNoteText)
+    const live = sessState.open && sessState.id;
+    sayInWindow(smokeEnabled
+      ? "✓ Захист диму увімкнено" + (live ? " — шукаю дим у кадрі й оновлюю перегляд…" : "")
+      : "Захист диму вимкнено (повзунок у налаштуваннях неактивний)" + (live ? " — оновлюю перегляд…" : ""));
   });
 
   el("dlgChkMakeMask").addEventListener("change", () => {
@@ -3062,6 +3455,10 @@ function initEvents() {
     scheduleSaveSettings();
     askSmokeNote();
     requestPreviewRefresh(PREVIEW_DELAY_CLICK_MS, false);
+    const live = sessState.open && sessState.id;
+    sayInWindow(smokeEnabled
+      ? "✓ Захист диму увімкнено" + (live ? " — шукаю дим у кадрі й оновлюю перегляд…" : "")
+      : "Захист диму вимкнено" + (live ? " — оновлюю перегляд…" : ""));
   });
   el("gBtnDress").addEventListener("click", async () => {
     dressSmoothEnabled = !dressSmoothEnabled;
@@ -3090,8 +3487,10 @@ function initEvents() {
     }
   });
   el("gBtnSavePreset").addEventListener("click", async () => {
+    disarmPresetReset();
     await saveCurrentConfigToActivePreset(true);
   });
+  el("gBtnResetPreset").addEventListener("click", resetActivePresetToDefault);
 
   const gPasses = el("gPassPills");
   if (gPasses) {
@@ -3138,6 +3537,10 @@ function initEvents() {
     setView("mask");
     await sendMaskEditOp("invert");
   });
+
+  // One step back / forward for the mask edits (the keys: Ctrl + Z, Ctrl + Shift + Z, Ctrl + Y - see below)
+  el("dlgBtnUndo").addEventListener("click", () => stepMaskEdit(true));
+  el("dlgBtnRedo").addEventListener("click", () => stepMaskEdit(false));
 
   el("dlgBrushSmaller").addEventListener("click", () => adjustBrushSize(-6));
   el("dlgBrushBigger").addEventListener("click", () => adjustBrushSize(6));
@@ -3201,6 +3604,22 @@ function initEvents() {
   // Keyboard shortcuts inside modal
   document.addEventListener("keydown", (e) => {
     if (!sessState.open) return;
+    // Ctrl + Z: the last mask edit back; Ctrl + Shift + Z or Ctrl + Y: forward again. The key is told by its place
+    // on the keyboard (e.code), so the Ukrainian layout works too. Inside a text field the keys keep their own
+    // meaning; a checkbox that was clicked last does not swallow them.
+    const t = e.target;
+    const typing = !!t && (t.tagName === "TEXTAREA" || (t.tagName === "INPUT" && String(t.type || "text").toLowerCase() !== "checkbox"));
+    if (!typing && (e.ctrlKey || e.metaKey) && !e.altKey) {
+      const k = String(e.key || "").toLowerCase();
+      const isZ = e.code === "KeyZ" || k === "z" || k === "я";
+      const isY = e.code === "KeyY" || k === "y" || k === "н";
+      if (isZ || isY) {
+        e.preventDefault();
+        if (e.stopPropagation) e.stopPropagation();
+        stepMaskEdit(isZ && !e.shiftKey);
+        return;
+      }
+    }
     if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
     if (e.code === "Space") {
       sessState.spaceDown = true;

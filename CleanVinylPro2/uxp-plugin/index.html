@@ -83,13 +83,28 @@
         <div role="button" tabindex="0" class="mini-util-btn" id="btnPanelHelp" title="Коротка інструкція користувача">? Довідка</div>
       </div>
 
+      <div class="panel-tools-row">
+        <div role="button" tabindex="0" class="mini-util-btn" id="btnBackupSave" title="Зберегти всі налаштування (пресети, значення повзунків, усі перемикачі) у файл у папці програми. З нього все можна відновити після перевстановлення Photoshop чи Windows.">💾 Бекап налаштувань</div>
+        <div role="button" tabindex="0" class="mini-util-btn" id="btnBackupRestore" title="Показати збережені бекапи й відновити налаштування з вибраного">📂 Відновити</div>
+      </div>
+
+      <div class="panel-help-box" id="panelBackupBox">
+        <div id="backupBoxText"></div>
+        <div class="backup-list" id="backupList"></div>
+        <div class="backup-actions">
+          <div role="button" tabindex="0" class="mini-util-btn" id="btnBackupOpenFolder" title="Відкрити папку з бекапами у Провіднику Windows">📁 Відкрити папку</div>
+          <div role="button" tabindex="0" class="mini-util-btn" id="btnBackupClose">Закрити</div>
+        </div>
+      </div>
+
       <div class="panel-help-box" id="panelHelpBox">
         <b>Як працювати:</b><br/>
         1. Відкрийте RGB-фото (8 або 16 біт) і натисніть <b>«Очистити фон»</b>. Якщо сервер ще запускається — вікно відкриється само, щойно він буде готовий.<br/>
         2. Вікно відкривається одразу з <b>чистим фото</b>; пресет підбирається сам під кадр. <b>«До / Після»</b> — порівняти з оригіналом.<br/>
         3. <b>«Маска»</b> показує, що зміниться: яскраво-зелене — знайдені дефекти, блідо-зелене — фон, який вирівнюється, червоне — не чіпається. <b>Гумка (E)</b> стирає зайве зелене, <b>Пензель (B)</b> домальовує.<br/>
         4. Натисніть <b>«Застосувати»</b> — у Photoshop одразу створиться новий шар.<br/>
-        5. <b>«Формат 5:7»</b> — за потреби розширює кадр під друк і добудовує фон з боків (окремим шаром).
+        5. <b>«Формат 5:7»</b> — за потреби розширює кадр під друк і добудовує фон з боків (окремим шаром).<br/>
+        6. <b>«💾 Бекап налаштувань»</b> зберігає всі пресети й налаштування у файл у папці програми (<b>backup</b>); <b>«📂 Відновити»</b> повертає їх із такого файла — наприклад, після перевстановлення Photoshop.
       </div>
 
       <div class="footer-status" id="footerStatus"></div>
@@ -133,9 +148,9 @@
           </label>
 
           <!-- Захист диму: іконка диму (без слів) + галочка -->
-          <label class="r4m-smoke-pill active" id="dlgWrapSmoke" data-tip="Захист диму — зберігає студійний дим та атмосферний туман. Програма сама перевіряє, чи є дим у кадрі: якщо його немає, галочка нічого не змінює (про це скаже напис у кутку фото). Якщо галочку знято, повзунок диму вимикається">
+          <label class="r4m-smoke-pill" id="dlgWrapSmoke" data-tip="Захист диму — без галочки дим не захищається: кадр чиститься як звичайний (якщо програма помітить у кадрі дим, вона попередить написом у кутку фото). Знімали з димом — поставте галочку: дим у цьому кадрі лишиться недоторканим. Якщо диму в кадрі немає, галочка нічого не змінює — про це теж скаже напис">
             <img src="icons/ui/smoke.png" class="ui-icon" alt="" />
-            <input type="checkbox" id="dlgChkSmoke" checked />
+            <input type="checkbox" id="dlgChkSmoke" />
           </label>
         </div>
 
@@ -161,7 +176,7 @@
                 <div role="button" tabindex="0" class="small-save-btn" id="dlgBtnSaveNewPreset">ОК</div>
                 <div role="button" tabindex="0" class="small-cancel-btn" id="dlgBtnCancelNewPreset">×</div>
               </div>
-              <label class="ps-check auto-preset-row" data-tip="Авто-пресет — щоразу, коли відкривається це вікно, програма дивиться на кадр і сама ставить пресет: темний фон → «Темний ключ», голова й плечі → «Ближній план», по пояс або коліна → «Середній план», на повний зріст → «Дальній план», інакше «Студія (Стандарт)». Зніміть галочку, щоб лишався пресет, який вибрали ви.">
+              <label class="ps-check auto-preset-row" data-tip="Авто-пресет — щоразу, коли відкривається це вікно, програма дивиться на кадр і сама ставить пресет. Світлий фон: голова й плечі → «Ближній план», по пояс або коліна → «Середній план», на повний зріст → «Дальній план», інакше «Студія (Стандарт)». Темний фон (чорний, темно-сірий): так само «Темний ближній план», «Темний середній план», «Темний дальній план», інакше «Темний ключ». Зніміть галочку, щоб лишався пресет, який вибрали ви.">
                 <input type="checkbox" id="dlgChkAutoPreset" checked />
                 <span>Авто: підбирати пресет під кадр</span>
               </label>
@@ -172,7 +187,7 @@
 
           <!-- Шестигранник (тонкі налаштування, тільки малюнок без слів) -->
           <div class="r4m-popover-anchor">
-            <div role="button" tabindex="0" class="r4m-icon-btn" id="dlgBtnGear" data-tip="Тонкі налаштування — пил, сліди, циклорама, шов, захист диму, одяг, стійки та VRAM">
+            <div role="button" tabindex="0" class="r4m-icon-btn" id="dlgBtnGear" data-tip="Тонкі налаштування — пил, сліди, циклорама, шов, захист диму, одяг, стійки, VRAM; тут же зберегти зміни у пресет або скинути його до стандартних">
               <img src="icons/ui/gear.png" class="ui-icon" alt="" />
             </div>
 
@@ -214,10 +229,10 @@
                   <div class="ctrl-label-line"><span>Захист моделі та країв</span><span class="ctrl-val" id="gValEdge">70%</span></div>
                   <div class="cv-slider" id="gSlEdge" data-value="70"><div class="cv-slider-track"><div class="cv-slider-fill"></div></div><div class="cv-slider-thumb"></div></div>
                 </div>
-                <div class="g-row" data-tip="Захист диму — програма сама перевіряє, чи є дим у кадрі, і захищає його лише тоді, коли він є (на кадрі без диму нічого не змінюється). ➕ вправо (75–90%): береже й тонкий серпанок; ➖ вліво (30–60%): захищає тільки густий дим. 95–100%: захищати завжди — усе, що схоже на дим, навіть світлі розводи біля ніг; ставте так лише тоді, коли дим ледь помітний і програма його не знайшла.">
+                <div class="g-row" data-tip="Захист диму — вимкнений, доки ви його не ввімкнете (тут або галочкою з димом угорі); у пресеті «Зйомка з димом» він увімкнений одразу. Увімкнений — програма захищає дим лише тоді, коли він справді є в кадрі (на кадрі без диму нічого не змінюється). ➕ вправо (75–90%): береже й тонкий серпанок; ➖ вліво (30–60%): захищає тільки густий дим. 95–100%: захищати завжди — усе, що схоже на дим, навіть світлі розводи біля ніг; ставте так лише тоді, коли дим ледь помітний і програма його не знайшла.">
                   <div class="ctrl-label-line">
                     <span>Захист диму</span>
-                    <div class="ctrl-right-group"><div role="button" tabindex="0" class="toggle-pill on" id="gBtnSmoke">Увімк.</div><span class="ctrl-val" id="gValSmoke">80%</span></div>
+                    <div class="ctrl-right-group"><div role="button" tabindex="0" class="toggle-pill" id="gBtnSmoke">Вимк.</div><span class="ctrl-val" id="gValSmoke">Вимк.</span></div>
                   </div>
                   <div class="cv-slider" id="gSlSmoke" data-value="80"><div class="cv-slider-track"><div class="cv-slider-fill"></div></div><div class="cv-slider-thumb"></div></div>
                 </div>
@@ -250,6 +265,7 @@
 
                 <div role="button" tabindex="0" class="btn-primary gear-apply-btn" id="gBtnRecompute" data-tip="Точний перегляд — необов’язкова кнопка. Перегляд і так оновлюється сам після кожної зміни (швидко, на зменшеній копії кадру). Ця кнопка рахує весь кадр повністю й показує точно те, що буде в шарі. Потрібна з 2× проходом або якщо хочете перевірити результат ще до «Застосувати».">↻ Точний перегляд (повний розрахунок)</div>
                 <div role="button" tabindex="0" class="btn-sec gear-save-btn" id="gBtnSavePreset">💾 Зберегти зміни у поточний пресет</div>
+                <div role="button" tabindex="0" class="btn-sec gear-save-btn gear-reset-btn" id="gBtnResetPreset" data-tip="Скинути пресет — повертає вибраному стандартному пресету значення, з якими він постачається, і одразу ставить їх на повзунки. Змінюється лише цей пресет; інші стандартні та ваші власні лишаються як є. Щоб не скинути випадково, кнопку треба натиснути двічі. Для вашого власного пресета стандартних значень немає.">↺ Скинути пресет до стандартних</div>
 
                 <div class="g-vram-box">
                   <div class="g-vram-lbl">Автовивантаження моделей із VRAM:</div>
@@ -280,6 +296,7 @@
                 • Вікно відкривається з <b>чистим фото</b>. <b>«До / Після»</b> показує оригінал, ще раз — знову результат.<br/>
                 • <b>«Маска»</b> показує, що зміниться: яскраво-зелене — знайдені дефекти (їх буде перемальовано), блідо-зелене — фон, який вирівнюється, червоне — не чіпається. <b>Гумка (E)</b> стирає зайве зелене з одягу, взуття або тіней; <b>Пензель (B)</b> домальовує там, де треба дочистити. Перший же мазок сам вмикає маску.<br/>
                 • <b>Ctrl + Клік</b> по Пензлю — залити всю маску; по Гумці — очистити всю маску.<br/>
+                • <b>Ctrl + Z</b> (або кнопка <b>↺</b> ліворуч) — скасувати останній мазок: випадково клацнули по фото — один крок назад, і сліду немає. <b>Ctrl + Shift + Z</b> (кнопка <b>↻</b>) — повернути.<br/>
                 • <b>Пресет</b> підбирається сам під кадр; інший можна вибрати у списку вгорі праворуч.<br/>
                 • <b>Колесо миші</b> — зум; <b>[ / ]</b> — розмір пензля; <b>Пробіл + мишка</b> — рух фото.<br/>
                 • <b>Повзунки в налаштуваннях</b> — перегляд оновлюється сам, щойно відпустите повзунок. Повний розрахунок робиться один раз — під час <b>Застосувати</b>.
@@ -301,18 +318,28 @@
           </div>
 
           <!-- Brush (Ctrl+Click fill) -->
-          <div role="button" tabindex="0" class="r4m-tool-btn" id="dlgToolBrush" data-tip="Пензель (B) — домалювати зелену зону очищення (маска вмикається сама). Ctrl + Клік = залити всю маску">
+          <div role="button" tabindex="0" class="r4m-tool-btn" id="dlgToolBrush" data-tip="Пензель (B) — домалювати зелену зону очищення (маска вмикається сама). Ctrl + Клік = залити всю маску. Намалювали зайве — Ctrl + Z">
             <img src="icons/ui/brush.png" class="ui-icon" alt="" />
           </div>
 
           <!-- Eraser (Default on start! Ctrl+Click clear) -->
-          <div role="button" tabindex="0" class="r4m-tool-btn eraser-active" id="dlgToolEraser" data-tip="Гумка (E) — стерти зайве зелене, щоб не чіпати ділянку (маска вмикається сама). Ctrl + Клік = стерти всю маску">
+          <div role="button" tabindex="0" class="r4m-tool-btn eraser-active" id="dlgToolEraser" data-tip="Гумка (E) — стерти зайве зелене, щоб не чіпати ділянку (маска вмикається сама). Ctrl + Клік = стерти всю маску. Стерли зайве — Ctrl + Z">
             <img src="icons/ui/eraser.png" class="ui-icon" alt="" />
           </div>
 
           <!-- Invert Mask (тільки іконка без слів) -->
           <div role="button" tabindex="0" class="r4m-tool-btn" id="dlgToolInvert" data-tip="Інверсія маски — міняє місцями зелену зону очищення та захищений фон">
             <img src="icons/ui/invert.png" class="ui-icon" alt="" />
+          </div>
+
+          <div class="r4m-tool-sep"></div>
+
+          <!-- Крок назад / уперед для пензля, гумки, заливки, очищення та інверсії -->
+          <div role="button" tabindex="0" class="r4m-tool-btn r4m-step-btn is-dim" id="dlgBtnUndo" data-tip="Крок назад (Ctrl + Z) — скасувати останній мазок пензля чи гумки, заливку, очищення або інверсію маски. Можна натискати кілька разів підряд">
+            <img src="icons/ui/undo.png" class="ui-icon" alt="" />
+          </div>
+          <div role="button" tabindex="0" class="r4m-tool-btn r4m-step-btn is-dim" id="dlgBtnRedo" data-tip="Крок уперед (Ctrl + Shift + Z або Ctrl + Y) — повернути щойно скасований крок">
+            <img src="icons/ui/redo.png" class="ui-icon" alt="" />
           </div>
 
           <div class="r4m-tool-sep"></div>

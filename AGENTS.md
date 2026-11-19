@@ -37,6 +37,19 @@ written here and in the repository.
 - When the result of the cleaning is the complaint, he sends pairs of JPEGs: the frame as shot and the same
   frame retouched by hand the way he wants it (`1.jpg` and `1 (2).jpg`). His own retouch is the target: measure
   against it (section 4, "Working on his photos") instead of guessing a taste.
+- He also sends screenshots of the big window. Measure them before you believe them: the window shows JPEG
+  pictures of a reduced copy, and a defect seen there may not be in the layer (4.5.0: the "steps" on a dark
+  backdrop were JPEG blocks of the preview).
+- His message after 4.3.0: three frames as shot and the same frames retouched by hand (the «(2)» files). Its
+  wording is not preserved here. Whether «шов» in it meant the floor joint or the wall-floor line was not
+  confirmed with him; 4.4.0 treats both.
+- His message of 2026-11-19 after trying 4.4.0 (two screenshots of a dark frame in the big window). **Its
+  wording is not preserved here**; this is the list the agent of that session worked from: patches with hard
+  edges on the dark and the dark-grey backdrop; the wall-floor corner left on the black frame; a spot left
+  where he had clicked with the eraser by accident, so he asked for Ctrl+Z; the smoke checkbox should be off
+  until he ticks it, and ticking it seemed to refresh nothing; a button that resets one preset; a backup of
+  all settings that survives a reinstall; dark presets by framing. 4.5.0 answers these. No option card was
+  shown for 4.5.0; what the agent decided alone is listed in section 3.
 
 ## 2. What is in the repository
 
@@ -136,53 +149,129 @@ Both programs must be able to run side by side, so nothing is shared with the or
     Apply (before, a stroke inside the layer did nothing).
   - A changed default reaches installed PCs through `PRESET_DEFAULT_MOVES` in `main.js` (made once, only where
     the stored value is still the former default, remembered in the settings as `presetMoves`).
+- **4.5.0** — dark backdrops, steps back for the mask edits, smoke off until asked, backups.
+  - Dust against the local noise (`_local_grain_gain`, request parameter `grainLocal`, default on). The fine
+    pass of `_detect_spots_mask` used one noise value for the whole frame. On a low-key frame that is the noise
+    of the dark majority; the lit floor is 1.5-2.2 times noisier and its plain noise passed for dust (his black
+    frame: 5.1 % of the frame inpainted, his dark-grey one 13.2 % - the "patches with hard edges"). The
+    thresholds now follow the noise of each cell wherever it is clearly above the frame's (`GRAIN_LOCAL_*`).
+    An evenly lit frame is searched exactly as before (`GRAIN_UNEVEN_*`; his light-grey frame gives the
+    identical mask).
+  - Corner. With the corner tool at 0 the seam search may still take the corner for a joint, as it always
+    could, but only whole: `_whole_line_repair_only` keeps a repair inside the corner strip when it covers
+    85 % of the visible line and drops it otherwise (on his black frame pieces of the line were repaired: a
+    dashed, hard-edged remainder). The corner finder takes the slope of the light out before it judges "one
+    step or two" (`tilt` in `_find_corner_line`): a faint joint on a floor that darkens towards the camera
+    passed for the corner and was smeared instead of repaired - with the corner tool on, since 4.4.0.
+  - Window pictures: JPEG 100 for dark frames, 90 otherwise (`_preview_quality`, `PREVIEW_JPEG_QUALITY_DARK`,
+    session field `preview_q`; `previewQuality` in the request overrules). At 90 a dark backdrop comes out as
+    flat 8x8 blocks one grey level apart.
+  - Steps back and forward for the mask edits: ops `undo` / `redo` of `/session/mask-edit`
+    (`_edit_history_push`, `_edit_history_step`, `_edit_restore`; `EDIT_HISTORY_MAX` 40). Answers about the
+    mask carry `history: {undo, redo}`; a step answers `stepped`. A snapshot taken before a recompute is put
+    back onto the frame as it is computed now (`base_gen`). Plugin: Ctrl+Z, Ctrl+Shift+Z, Ctrl+Y (told by
+    `e.code`, so the Ukrainian layout works), two buttons in the left bar (`dlgBtnUndo`, `dlgBtnRedo`), edits
+    sent one after another (`maskEditQueue`).
+  - Smoke protection is off until asked: `smokeOn: false` in every built-in preset except `smoke`. The window
+    says at once when it opens with the protection off and the frame seems to have smoke
+    (`smokeOffHintText`); the answer after a smoke control is also kept in the hint strip (`sayInWindow`).
+  - Dark presets by framing: `lowkey_medium`, `lowkey_close`, `lowkey_wide` («Темний середній / ближній /
+    дальній план»). `lowkey` stays the general dark preset, now with dust 80 and `cycCurve` 65. Scene keys in
+    `start_session`: on a dark backdrop `dark_<framing>`, then `dark`, then the framing, then `default`
+    (`AUTO_PRESET_BY_SCENE` in `main.js`).
+  - «Скинути пресет» (`gBtnResetPreset`, `resetActivePresetToDefault`): the active built-in preset gets the
+    values of `DEFAULT_PRESETS` after a second press within 6 s. A preset the user made has nothing to be
+    reset to.
+  - Backup of the settings: panel buttons `btnBackupSave` / `btnBackupRestore`; the server writes
+    `<program folder>\backup\CleanVinylPro2_backup_<date>_<time>.json` (`/backup/save`, `/backup/list`,
+    `/backup/read`, `/backup/open-folder`; the environment variable `CLEANVINYL_BACKUP_DIR` moves the folder,
+    the checks use it). The plugin cannot write the file itself: its manifest gives it its own data folder
+    only (`localFileSystem: "plugin"`), and that folder is what a reinstall of Photoshop wipes. A restore
+    first saves what is there as a backup labelled `before-restore` (the newest 10 stay), replaces presets and
+    settings, then runs the default moves and adds the new built-in presets. The folder `backup` is never
+    packed (`tools/build_zip.py`) and is git-ignored.
+  - New entries of `PRESET_DEFAULT_MOVES`: `smokeOff` (a switch, see `PRESET_SWITCHES`), `lowkeySpots80`,
+    `lowkeyCyc65`. A new built-in preset is inserted under the built-in preset it follows
+    (`appendNewDefaultPresets`).
 
 ## 3. Current state — update this at the end of every session
 
-_Last updated: 2026-11-18, by the agent of the first session, after releasing 4.4.0._
+_Last updated: 2026-11-19, by the agent of the first session, after releasing 4.5.0._
 
-- **Released:** 4.4.0, tag `cvp2-v4.4.0`, as a pre-release. Direct download:
-  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.4.0/CleanVinylPro2.zip`
-- **Owner's progress:** 4.2.0 and 4.3.0 are installed and work on his PC (program in
+- **Released:** 4.5.0, tag `cvp2-v4.5.0`, as a pre-release. Direct download:
+  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.5.0/CleanVinylPro2.zip`
+- **Owner's progress:** 4.2.0, 4.3.0 and 4.4.0 are installed and work on his PC (program in
   `D:\Plugin Photoshop\CleanVinylPro2`, libraries copied from the old program without a download, models in
-  `D:\model AI fotoshop`, LaMa on `CUDAExecutionProvider`, Python 3.12.10). So the `.bat` files, the installer,
-  the GPU, the real models and the panel HAVE run on Windows.
-  After 4.3.0 he sent three frames as shot and the same frames retouched by hand (the «(2)» files). On them
-  4.3.0 was measured to remove the floor joint on one side of the person only or not at all, to leave the stains
-  near the feet and the wall-floor line, and to protect dirt next to the feet as "smoke". 4.4.0 answers that.
-  His wording of that message is not preserved here; whether «шов» in it meant the floor joint or the wall-floor
-  line was not confirmed with him (4.4.0 treats both). **He has not reported on 4.4.0 yet.**
-- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (30 results; 43 scenarios of
-  the panel test and 25 cases of the settings test among them) on 2026-11-18, with NumPy 2.4.6 and OpenCV
-  5.1.0, set up as in section 4. Deliberate defects for what is new in 4.4.0: 26 put into the engine and 15
-  into `main.js`; the checks caught 39. The two that pass are second lines of defence (the layer alpha keeps
-  the person out even when the stain stage does not; the gradual end of the tone layers matters only on a frame
-  of extreme contrast). The full run also caught a real mistake made on the way: the selection rule of the
-  corner was missing on the "everything is remembered" shortcut of `process`, so the light preview bent a corner
-  that Apply left alone - any rule about what a run does must be applied on that shortcut too.
-- **What 4.4.0 gives on his three frames** (measured with stand-in networks, section 4): the joint is repaired
-  on both sides on all three; the wall-floor line is gone on the two frames that get «Дальній план» and is
-  softened by the seam repair on the dark one («Темний ключ» keeps `cycCurve` 0, as his own retouch keeps the
-  step there); fine and medium texture of the floor is evened to about the level of his retouch (band energy
-  kept, fine to coarse - his frame 2: his 0.57 0.61 1.01 1.12, ours 0.61 0.56 0.90 1.00; his frame 3: his 0.86
-  0.84 0.93 0.96, ours 0.84 0.85 1.04 0.99). His retouch of frame 2 smooths the WALL much more than the program
-  does (his 0.29 0.67, ours 0.77 0.92): that would be «Розмиття фону», which stays 0 in these presets.
-- **Not run in Photoshop yet (4.4.0):** all of it. In particular: how LaMa (the real inpainting) fills the long
-  seam strips that are now found on both sides and the dark joints that are now accepted; the look of the two
-  greens in the real window; the real BRIA silhouettes at hair and feet with the stain stage running right up to
-  them; the one-time move of the corner default on his stored presets (it ran only in the simulated panel).
+  `D:\model AI fotoshop`, LaMa on `CUDAExecutionProvider`, Python 3.12.10). So the `.bat` files, the
+  installer, the GPU, the real models and the panel HAVE run on Windows. He reported on 4.4.0 on 2026-11-19
+  with two screenshots (section 1); 4.5.0 answers that report.
+  **He has not reported on 4.5.0 yet.**
+- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (32 results in
+  890 s; 58 scenarios of the panel test and 39 cases of the settings test among them) on
+  2026-11-19, with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4. Deliberate defects for what is new
+  in 4.5.0: 71 put in one by one (25 into the engine, 8 into the server, 38 into the panel and the
+  presets); the checks caught all of them in the end. The first run let five through. Four were holes in the new
+  checks and are closed: a wrong "unevenly lit" rule and an overdone local noise (`check_dark` got a part
+  that tests the rule on drawn noise maps); a file of another program that has the shape of a backup (the
+  `http` check puts one into the folder); smoke protection switched on where `smokeEnabled` is declared (that
+  value is read only when the settings file carries no `cfg`; the panel test has such a start now). The fifth
+  changed nothing at all (`corner_skip` set with no corner line to skip) and was replaced by the defect it
+  stood for. On the way the full run also showed that 4.4.0 took a faint floor joint for the wall-floor
+  corner whenever the corner tool was on. Of the 41 defects tried for 4.4.0 two still pass every check; they
+  are second lines of defence (the layer alpha keeps the person out even when the stain stage does not; the
+  gradual end of the tone layers matters only on a frame of extreme contrast).
+- **What 4.5.0 gives on his three frames** (stand-in networks, section 4; the share of the frame marked as dust):
+  black frame `3.jpg` with «Темний ключ»: 5.11 % with 4.4.0, 0.85 % with the local noise at the former dust
+  value 92, 0.18 % at the new value 80; nothing is repaired inside the corner strip any more, and with
+  `cycCurve` 65 the line is gone (found at 0.532 of the height). Dark-grey frame `2.jpg` with «Дальній план»:
+  13.24 % -> 0.82 %; what is left are real specks and scratches on the lit floor (looked at one by one at
+  zoom). Light-grey frame `1.jpg`: the identical mask. The window picture of the black frame: the share of
+  pixels equal to their right neighbour in four dark zones is 0.58-0.72 in the data, was 0.84-0.91 after
+  JPEG 90 (0.98 in his screenshot) and is 0.50-0.65 after JPEG 100.
+- **Against his own retouch** (measured with 4.4.0, not measured again with 4.5.0; band energy kept, fine to
+  coarse): the floor is evened to about the level of his retouch - his frame 2: his 0.57 0.61 1.01 1.12, ours
+  0.61 0.56 0.90 1.00; his frame 3: his 0.86 0.84 0.93 0.96, ours 0.84 0.85 1.04 0.99. His retouch of frame 2
+  smooths the WALL much more than the program does (his 0.29 0.67, ours 0.77 0.92): that would be «Розмиття
+  фону», which stays 0 in these presets. The floor joint is repaired on both sides of the person on all three.
+- **Decided by the agent alone for 4.5.0** (he was not asked; change them if he says otherwise):
+  - the corner goes on dark backdrops too (`cycCurve` 65 in `lowkey`, `lowkey_medium`, `lowkey_wide`). His
+    own retouch of the black frame keeps a soft step there; 65 leaves about that. One number per preset;
+  - the values of `lowkey_medium` and `lowkey_close` are set by analogy with the light presets (dust 72 / 62,
+    more edge protection, no seam search and no large fraction in the close-up). No dark frame of those
+    framings was available: they were only tried on crops of his black frame;
+  - the smoke switch of the user's own presets is left as saved (only built-in presets are moved);
+  - the reset button does nothing for a preset the user made;
+  - backups go to `<program folder>\backup` (his program folder is on drive D:, which a reinstall of Windows
+    usually leaves alone); the folder cannot be chosen in the panel;
+  - his dark-grey frame (backdrop about 31 of 255) still counts as light and gets «Дальній план».
+- **Not run in Photoshop yet (4.5.0):** all of it. In particular:
+  - whether Ctrl+Z, Ctrl+Shift+Z and Ctrl+Y reach the modal window at all (Photoshop may keep them; the two
+    buttons do not depend on that) - **ask him**;
+  - `os.startfile` on the backup folder from the server process (the panel shows the path as text anyway);
+  - the two new icons `icons/ui/undo.png`, `redo.png` and the backup box in the narrow panel;
+  - the look of the window pictures at JPEG 100 on his dark frames, and the real LaMa fill of what the dust
+    search still marks there;
+  - the one-time moves on his stored presets (smoke off, «Темний ключ» 80 / 65) and the three new presets
+    appearing under «Темний ключ» (they ran only in the simulated panel).
 - **Merging:** pull request #1 (`arena/33f1ced8-cleanvinylpro-beta` into `main`) is open and deliberately not
-  merged yet: fixes that follow his report on 4.4.0 should come from the session that knows the code. Merge it
+  merged yet: fixes that follow his report on 4.5.0 should come from the session that knows the code. Merge it
   when that session ends or when he writes «зливай» (section 6). If `main` already contains this file, that
   has happened. Merging also removes the folder `CleanVinylPro/` from `main`.
 
-### Open questions about 4.4.0 (not asked yet; ask when he reports)
+### Open questions (not asked yet; ask when he reports on 4.5.0)
 
-- Is the wall-floor line meant to disappear on every full-length frame? His retouch dissolves it on the grey
-  frames and keeps a soft step on the black one; the presets follow that. One number per preset (`cycCurve`).
+- Do the keys Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y work in the big window on his PC?
+- Is the corner on a black backdrop meant to go completely, to stay as a soft step, or to stay as shot? Now:
+  `cycCurve` 65 in the dark presets that usually show a floor.
+- Should his dark-grey backdrop count as dark (`SCENE_DARK_LUMA` 26; his frame is about 31)? It would then get
+  the dark presets (dust 80 instead of 85, more edge protection).
 - Does he want the wall smoothed as strongly as in his retouch of frame 2? Then «Розмиття фону» should get a
-  default above 0 in «Дальній план».
+  default above 0 in «Дальній план». (Open since 4.4.0.)
 - His retouch removes the studio gear at the frame edges; the presets leave it (`removeStands` off, as before).
+- A series shot with smoke and the automatic preset: every frame opens with smoke protection off and a note
+  that smoke was seen. The manual tells him to untick «Авто…» and pick «Зйомка з димом» for such a series.
+  If that is a nuisance, the smoke switch could be kept as the user left it when the automatic preset is put
+  on the controls.
 
 ### Offered to the owner, not built (he has not asked for them)
 
@@ -202,14 +291,30 @@ _Last updated: 2026-11-18, by the agent of the first session, after releasing 4.
   neighbouring classes in unusual frames (a tight group, a jump). A raised hand above the head, a hat or very
   big hair can shift the answer by one class.
 - "Dark" means: median brightness of the backdrop below 26 of 255 (`SCENE_DARK_LUMA`). His dark-grey sample
-  (about 31-35) is therefore NOT dark and gets «Дальній план»; his black sample (about 19) gets «Темний ключ».
-  If he disagrees, this one number moves.
+  (about 31) is therefore NOT dark and gets «Дальній план»; his black sample (about 20) gets «Темний дальній
+  план» (before 4.5.0: «Темний ключ»). If he disagrees, this one number moves.
 - Presets differ mostly in search sensitivity, so the cleaned photo changes little between them; the difference
   shows in the mask. That is why the note after a preset click gives the share of the frame where defects were
   found (the bright green).
 
 ### Known limits of the image processing
 
+- Dust on a dark backdrop: at «Пил і цятки» 92 some plain noise of the lit part is still marked (his black
+  frame: 0.85 % of the frame, about 145 small zones on the lit wall); at 80 it is 0.18 %. That is why the dark
+  presets ship with 80 and lower. Only the fine pass follows the local noise; the coarse pass (`spot_cand`,
+  on a copy of at most 2048 px) measures its noise on the lit part of the backdrop and was left as it is.
+- The corner finder scores a real corner on a black backdrop low (his black frame: 0.65; the limit is 0.12; a
+  brightness step of 1 L*). Before the slope of the light was taken out, faint joints scored 0.13-0.26; now
+  0.002. There is room to raise the limit if false corners turn up.
+- With the corner tool at 0 a corner that the seam search marks along its whole visible length is still
+  repaired as a line (as in every version before); only a partly marked one is left alone.
+- The eraser means "touch nothing here", the evening of the backdrop included: an erased place keeps the tone
+  of the shot and shows against the evened backdrop. That is by design (the layer is
+  `max(found, painted) x (1 - erased)`); Ctrl+Z is the cure for an accidental click.
+- A `user_settings.json` without `cfg` (the program never writes one; a file cut by hand): no preset is put
+  on the controls at the start, they show what `index.html` is drawn with while the active preset is
+  highlighted. Harmless today. If settings are ever written without `cfg`, apply the active preset in
+  `bootstrap` of `main.js` (a restore from a backup already does).
 - The cyclorama corner is searched between 25 % and 82 % of the frame height and must be nearly horizontal.
   A hair-thin dark crease right in the corner stays as a faint line after the corner tool: the seam search
   leaves the corner strip alone when the tool is on. (Letting the seam repair run there first gave the same
@@ -238,7 +343,7 @@ python3 -m venv /tmp/cvenv
 /tmp/cvenv/bin/pip install numpy opencv-python-headless fastapi uvicorn httpx Pillow
 npm install --prefix tests jsdom@24      # for the panel test; the folder is git-ignored
 
-# the checks: the quick run takes about 10 minutes and ends with "ALL CHECKS PASSED"
+# the checks: the quick run takes about 15 minutes and ends with "ALL CHECKS PASSED"
 /tmp/cvenv/bin/python tests/run_checks.py
 /tmp/cvenv/bin/python tests/run_checks.py install bat    # only the groups named
 /tmp/cvenv/bin/python tests/run_checks.py --full         # more random cases
@@ -248,7 +353,7 @@ python3 tools/build_ccx.py && python3 tools/build_zip.py
 python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
 ```
 
-- Run the 10-minute check in the background and poll it; a single blocking wait times out.
+- Run the 15-minute check in the background and poll it; a single blocking wait times out.
 - The comparisons with v3.2.1 (`process`, `session`, `http`) load the old engine and server from
   `tests/baseline_v321/`. If that folder is missing they are skipped and the group `server` fails.
 - No real AI models here, so what the person-matting model returns is faked (`FakeMatting`). To try something
@@ -288,6 +393,10 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
 
 - The quick preview must be built by `_session_proxies_quick`. A preview made from a twice-reduced frame
   changed the person; do not go back to it.
+- A rule about what a run does (for example "a corner that the selection holds only partly is left alone")
+  must also be applied on the "everything is remembered" shortcut at the top of `process` (the early return
+  for `analysis_only`). In 4.4.0 it was missing there at first, and the light preview bent a corner that Apply
+  left alone.
 - "Pixels outside the mask equal the original" is a wrong check. Compare the person core against the exact preview.
 - In the pointer environment a `sitecustomize.py` is silently ignored. The pointer is a `.pth` file plus a
   module; keep it that way.
@@ -332,6 +441,21 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   `gh api -X PATCH repos/malysh-sl2/CleanVinylPro-Beta/pulls/<number> -f title="..." -F body=@file.md`.
 - Running the real `server.py` from the working copy (for an end-to-end try) leaves `server/presets.json` in
   the program folder. Delete it before you build or commit.
+- The pictures the big window gets are JPEGs of a reduced copy. Banding, blocks and lost grain seen in a
+  screenshot must be measured on the session arrays (`orig_small_bgr`, `clean_paint_small_bgr`) before the
+  cleaning is blamed: at quality 90 the JPEG alone flattens a dark backdrop.
+- To reproduce "noise taken for dust" on a drawn frame, the frame must be big (about 12 megapixels) and its
+  noise mostly the same in the three channels: the two passes of the dust search work at different scales,
+  and independent noise per channel sets off the colour test instead. `_low_key_frame` in
+  `tests/run_checks.py` is such a frame.
+- A new default of the engine (`grainLocal`, the preview quality) must be switched off in `_legacy` of the
+  checks, or the comparisons with v3.2.1 fail for a reason that is not a regression.
+- A deliberate defect that every check lets through is a hole in the checks, not a proof that the code is
+  right: put the defects in one at a time with a small runner (apply an exact text replacement, run the
+  group it belongs to, restore the file, log caught / not caught) and close the holes it shows. Do not edit
+  the program files or build while such a run is going: it patches them in place.
+- The plugin has no file dialog (`localFileSystem: "plugin"` in the manifest): anything the owner must find
+  on disk is written by the server, and the panel shows the full path.
 
 ## 5. What the owner can send you
 
