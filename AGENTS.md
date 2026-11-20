@@ -297,7 +297,8 @@ Both programs must be able to run side by side, so nothing is shared with the or
 
 ## 3. Current state — update this at the end of every session
 
-_Last updated: 2026-11-20, by the agent of the first session, after releasing 4.7.0._
+_Last updated: 2026-11-20, by the agent of the first session, after releasing 4.7.0 and answering one
+question about it._
 
 - **Released:** 4.7.0, tag `cvp2-v4.7.0`, as a pre-release. Direct download:
   `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.7.0/CleanVinylPro2.zip`
@@ -307,6 +308,16 @@ _Last updated: 2026-11-20, by the agent of the first session, after releasing 4.
   installer, the GPU, the real models and the panel HAVE run on Windows. He wrote about 4.6.0 with four
   points (section 1); 4.7.0 answers them.
   **He has not reported on 4.7.0 yet.**
+  After the release he asked one thing: where to see the plugin in Creative Cloud in order to remove the
+  old one. He got the path, checked against Adobe's help pages: the Creative Cloud desktop app → Stock &
+  Marketplace → Plugins → Manage plugins (left column) → the three dots next to «Чистий Вініл Pro» (the one
+  without the 2) → Uninstall, and Uninstall again; the same list opens from Photoshop with Plugins →
+  Manage Plugins. A plugin installed from a `.ccx` has an orange download icon there and leaves the list
+  when it is uninstalled. The release notes of 4.7.0 were edited to say this. **The manual does not say it
+  yet**: section 6 still has only «у Creative Cloud (Плагіни)» in both lists (step 2 of «ЯК ВИДАЛИТИ», step
+  5 of «ЯК ВИДАЛИТИ СТАРУ ПРОГРАМУ»). Spell the path out there with the next version; the manual is inside
+  the ZIP, so it was left alone after the release. Whether his Creative Cloud shows these names in English
+  or in Ukrainian is not known.
 - **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (35 results in
   1,384 s; 62 scenarios of the panel test and 44 cases of the settings test among them) on
   2026-11-20, with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4.
