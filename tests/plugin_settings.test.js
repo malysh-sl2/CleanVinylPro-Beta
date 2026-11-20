@@ -14,7 +14,10 @@
 //   node tests/plugin_settings.test.js
 const fs = require("fs");
 const path = require("path");
-const src = fs.readFileSync(path.join(__dirname, "..", "CleanVinylPro2", "uxp-plugin", "main.js"), "utf8");
+// (CV_PLUGIN_DIR points the test at another copy of the plugin - tests/try_defects.py proves with it that the
+// test notices a broken one)
+const PLUGIN_DIR = process.env.CV_PLUGIN_DIR || path.join(__dirname, "..", "CleanVinylPro2", "uxp-plugin");
+const src = fs.readFileSync(path.join(PLUGIN_DIR, "main.js"), "utf8");
 
 function grab(name) {
   const start = src.indexOf("function " + name + "(");

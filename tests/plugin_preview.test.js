@@ -1683,7 +1683,7 @@ async function main() {
   }
   console.log(failed.length
     ? `plugin preview: ${failed.length} of ${results.length} scenarios FAILED`
-    : `plugin preview: ${results.length} scenarios pass (drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes, steps back and forward, preset reset, backup)`);
+    : `plugin preview: ${results.length} scenarios pass (drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes, steps back and forward, preset reset, backup, one mode, soft and hard brush edge)`);
   process.exit(failed.length ? 1 : 0);
 }
 

@@ -954,7 +954,7 @@ def check_speed():
         extra = int(((green > 0) & (cv2.dilate(heal.astype(np.uint8), np.ones((3, 3), np.uint8)) == 0)).sum())
         if missed or extra:
             bad.append(f"{w}x{h}: green preview differs from the cleaning ({missed} px not shown, {extra} px shown but not cleaned)")
-    report("speed", not bad, f"{n} frames: both speed modes and the green preview mark the same defects" if not bad else "wrong:\n  " + "\n  ".join(bad))
+    report("speed", not bad, f"{n} frames: the full fill (the only mode of the panel since 4.7.0), the fast fill (the light preview draws with it) and the green preview mark the same defects" if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
 def check_smoke():
