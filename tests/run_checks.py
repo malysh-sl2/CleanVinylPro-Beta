@@ -24,7 +24,8 @@ backdrop; the window now shows that in two greens and repairs a brush stroke the
 Part 2 - what Clean Vinyl Pro 2 does differently, each with its own measurable promise:
   cyc       cyclorama: the wall-floor line goes away, people are not touched, a frame without a corner is not touched
   dress     clothing: wrinkles get weaker; volume, colour, fine texture, denim and everything outside stay
-  speed     "Швидкий" and "Якісний" find exactly the same defects (they differ only in how defects are repaired)
+  speed     the two ways of closing defects - the full AI fill (the only mode of the panel since 4.7.0) and the fast
+            way (the light preview) - find exactly the same defects
   smoke     smoke protection: no "protected ring" around the person; real smoke is still protected
   empty     a frame without people: nobody is invented
   format    format 5:7: size, seamless join, nothing drawn over the photo, 8/16 bit, both orientations
@@ -36,6 +37,10 @@ Part 2 - what Clean Vinyl Pro 2 does differently, each with its own measurable p
             included; two different lines are not joined; works together with the wall-floor corner
   mask      the whole backdrop is evened: the mask view tells "found and repaired" from "evened", the brush
             repairs what it paints, the eraser leaves alone what it erases
+  brush     the brush and the eraser of the big window: a soft edge without a step (a hard one when asked), a
+            painted zone made of the tone and the grain of the backdrop around it, the same in the window and
+            in the layer; the soft brush never touches the person; a shadow that a stroke crosses or touches is
+            neither smeared nor spread; "fill" repaints nothing
   dark      a dark backdrop with a pool of light: the noise of the lit part is not taken for dust (it is judged
             against the noise found there), real dust is still found, an evenly lit frame is searched exactly as
             before; the pictures of the big window keep the fine noise of a dark frame (JPEG 100 instead of 90)
@@ -1261,10 +1266,14 @@ def check_scene():
     r2 = _quiet(e1.recompute_session, sid, dict(asked, spots=95), True, None, True)
     if abs(r2["mask_share"] - share()) > 1e-4 or r2["mask_share"] <= r1["mask_share"]:
         bad.append(f"mask_share after a more sensitive search: {r1['mask_share']} -> {r2.get('mask_share')}")
+    # ("fill" shows the layer on the whole frame and repaints nothing: what counts as found stays as it was)
     r3 = _quiet(e1.edit_session_mask, sid, "fill", None, 20, False, False, 45.0)
+    shown3 = share()
     r4 = _quiet(e1.edit_session_mask, sid, "clear", None, 20, False, False, 45.0)
-    if r3.get("mask_share") != 1.0 or r4.get("mask_share") != 0.0:
-        bad.append(f"mask_share after fill / clear: {r3.get('mask_share')} / {r4.get('mask_share')}")
+    if (r3.get("layer_share") != 1.0 or abs(r3["mask_share"] - shown3) > 1e-4 or abs(r3["mask_share"] - r2["mask_share"]) > 1e-4
+            or r4.get("mask_share") != 0.0 or r4.get("layer_share") != 0.0):
+        bad.append(f"after fill / clear: mask_share {r3.get('mask_share')} (on screen {shown3:.5f}, before {r2['mask_share']}) / {r4.get('mask_share')}, "
+                   f"layer_share {r3.get('layer_share')} / {r4.get('layer_share')}")
 
     # 5. over HTTP, the way the plugin sends it
     note = ""
@@ -1981,14 +1990,19 @@ def check_mask():
     if not agrees(eng, re_) or re_["layer_share"] >= r["layer_share"]:
         bad.append(f"an eraser stroke must take from the layer: layer_share {r['layer_share']} -> {re_.get('layer_share')}")
     out = _quiet(eng.apply_session, sid, 100.0, False, False, 45.0)[0]
-    cy_, cx_, rad = int(ey * h), int(ex * w), int(0.5 * 40.0 * w / r["preview_w"])
+    # (the eraser has a soft edge: it is at full strength within half of its circle - a square that fits in there;
+    #  the edge itself is measured in check_brush)
+    cy_, cx_, rad = int(ey * h), int(ex * w), int(0.3 * 40.0 * w / r["preview_w"])
     if int(out[cy_ - rad:cy_ + rad, cx_ - rad:cx_ + rad, 3].max()) != 0:
         bad.append("an erased zone is still part of the layer after Apply")
+    # "fill" shows the layer on the whole frame and repaints nothing: what counts as found and repaired is what the
+    # search found (the eraser stroke is forgotten); "clear" leaves nothing
     rf = eng.edit_session_mask(sid, "fill")
+    fill_ok = agrees(eng, rf) and rf["layer_share"] == 1.0 and abs(rf["mask_share"] - r["mask_share"]) <= 1e-9
     rc = eng.edit_session_mask(sid, "clear")
     ra = eng.edit_session_mask(sid, "reset_auto")
-    if (rf["mask_share"], rf["layer_share"]) != (1.0, 1.0) or (rc["mask_share"], rc["layer_share"]) != (0.0, 0.0):
-        bad.append(f"fill / clear: {rf['mask_share']}, {rf['layer_share']} / {rc['mask_share']}, {rc['layer_share']}")
+    if not fill_ok or (rc["mask_share"], rc["layer_share"]) != (0.0, 0.0):
+        bad.append(f"fill / clear: {rf['mask_share']}, {rf['layer_share']} (found before: {r['mask_share']}) / {rc['mask_share']}, {rc['layer_share']}")
     if abs(ra["mask_share"] - r["mask_share"]) > 1e-9 or abs(ra["layer_share"] - r["layer_share"]) > 1e-9 or not agrees(eng, ra):
         bad.append(f"'reset' must bring the automatic mask back: {r['mask_share']}, {r['layer_share']} -> {ra['mask_share']}, {ra['layer_share']}")
     ri = eng.edit_session_mask(sid, "invert")
@@ -2039,6 +2053,283 @@ def check_mask():
     report("mask", not bad, f"backdrop evened: the layer covers {r_on['layer_share'] * 100:.0f}% of the frame, {r_on['mask_share'] * 100:.1f}% of the frame is marked as "
                             f"found and repaired (bright green), the rest of the layer is pale green; a brushed mark is repaired at Apply ({c_src:.0f} -> {c_painted:.0f} levels), "
                             f"an erased zone is left alone; light refresh == full recompute" if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
+def check_brush():
+    """
+    The brush and the eraser of the big window since 4.7.0 (engine.py: "the brush and the eraser of the big window").
+    A drawn frame with nothing to find, and nothing searched for or evened (`off`): whatever differs from the photo
+    was made by the brush. The engine constants named in the messages are the rules that each part pins down.
+    """
+    import base64
+    bad = []
+    w, h = 1500, 2000
+    clean, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=501)
+    off = dict(H.STD, speedMode="fast", smokeOn=False, spots=0, scuffs=0, blur=0, cycCurve=0, seamOn=False)
+    on = dict(H.STD, speedMode="fast", smokeAuto=True)   # the backdrop is evened: the layer covers it
+    lum = lambda a: a.astype(np.float32).mean(axis=2)                               # noqa: E731
+    tone = lambda a, s=8.0: cv2.GaussianBlur(lum(a), (0, 0), s)                     # noqa: E731
+    grain = lambda a: lum(a) - cv2.GaussianBlur(lum(a), (0, 0), 3.0)                # noqa: E731
+    person = cv2.resize(sil, (w, h), interpolation=cv2.INTER_LINEAR)
+    inner = cv2.erode((person > 0.9).astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
+    backdrop = person < 0.02
+    far = np.zeros((h, w), bool)
+    far[int(0.05 * h):int(0.15 * h), int(0.05 * w):int(0.30 * w)] = True
+
+    def opened(image, params=off, bits=8):
+        eng = H.make_engine(E, sil)
+        return eng, _quiet(eng.start_session, image, bits, dict(params))
+
+    def edit(eng, r, op):
+        return eng.edit_session_mask(r["session_id"], op)
+
+    def stroke(eng, r, pts, radius, erase=False, softness=None):
+        return eng.edit_session_mask(r["session_id"], "stroke", [{"x": x, "y": y, "norm": 1} for x, y in pts], float(radius), erase, False, 45.0, softness)
+
+    def layer(eng, r):
+        return _quiet(eng.apply_session, r["session_id"], 100.0, False, False, 45.0)[0]
+
+    def edge(line):
+        """(pixels between 10 % and 90 % of the layer, the largest step from one pixel to the next) along a line across the edge"""
+        return int(((line > 0.1) & (line < 0.9)).sum()), float(np.abs(np.diff(line)).max())
+
+    # ---- 1. a lamp spot with three specks in it: painted over, it is gone; the edge of the stroke; window == layer
+    spot = (int(0.22 * w), int(0.30 * h))
+    m = np.zeros((h, w), np.float32)
+    cv2.circle(m, spot, 70, 1.0, -1)
+    lamp = 14.0 * cv2.GaussianBlur(m, (0, 0), 18)[..., None]
+    spotted = np.clip(clean.astype(np.float32) + lamp, 0, 255).astype(np.uint8)
+    for dx, dy in ((-25, 6), (12, -18), (30, 22)):
+        cv2.circle(spotted, (spot[0] + dx, spot[1] + dy), 3, (70, 70, 70), -1, lineType=cv2.LINE_AA)
+    eng, r = opened(spotted)
+    rad = 60.0 * w / r["preview_w"]                       # the brush circle in pixels of the frame
+    seen = {}
+    t_stroke = 0.0
+    for name, softness in (("soft", 1.0), ("hard", 0.0), ("unsaid", None)):
+        edit(eng, r, "reset_auto")
+        t1 = time.perf_counter()
+        rs = stroke(eng, r, [(0.19, 0.30), (0.25, 0.302)], 60, softness=softness)
+        t_stroke = max(t_stroke, time.perf_counter() - t1)
+        out = layer(eng, r)
+        res = _comp(spotted, out)
+        a = out[..., 3].astype(np.float32) / 255.0
+        core, band = a >= 0.98, (a > 0.02) & (a < 0.98)
+        err = tone(res) - tone(clean)
+        seen[name] = dict(out=out, rs=rs, res=res, a=a, core_err=float(np.abs(err[core]).max()), band_err=float(np.abs(err[band]).max()),
+                          g=[float(grain(res)[z].std()) for z in (far, core, band)], darkest=float(res[core].min()),
+                          edge=edge(a[spot[1]:spot[1] + int(2.0 * rad), spot[0]]), core=core)
+    soft, hard = seen["soft"], seen["hard"]
+    was = float((tone(spotted) - tone(clean))[soft["core"]].max())
+    if was < 8.0:
+        bad.append(f"the test spot is too faint ({was:.1f} levels): nothing to prove")
+    for name in ("soft", "hard"):
+        v = seen[name]
+        if v["core_err"] > 1.0 or v["band_err"] > 1.5:
+            bad.append(f"{name} brush over a lamp spot of {was:.0f} levels: the tone is off by {v['core_err']:.2f} levels in the middle of the stroke, "
+                       f"{v['band_err']:.2f} in its edge (the tone must go on from the backdrop around)")
+        g_far, g_core, g_band = v["g"]
+        if not (0.9 * g_far <= g_core <= 1.12 * g_far and 0.9 * g_far <= g_band <= 1.12 * g_far):
+            bad.append(f"{name} brush: the grain of the painted zone is {g_core:.2f} in the middle and {g_band:.2f} in the edge, {g_far:.2f} on the untouched backdrop")
+        if v["darkest"] < float(clean[v["core"]].min()) - 8.0:
+            bad.append(f"{name} brush: a speck is still there (darkest pixel {v['darkest']:.0f}, the clean backdrop has {int(clean[v['core']].min())})")
+    (ws, ss), (wh, sh_) = soft["edge"], hard["edge"]
+    if ws < 0.45 * rad or ss > 0.03:
+        bad.append(f"soft brush (BRUSH_SOFT_BAND): the edge of a stroke goes from 10 % to 90 % over {ws} px, largest step {ss:.3f} (circle {rad:.0f} px: at least {0.45 * rad:.0f} px, at most 0.030)")
+    if wh > 0.25 * rad or sh_ < 2.5 * ss:
+        bad.append(f"hard brush (BRUSH_HARD_BAND): the edge of a stroke goes from 10 % to 90 % over {wh} px, largest step {sh_:.3f} (soft: {ws} px, {ss:.3f})")
+    if not np.array_equal(seen["unsaid"]["out"], soft["out"]):
+        bad.append("a stroke that does not name its edge must be a soft one")
+    # (the window shows what the layer gets)
+    win = cv2.imdecode(np.frombuffer(base64.b64decode(soft["rs"]["comp_jpg_b64"]), np.uint8), cv2.IMREAD_COLOR)
+    small = cv2.resize(np.clip(soft["res"], 0, 255).astype(np.uint8), (win.shape[1], win.shape[0]), interpolation=cv2.INTER_AREA)
+    zone = cv2.resize(soft["a"], (win.shape[1], win.shape[0]), interpolation=cv2.INTER_AREA) > 0.02
+    dw = np.abs(cv2.GaussianBlur(lum(small) - lum(win), (0, 0), 3.0))
+    if float(dw[zone].max()) > float(dw[~zone].max()) + 0.6:
+        bad.append(f"the window shows a painted zone {dw[zone].max():.2f} levels away from what the layer gets (elsewhere the two pictures differ by {dw[~zone].max():.2f})")
+
+    # ---- 2. the person: the soft brush never touches it, the hard brush repaints what it passes over
+    eng, r = opened(clean)
+    box = np.zeros((h, w), bool)
+    box[int(0.74 * h):int(0.78 * h), int(0.40 * w):int(0.60 * w)] = True
+    for name, softness in (("soft", 1.0), ("hard", 0.0)):
+        edit(eng, r, "reset_auto")
+        stroke(eng, r, [(0.40, 0.76), (0.60, 0.76)], 22, softness=softness)   # across both legs
+        out = layer(eng, r)
+        d = np.abs(_comp(clean, out) - clean.astype(np.float32)).max(axis=2)
+        a = out[..., 3]
+        if name == "soft":
+            if int(a[inner].max()) != 0 or float(d[inner].max()) != 0.0:
+                bad.append(f"the soft brush touched the person (layer {int(a[inner].max())} of 255 there, changed by {d[inner].max():.0f} levels)")
+            if int(a[box & backdrop].max()) != 255 or float(a[box & backdrop].mean()) < 120.0:
+                bad.append(f"the soft brush must still paint the floor between and beside the legs (layer there: at most {int(a[box & backdrop].max())}, mean {a[box & backdrop].mean():.0f} of 255)")
+        elif float((d[box & inner] > 8.0).mean()) < 0.9:
+            bad.append(f"the hard brush must repaint what it passes over (a prop taken for a person): changed {100 * (d[box & inner] > 8.0).mean():.0f} % of the legs it crossed")
+
+    # ---- 3. determinism: Apply twice gives the same layer; a stroke elsewhere leaves a painted zone as it was
+    edit(eng, r, "reset_auto")
+    stroke(eng, r, [(0.19, 0.30), (0.25, 0.302)], 40)
+    one = layer(eng, r)
+    again = layer(eng, r)
+    stroke(eng, r, [(0.80, 0.20), (0.85, 0.21)], 40)
+    two = layer(eng, r)
+    z1 = one[..., 3] > 0
+    if not np.array_equal(one, again):
+        bad.append("Apply twice in a row gave two different layers")
+    if not np.array_equal(one[z1], two[z1]) or int((two[..., 3] > 0).sum()) <= int(z1.sum()):
+        bad.append("a second stroke elsewhere changed the zone painted first")
+
+    # ---- 4. "fill": the whole layer is visible, nothing is repainted, and a step back takes it away
+    e_on, r_on = opened(clean, on)
+    for (eng_, r_, name) in ((eng, r, "nothing searched"), (e_on, r_on, "backdrop evened")):
+        edit(eng_, r_, "reset_auto")
+        plain = layer(eng_, r_)
+        rf = edit(eng_, r_, "fill")
+        filled = layer(eng_, r_)
+        edit(eng_, r_, "undo")
+        back = layer(eng_, r_)
+        if int(filled[..., 3].min()) != 255 or rf["layer_share"] != 1.0:
+            bad.append(f"fill ({name}): the layer must cover the whole frame (least {int(filled[..., 3].min())} of 255, layer_share {rf['layer_share']})")
+        if not np.array_equal(filled[..., :3], plain[..., :3]) or not np.array_equal(filled[..., :3][inner], clean[inner]):
+            n_px = int(np.any(filled[..., :3] != plain[..., :3], axis=2).sum())
+            bad.append(f"fill ({name}) must repaint nothing: {n_px} px of the layer differ from the layer without it, "
+                       f"{int(np.any(filled[..., :3][inner] != clean[inner], axis=1).sum())} px of the person differ from the photo")
+        if not np.array_equal(back, plain):
+            bad.append(f"fill ({name}): a step back must bring the layer back as it was")
+
+    # ---- 5. the eraser: what it erases is gone from the layer, softly or with a hard edge
+    cx, cy = int(0.83 * w), int(0.305 * h)
+    rad_e = 40.0 * w / r_on["preview_w"]
+    edit(e_on, r_on, "reset_auto")
+    if int(layer(e_on, r_on)[cy, cx, 3]) != 255:
+        bad.append("the test place of the eraser is not in the layer: nothing to prove")
+    erased = {}
+    for name, softness in (("soft", 1.0), ("hard", 0.0)):
+        edit(e_on, r_on, "reset_auto")
+        stroke(e_on, r_on, [(0.80, 0.30), (0.86, 0.31)], 40, erase=True, softness=softness)
+        a = layer(e_on, r_on)[..., 3].astype(np.float32) / 255.0
+        erased[name] = edge(a[cy:cy + int(2.0 * rad_e), cx])
+        if float(a[cy, cx]) != 0.0:
+            bad.append(f"{name} eraser: the middle of the stroke is still in the layer ({a[cy, cx]:.2f})")
+    (ws_e, ss_e), (wh_e, sh_e) = erased["soft"], erased["hard"]
+    if ws_e < 0.45 * rad_e or ss_e > 0.04:
+        bad.append(f"soft eraser: the edge of the erased zone goes from 10 % to 90 % over {ws_e} px, largest step {ss_e:.3f} (circle {rad_e:.0f} px)")
+    if wh_e > 0.25 * rad_e or sh_e < 2.5 * ss_e:
+        bad.append(f"hard eraser: the edge of the erased zone goes from 10 % to 90 % over {wh_e} px, largest step {sh_e:.3f} (soft: {ws_e} px, {ss_e:.3f})")
+
+    # ---- 6. a hard-edged shadow on the wall (30 % darker)
+    sh = np.zeros((h, w), np.float32)
+    sh[int(0.38 * h):int(0.56 * h), int(0.04 * w):int(0.20 * w)] = 1.0
+    sh = cv2.GaussianBlur(sh, (0, 0), 3.0)
+    shaded_f = clean.astype(np.float32) * (1.0 - 0.30 * sh)[..., None]
+    shaded = np.clip(shaded_f, 0, 255).astype(np.uint8)
+    dark, lit = sh > 0.98, sh < 0.02
+    # (a) a stroke along its edge: half of the surroundings is shadow, half is lit wall - the tone stays (BRUSH_SECOND;
+    #     the two halves are told apart with BRUSH_FIT_TOL)
+    eng, r = opened(shaded)
+    stroke(eng, r, [(0.20, 0.42), (0.20, 0.52)], 14)
+    out = layer(eng, r)
+    err = cv2.GaussianBlur(lum(_comp(shaded, out)) - lum(shaded), (0, 0), 4.0)
+    z = out[..., 3] > 128
+    e_dark, e_lit, e_max = float(err[z & dark].mean()), float(err[z & lit].mean()), float(np.abs(err[out[..., 3] > 0]).max())
+    if abs(e_dark) > 4.0 or abs(e_lit) > 4.0 or e_max > 8.0:
+        bad.append(f"a stroke along the edge of a shadow (BRUSH_SECOND, BRUSH_FIT_TOL): the shadow side changed by {e_dark:+.1f} levels, the lit side by {e_lit:+.1f}, "
+                   f"at most {e_max:.1f} - the edge was smeared")
+    # (b) a stroke on the lit wall whose end only touches the shadow, over a light stain: the wall keeps its tone
+    #     (BRUSH_MOST, BRUSH_ODD_K: the shadow is left out) and the stain is evened (the tone does not simply stay)
+    sc = (int(0.27 * w), int(0.47 * h))
+    m = np.zeros((h, w), np.float32)
+    cv2.circle(m, sc, 16, 1.0, -1)
+    stained = np.clip(shaded_f + 12.0 * cv2.GaussianBlur(m, (0, 0), 6)[..., None], 0, 255).astype(np.uint8)
+    mid = (slice(sc[1] - 10, sc[1] + 11), slice(sc[0] - 10, sc[0] + 11))
+    eng, r = opened(stained)
+    stroke(eng, r, [(0.225, 0.47), (0.31, 0.47)], 14)
+    out = layer(eng, r)
+    err = cv2.GaussianBlur(lum(_comp(stained, out)) - lum(shaded), (0, 0), 4.0)   # against the frame without the stain
+    stain = float(cv2.GaussianBlur(lum(stained) - lum(shaded), (0, 0), 4.0)[mid].mean())
+    left, wall = float(err[mid].mean()), float(np.abs(err[(out[..., 3] > 0) & lit]).max())
+    if abs(left) > 0.3 * stain:
+        bad.append(f"a stain next to a shadow, painted over: {stain:.1f} -> {left:+.1f} levels (the stroke only touches the shadow: the tone must not simply stay, BRUSH_SECOND)")
+    if wall > 3.0:
+        bad.append(f"a stroke that touches a shadow changed the lit wall by {wall:.1f} levels (BRUSH_MOST, BRUSH_ODD_K: the shadow must be left out of the tone)")
+
+    # ---- 7. nearly the whole backdrop painted over, a strip is left: the tone stays, the grain is still the frame's own
+    rows = [0.03 + 0.055 * i for i in range(18)]
+    path = []
+    for i, y in enumerate(rows):
+        path += [(0.0, y), (0.84, y)] if i % 2 == 0 else [(0.84, y), (0.0, y)]
+    eng, r = opened(clean)
+    stroke(eng, r, path, 60)
+    painted = float((eng._brush_strength_small(eng._active_session) > 0).mean())
+    t1 = time.perf_counter()
+    out = layer(eng, r)
+    t_big = time.perf_counter() - t1
+    res = _comp(clean, out)
+    d = np.abs(tone(res, 4.0) - tone(clean, 4.0))[backdrop]
+    if painted < 0.75:
+        bad.append(f"the test strokes cover only {100 * painted:.0f} % of the window: nothing to prove")
+    if float(d.mean()) > 0.5 or float(np.percentile(d, 99)) > 2.0:
+        bad.append(f"the whole backdrop painted over (BRUSH_RING_MIN): its tone changed by {d.mean():.1f} levels on average, {np.percentile(d, 99):.1f} at the 99th percentile")
+    if float(np.abs(res - clean.astype(np.float32))[inner].max()) != 0.0:
+        bad.append("the whole backdrop painted over: the person changed")
+    if not 0.9 <= float(grain(res)[far].std()) / float(grain(clean)[far].std()) <= 1.12:
+        bad.append(f"the whole backdrop painted over: grain {grain(clean)[far].std():.2f} -> {grain(res)[far].std():.2f}")
+
+    # ---- 8. a 16-bit frame
+    clean16, _ = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=501, bit16=True)
+    spotted16 = np.clip(clean16.astype(np.float32) + 128.0 * lamp, 0, 32768).astype(np.uint16)
+    eng, r = opened(spotted16, bits=16)
+    stroke(eng, r, [(0.19, 0.30), (0.25, 0.302)], 60)
+    out = layer(eng, r)
+    a = out[..., 3:4].astype(np.float32) / 32768.0
+    res16 = (spotted16.astype(np.float32) * (1.0 - a) + out[..., :3].astype(np.float32) * a) / 128.0
+    err16 = float(np.abs((tone(res16) - tone(clean16.astype(np.float32) / 128.0))[a[..., 0] >= 0.98]).max())
+    if out.dtype != np.uint16 or int(out[..., 3].max()) != 32768 or err16 > 1.0:
+        bad.append(f"16-bit frame: layer {out.dtype}, alpha up to {int(out[..., 3].max())}, the tone of the painted spot is off by {err16:.2f} levels")
+
+    # ---- 9. over HTTP: the edge named in the request is the edge of the stroke; a request without it is soft
+    note = ""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            from fastapi.testclient import TestClient
+    except Exception:
+        TestClient = None
+        note = " (the HTTP part was SKIPPED: the httpx package is missing)"
+    if TestClient is not None:
+        srv = H.load_server()
+        e_direct, r_direct = opened(clean)
+        e_http, r_http = opened(clean)
+        srv.ENGINE, srv.ENGINE_ERROR = e_http, None
+        pts = [{"x": 0.80, "y": 0.30, "norm": 1}, {"x": 0.86, "y": 0.31, "norm": 1}]
+        masks = {}
+        real_out, real_err = sys.stdout, sys.stderr
+        sys.stdout = sys.stderr = open(os.devnull, "w", encoding="utf-8")
+        try:
+            with TestClient(srv.app) as client:
+                for softness in (0, 1, None):
+                    body = dict(session_id=r_http["session_id"], op="stroke", points=pts, radius_px=40, erase=True)
+                    if softness is not None:
+                        body["softness"] = softness
+                    client.post("/session/mask-edit", json=dict(session_id=r_http["session_id"], op="reset_auto"))
+                    ans = client.post("/session/mask-edit", json=body)
+                    edit(e_direct, r_direct, "reset_auto")
+                    stroke(e_direct, r_direct, [(0.80, 0.30), (0.86, 0.31)], 40, erase=True, softness=None if softness is None else float(softness))
+                    masks[softness] = e_http._active_session["user_erase_u8"].copy()
+                    if ans.status_code != 200 or not np.array_equal(masks[softness], e_direct._active_session["user_erase_u8"]):
+                        bad.append(f"/session/mask-edit with softness {softness}: the stroke differs from the one the engine makes for that edge")
+        finally:
+            sys.stdout.close()
+            sys.stdout, sys.stderr = real_out, real_err
+        if len(masks) == 3 and (np.array_equal(masks[0], masks[1]) or not np.array_equal(masks[1], masks[None])):
+            bad.append("/session/mask-edit: a hard and a soft stroke must differ, and a request that names no edge must be soft")
+
+    report("brush", not bad,
+           f"soft edge: a stroke fades over {ws} px (hard: {wh} px), largest step {ss:.3f} of the layer (hard: {sh_:.3f}); eraser {ws_e} px / {ss_e:.3f} (hard: {wh_e} px / {sh_e:.3f}); "
+           f"a lamp spot of {was:.0f} levels painted over is off by {soft['core_err']:.2f} levels, grain {soft['g'][0]:.2f} around / {soft['g'][1]:.2f} inside; "
+           f"the soft brush leaves the person alone, the hard one repaints it; fill repaints nothing; a shadow edge is not smeared ({e_dark:+.1f} / {e_lit:+.1f}), "
+           f"a touched shadow does not darken the wall ({wall:.1f}), a stain there is evened ({stain:.1f} -> {left:+.1f}); "
+           f"{100 * painted:.0f} % of the window painted keeps its tone ({d.mean():.2f}), Apply {t_big:.1f} s; a stroke takes up to {1000 * t_stroke:.0f} ms{note}"
+           if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
 def check_format():
@@ -3284,6 +3575,7 @@ GROUPS = [("convert", check_convert), ("process", check_process), ("stage", chec
           ("white", check_white), ("gpu", check_gpu),
           ("cyc", check_cyc), ("dress", check_dress), ("speed", check_speed), ("smoke", check_smoke), ("empty", check_empty),
           ("format", check_format), ("scene", check_scene), ("stains", check_stains), ("seam", check_seam), ("mask", check_mask),
+          ("brush", check_brush),
           ("dark", check_dark), ("gear", check_gear), ("shadow", check_shadow), ("undo", check_undo),
           ("server", check_server), ("http", check_http),
           ("folders", lambda: IC.check_folders(report)), ("install", lambda: IC.check_install(report)),
