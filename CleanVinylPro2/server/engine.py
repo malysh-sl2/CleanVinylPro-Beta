@@ -4282,7 +4282,12 @@ class CleanVinylEngine:
     # the lit floor on his grey frame. The tone of the zone is then left as it is; only its grain and fine dirt
     # are renewed. Otherwise the ring is simply uneven (a dirty floor): all of it counts and the zone is a smooth
     # surface between its parts.
+    # The tone also stays where there is next to no ring at all: the known backdrop around the zone is less than
+    # BRUSH_RING_MIN of the zone itself (the whole backdrop was painted over; what is left is a strip around the
+    # people). A zone at the frame border or in a corner of the frame has about half of its own size around it.
+    # In such a zone the studio gear stays too: there is no backdrop tone to paint it away with.
     BRUSH_RING = 0.2
+    BRUSH_RING_MIN = 0.15
     BRUSH_MOST = 0.55
     BRUSH_MOST_TOL = 0.04
     BRUSH_SECOND = 0.25
@@ -4555,6 +4560,7 @@ class CleanVinylEngine:
         reach = max(6.0, self.BRUSH_RING * max(zr[-1] - zr[0] + 1, zc[-1] - zc[0] + 1))
         away = cv2.distanceTransform((zone_s == 0).astype(np.uint8), cv2.DIST_L2, 3)
         kn = np.flatnonzero(((known > 0) & (away <= reach)).ravel())
+        lone = kn.size < self.BRUSH_RING_MIN * int(np.count_nonzero(zone_s))  # (see BRUSH_RING_MIN)
         if kn.size < 50:
             kn = np.flatnonzero(known.ravel() > 0)
         del away
@@ -4608,8 +4614,8 @@ class CleanVinylEngine:
         nb = blur(bd)
         lp_s = blur(small * bd[..., None]) / np.maximum(nb, 1e-4)[..., None]
         lp_s = np.where((nb > 0.05)[..., None], lp_s, fill_s).astype(np.float32)
-        if two_kinds:
-            fill_s = lp_s  # the tone stays (see BRUSH_SECOND)
+        if two_kinds or lone:
+            fill_s = lp_s  # the tone stays (see BRUSH_SECOND, BRUSH_RING_MIN)
         del lp_src, small
 
         sx, sy = ws / float(Wr), hs / float(Hr)
@@ -4673,6 +4679,8 @@ class CleanVinylEngine:
             c0, c1 = int(cols[0]), int(cols[-1]) + 1
             sel = sel[:, c0:c1]
             a = a_u8[r0:r1, c0:c1].astype(np.float32) * (1.0 / 255.0) * sel
+            if lone:
+                a *= 1.0 - prot[r0:r1, c0:c1]
             lp_b = up(lp_s, r0, r1)[:, c0:c1]
             fill_b = up(fill_s, r0, r1)[:, c0:c1]
             dst = img_r[r0:r1, c0:c1]
