@@ -837,6 +837,8 @@ async def session_mask_edit(request: Request):
         return JSONResponse(status_code=503, content={"ok": False, "error": ENGINE_ERROR or "Engine not ready"})
     try:
         body = await request.json()
+        # "softness": the edge of the brush / eraser, 0 (hard) .. 1 (soft); a request without it means soft
+        softness = body.get("softness")
         res = await run_in_threadpool(
             eng.edit_session_mask,
             str(body.get("session_id", "")),
@@ -846,6 +848,7 @@ async def session_mask_edit(request: Request):
             bool(body.get("erase", True)),
             bool(body.get("dressSmooth", False)),
             float(body.get("dressStrength", 45.0)),
+            None if softness is None else float(softness),
         )
         return JSONResponse(status_code=200, content=res)
     except Exception as exc:

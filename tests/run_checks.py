@@ -116,7 +116,7 @@ def _quiet(fn, *a, **k):
 def _legacy(p: dict) -> dict:
     """The parameters under which Clean Vinyl Pro 2 must still give the pixels of v3.2.1 (see the header)."""
     return dict(p, speedMode="quality", smokeOn=False, cycCurve=0, dressSmooth=False, scuffs=0, seamJoin=False,
-                grainLocal=False, previewQuality=90, gearBody=False, shadowSpots=False)
+                grainLocal=False, previewQuality=90, gearBody=False, shadowSpots=False, brushSoft=False)
 
 
 def _legacy_window(p: dict) -> dict:

@@ -4161,6 +4161,8 @@ class CleanVinylEngine:
         auto_m = sess["auto_mask_small_u8"].astype(np.float32)
         paint_m = sess["user_paint_u8"].astype(np.float32)
         erase_m = sess["user_erase_u8"].astype(np.float32) / 255.0
+        if sess.get("fill_all"):
+            auto_m = np.full_like(auto_m, 255.0)  # "fill the whole mask": the whole layer is visible
         eff = np.maximum(auto_m, paint_m) * (1.0 - erase_m)
         eff_u8 = np.clip(np.round(eff), 0, 255).astype(np.uint8)
         if sess.get("inverted"):
@@ -4237,6 +4239,450 @@ class CleanVinylEngine:
             )
         return out
 
+    # ---- the brush and the eraser of the big window ---------------------------------------------------------------
+    # Up to 4.6.0 a stroke was a band with a hard edge. The eraser left a sharp step between the untouched photo and
+    # the evened backdrop around it; what the brush painted was closed by an inpainting of that band and pasted in
+    # with an edge of a few pixels - "a hard stripe". Since 4.7.0:
+    #   * A stroke is told by the distance from the path of the pointer (_stroke_alpha). Its strength falls from 1 to
+    #     0 over a band that is centred on the brush circle: the circle the user sees is where the stroke has half of
+    #     its strength. Soft brush: the band is as wide as the brush radius. Hard brush: a fifth of it, about the
+    #     edge every stroke had before.
+    #   * The soft BRUSH never touches the person and fades out towards it: it can be swept along a shoe or a hem.
+    #     The hard brush repaints everything it passes over, as every brush did before - a prop that the search
+    #     took for a part of the person can still be painted away with it (_stroke_off_person).
+    #   * A painted zone is not inpainted any more. Its tone is continued into it from the backdrop around it, like a
+    #     membrane stretched over a hole, and its grain is real grain of this very frame, taken from a clean place
+    #     next to it (_brush_fill). The window shows the same thing the layer gets.
+    #   * "Fill the whole mask" makes the whole layer visible and repaints nothing (session field "fill_all").
+    # "brushSoft": False in the session parameters brings the former stroke, preview and repair back; the checks use
+    # it where v3.2.1 must still be matched pixel for pixel.
+    BRUSH_SOFT_BAND = 1.0        # width of the edge band of the soft brush, in brush radii
+    BRUSH_HARD_BAND = 0.2        # ...and of the hard one
+    BRUSH_MIN_BAND_PX = 2.0      # never narrower (pixels of the window pictures): the edge must not be a staircase
+    # The soft brush fades out over this distance from the person (pixels of the window pictures). Right next to
+    # a foot the floor has a narrow contact shadow that cannot be made anew. Two other ways were tried on his
+    # frame 1: a painted zone that ends sharply at the person stands there in a tone of its own (a halo), and one
+    # that takes its tone from the strip next to the person spreads the contact shadow over the whole zone.
+    BRUSH_PERSON_MARGIN = 8
+    BRUSH_TONE_SIGMA = 6.0       # (real pixels) what is finer is grain and fine dirt, what is coarser is tone
+    BRUSH_TONE_WORK_SIGMA = 2.0  # the tone is worked on a copy reduced until the above is this many pixels
+    BRUSH_GRAIN_TILES = (160, 112, 80, 56, 40, 28, 20, 14)  # side of the clean square the grain is taken from
+    BRUSH_GRAIN_CLEAN = (4.5, 4.0)  # a clean square: no pixel / no small blob farther from the tone than this (sigmas)
+    # The tone of a painted zone is taken from the backdrop right around it - from most of it. "Right around":
+    # within BRUSH_RING of the size of the zone; a dab inside a shadow is surrounded by shadow and stays shadow,
+    # however much lit floor lies farther out. "Most": the largest part of that ring that lies on one even slope,
+    # give or take BRUSH_MOST_TOL of the tone. When it is at least BRUSH_MOST of the ring, the rest of the ring - a
+    # shadow that the stroke runs into, a thing nobody outlined - is not what the zone is made like: whatever is
+    # farther from that slope than BRUSH_ODD_K spreads of the even part (at least BRUSH_ODD_FLOOR of the tone)
+    # is left out. Without this a stroke under a foot took the shadows next to the foot for its tone and came out
+    # 7-14 levels darker than the floor had been (his frame 1).
+    # Where no part of the ring is "most", two cases. The ring is of two kinds - a second even part, apart from
+    # the first, holds BRUSH_SECOND of it (a stroke along the edge of a shadow): the brush cannot know which of
+    # the two the zone should become, and a slope from one to the other would smear the edge - a dark blob in
+    # the lit floor on his grey frame. The tone of the zone is then left as it is; only its grain and fine dirt
+    # are renewed. Otherwise the ring is simply uneven (a dirty floor): all of it counts and the zone is a smooth
+    # surface between its parts.
+    BRUSH_RING = 0.2
+    BRUSH_MOST = 0.55
+    BRUSH_MOST_TOL = 0.04
+    BRUSH_SECOND = 0.25
+    BRUSH_ODD_K = 3.0
+    BRUSH_ODD_FLOOR = 0.012
+
+    @staticmethod
+    def _brush_soft(sess: dict) -> bool:
+        return bool(sess["params"].get("brushSoft", True))
+
+    @classmethod
+    def _stroke_alpha(cls, pw: int, ph: int, pts: list, radius: float, softness: float):
+        """
+        One stroke of the brush or the eraser: (strength 0..1 as float32 inside a box, (y0, y1, x0, x1) of the box).
+        pts: the path of the pointer in pixels of the window pictures; radius: the brush circle; softness: 0 hard .. 1 soft.
+        """
+        soft = float(np.clip(softness, 0.0, 1.0))
+        band = max(cls.BRUSH_MIN_BAND_PX, radius * (cls.BRUSH_HARD_BAND + (cls.BRUSH_SOFT_BAND - cls.BRUSH_HARD_BAND) * soft))
+        inner = max(0.0, radius - 0.5 * band)
+        reach = int(np.ceil(inner + band)) + 2
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        x0, x1 = max(0, min(xs) - reach), min(pw, max(xs) + reach + 1)
+        y0, y1 = max(0, min(ys) - reach), min(ph, max(ys) + reach + 1)
+        axis = np.full((y1 - y0, x1 - x0), 255, dtype=np.uint8)
+        if len(pts) == 1:
+            axis[pts[0][1] - y0, pts[0][0] - x0] = 0
+        else:
+            cv2.polylines(axis, [np.array([(x - x0, y - y0) for x, y in pts], dtype=np.int32)], False, 0, 1, cv2.LINE_8)
+        dist = cv2.distanceTransform(axis, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+        t = np.clip((dist - inner) / band, 0.0, 1.0)
+        return (0.5 + 0.5 * np.cos(np.pi * t)).astype(np.float32), (y0, y1, x0, x1)
+
+    @staticmethod
+    def _stroke_off_person(alpha: np.ndarray, keep_out: np.ndarray, softness: float) -> np.ndarray:
+        """
+        A stroke of the BRUSH with the person taken out of it. `keep_out`: 1 on the main person of the frame, falling
+        to 0 over BRUSH_PERSON_MARGIN around it (_session_keep_out).
+        Soft brush (softness 1): the person is not touched at all. A soft stroke reaches half a radius beyond the
+        circle the user sees, so it cannot be led exactly; it is meant to be swept over the backdrop, feet and hem
+        included. Hard brush (softness 0): the stroke stays whole, as before 4.7.0 - the user went over that place
+        with a sharp tool on purpose.
+        """
+        return alpha * (1.0 - keep_out * float(np.clip(softness, 0.0, 1.0)))
+
+    @staticmethod
+    def _person_strength(core_u8: np.ndarray) -> np.ndarray:
+        """The person as the brush sees it, 0..1 - the same ramp that keeps the repairs of the search off the person."""
+        return np.clip((core_u8.astype(np.float32) - 40.0) / 170.0, 0.0, 1.0)
+
+    def _session_person_small(self, sess: dict, keep_out: bool = False) -> np.ndarray | None:
+        """
+        The main person of the frame at the size of the window pictures (uint8, as `core_mask_u8`), or None.
+        keep_out: instead, what the soft brush keeps away from (float 0..1): 1 on the person, falling to 0 over
+        BRUSH_PERSON_MARGIN pixels around it.
+        """
+        core = sess.get("core_mask_u8")
+        if core is None or core.shape[:2] != (sess["height"], sess["width"]):
+            return None
+        hit = sess.get("person_small")
+        if hit is None or hit[0] is not core:
+            small = cv2.resize(core, (sess["preview_w"], sess["preview_h"]), interpolation=cv2.INTER_AREA)
+            away = cv2.distanceTransform((self._person_strength(small) < 0.5).astype(np.uint8), cv2.DIST_L2,
+                                         cv2.DIST_MASK_PRECISE)
+            ramp = 0.5 + 0.5 * np.cos(np.pi * np.clip(away / float(self.BRUSH_PERSON_MARGIN), 0.0, 1.0))
+            hit = sess["person_small"] = (core, small, np.maximum(ramp, self._person_strength(small)).astype(np.float32))
+        return hit[2] if keep_out else hit[1]
+
+    def _session_solid(self, sess: dict, small: bool) -> np.ndarray | None:
+        """
+        What is not backdrop in this frame, as far as the search knows (uint8, 255 = solid): everything the
+        silhouette model outlined - the person, and a lamp or a stand that stands apart - and the studio gear told
+        by its edges. A painted zone never takes its tone from these: a dark stand next to a stroke would run into
+        the zone as a dark smear. small: at the size of the window pictures. None: nothing is known.
+        """
+        cache = sess.get("stage_cache") or {}
+        rec_fg, rec_maps = cache.get("fg"), cache.get("maps")
+        fg = rec_fg[1][0] if rec_fg is not None else sess.get("core_mask_u8")
+        gear = rec_maps[1][0] if rec_maps is not None else None
+        if fg is None or fg.shape[:2] != (sess["height"], sess["width"]):
+            return None
+        if gear is not None and (gear.ndim != 2 or gear.size <= 1 or not np.any(gear)):
+            gear = None
+        if small:
+            hit = sess.get("solid_small")
+            if hit is not None and hit[0] is fg and hit[1] is gear:
+                return hit[2]
+        size = (sess["preview_w"], sess["preview_h"]) if small else (sess["width"], sess["height"])
+        out = cv2.resize(fg, size, interpolation=cv2.INTER_AREA) if small else fg
+        if gear is not None:
+            out = np.maximum(out, cv2.resize(gear, size, interpolation=cv2.INTER_LINEAR))
+        if small:
+            sess["solid_small"] = (fg, gear, out)
+        return out
+
+    @staticmethod
+    def _smooth_fill(val: np.ndarray, known: np.ndarray, relax: int = 4) -> np.ndarray | None:
+        """
+        `val` (HxWxC float32) continued from the pixels where `known` (HxW, 0..1) is set into all the others: a
+        membrane stretched over the holes. A slope of the light goes on as it is, and nothing is invented.
+        Coarse to fine, with a few smoothing steps on every level. None when nothing is known.
+        """
+        w0 = known.astype(np.float32)
+        if float(w0.max()) <= 0.0:
+            return None
+        pyr = [(val * w0[..., None], w0)]
+        while min(pyr[-1][1].shape) > 2 and float(pyr[-1][1].min()) < 0.999:
+            v, w = pyr[-1]
+            v2 = cv2.pyrDown(v)
+            if v2.ndim == 2:
+                v2 = v2[..., None]
+            pyr.append((v2, cv2.pyrDown(w)))
+        v, w = pyr[-1]
+        out = v / np.maximum(w, 1e-6)[..., None]
+        if float(w.min()) <= 1e-6:
+            mean = v.reshape(-1, v.shape[-1]).sum(axis=0) / max(float(w.sum()), 1e-6)
+            out = np.where((w > 1e-6)[..., None], out, mean[None, None, :]).astype(np.float32)
+        for v, w in reversed(pyr[:-1]):
+            up = cv2.pyrUp(out, dstsize=(w.shape[1], w.shape[0]))
+            if up.ndim == 2:
+                up = up[..., None]
+            rest = (1.0 - np.minimum(w, 1.0))[..., None]
+            out = v + rest * up
+            for _ in range(relax):
+                sm = cv2.blur(out, (3, 3))
+                if sm.ndim == 2:
+                    sm = sm[..., None]
+                out = v + rest * sm
+        return out
+
+    @staticmethod
+    def _grain_blocks(tile: np.ndarray, block: int, origin: tuple, shape: tuple, wanted: np.ndarray, seed: int) -> np.ndarray:
+        """
+        Grain for a part of the frame, put together from squares cut out of `tile`. Which square of the tile goes
+        where depends only on the place in the frame, so a pixel gets the same grain however the frame is cut into
+        parts. Four layers of squares, each shifted by half a square, are laid over one another with sine windows:
+        the squares fade into each other (no seams), and because the squares of the windows add up to 1 the result
+        has the strength of the grain in the tile everywhere. `block` must be even.
+        """
+        h, w = shape
+        y_org, x_org = origin
+        out = np.zeros((h, w, tile.shape[2]), dtype=np.float32)
+        span = tile.shape[0] - block + 1
+        half = block // 2
+        win = np.sin(np.pi * (np.arange(block, dtype=np.float32) + 0.5) / block)
+        win2 = np.outer(win, win)[..., None]
+        for layer, (oy_l, ox_l) in enumerate(((0, 0), (0, half), (half, 0), (half, half))):
+            ys, xs = y_org - oy_l, x_org - ox_l  # the frame as this layer's grid of squares sees it
+            for by in range(ys // block, (ys + h - 1) // block + 1):
+                ya, yb = max(by * block, ys) - ys, min((by + 1) * block, ys + h) - ys
+                for bx in range(xs // block, (xs + w - 1) // block + 1):
+                    xa, xb = max(bx * block, xs) - xs, min((bx + 1) * block, xs + w) - xs
+                    if not wanted[ya:yb, xa:xb].any():
+                        continue
+                    x = (by * 0x9E3779B1 + bx * 0x85EBCA77 + (seed * 4 + layer) * 0xC2B2AE3D) & 0xFFFFFFFF
+                    x ^= x >> 15
+                    x = (x * 0x2C1B3C6D) & 0xFFFFFFFF
+                    x ^= x >> 12
+                    x = (x * 0x297A2D39) & 0xFFFFFFFF
+                    x ^= x >> 15
+                    oy, ox, turn = (x & 0xFFFF) % span, ((x >> 16) & 0xFFFF) % span, (x >> 9) & 3
+                    blk = tile[oy:oy + block, ox:ox + block]
+                    if turn & 1:
+                        blk = blk[::-1]
+                    if turn & 2:
+                        blk = blk[:, ::-1]
+                    sy, sx = ya + ys - by * block, xa + xs - bx * block
+                    part = (slice(sy, sy + (yb - ya)), slice(sx, sx + (xb - xa)))
+                    out[ya:yb, xa:xb] += blk[part] * win2[part]
+        return out
+
+    def _brush_fill(self, img: np.ndarray, alpha_u8: np.ndarray, solid_u8: np.ndarray | None, px_scale: float,
+                    seed: int = 4711) -> int:
+        """
+        Repaints, in place, what the brush painted. Returns the number of zones that were repainted.
+        img: HxWx3 float32 in any range - the cleaned frame; alpha_u8: HxW, the strength of the brush (0..255);
+        solid_u8: what is not backdrop (_session_solid) or None; px_scale: pixels of `img` per pixel of the real
+        frame (1 at Apply, the scale of the window pictures in the window).
+        Every connected group of painted pixels is a zone of its own, worked inside its own box.
+        """
+        H, W = alpha_u8.shape[:2]
+        if not np.any(alpha_u8):
+            return 0
+        f = max(1, int(np.ceil(max(H, W) / 1536.0)))  # zones are told apart on a pooled copy
+        Hc, Wc = -(-H // f), -(-W // f)
+        if f == 1:
+            cells = (alpha_u8 > 0).astype(np.uint8)
+        else:
+            padded = np.zeros((Hc * f, Wc * f), dtype=np.uint8)
+            padded[:H, :W] = alpha_u8
+            cells = (padded.reshape(Hc, f, Wc, f).max(axis=(1, 3)) > 0).astype(np.uint8)
+            del padded
+        cells = cv2.dilate(cells, np.ones((3, 3), np.uint8))
+        n, lbl, stats, _ = cv2.connectedComponentsWithStats(cells, 8)
+        m_lo = max(12.0, 160.0 * px_scale)
+        m_hi = max(m_lo, 1024.0 * px_scale)
+        done = 0
+        for c in range(1, n):
+            cx0, cy0 = int(stats[c, cv2.CC_STAT_LEFT]), int(stats[c, cv2.CC_STAT_TOP])
+            cw, ch = int(stats[c, cv2.CC_STAT_WIDTH]), int(stats[c, cv2.CC_STAT_HEIGHT])
+            mc = int(np.ceil(min(m_hi, max(m_lo, 0.5 * max(cw, ch) * f)) / f))
+            ry0, ry1 = max(0, cy0 - mc), min(Hc, cy0 + ch + mc)
+            rx0, rx1 = max(0, cx0 - mc), min(Wc, cx0 + cw + mc)
+            y0, y1, x0, x1 = ry0 * f, min(H, ry1 * f), rx0 * f, min(W, rx1 * f)
+            own = lbl[ry0:ry1, rx0:rx1] == c
+            if f > 1:
+                own = np.repeat(np.repeat(own, f, axis=0), f, axis=1)[: y1 - y0, : x1 - x0]
+            solid = solid_u8[y0:y1, x0:x1] if solid_u8 is not None else None
+            if self._brush_fill_zone(img[y0:y1, x0:x1], alpha_u8[y0:y1, x0:x1], own, solid, px_scale, (y0, x0), seed):
+                done += 1
+        return done
+
+    def _brush_fill_zone(self, img_r: np.ndarray, a_u8: np.ndarray, own: np.ndarray, solid_u8: np.ndarray | None,
+                         px_scale: float, origin: tuple, seed: int) -> bool:
+        """
+        One zone of _brush_fill inside its box. `a_u8`: the strength of every stroke in the box; `own`: the pixels of
+        this zone (the other zones in the box are neither repainted nor used). False: nothing to take the tone from
+        (the whole frame was painted, or the zone lies wholly inside the person) - the zone is left as it is.
+
+        tone   = the backdrop without what is finer than BRUSH_TONE_SIGMA; inside the zone it is replaced by the
+                 membrane stretched from the backdrop around it (never from the person or the gear - `solid_u8` -
+                 and never from another zone);
+        detail = frame - tone: grain, and fine dirt. It is replaced by grain cut from a clean square next to the zone.
+        Tone is mixed in by the strength a of the stroke; the two grains are mixed as cos / sin of a, which keeps the
+        amount of grain the same all the way through the soft edge (a plain mix would leave a smoother ring there).
+        """
+        Hr, Wr = a_u8.shape[:2]
+        prot = self._person_strength(solid_u8) if solid_u8 is not None else np.zeros((Hr, Wr), dtype=np.float32)
+
+        # ---- the tone, on a reduced copy ----
+        sig_t = max(0.8, self.BRUSH_TONE_SIGMA * px_scale)
+        s0 = min(1.0, self.BRUSH_TONE_WORK_SIGMA / sig_t)
+        reduced = s0 < 0.999
+        if reduced:
+            ws, hs = max(4, int(round(Wr * s0))), max(4, int(round(Hr * s0)))
+            small = cv2.resize(img_r, (ws, hs), interpolation=cv2.INTER_AREA)
+            a_s = cv2.resize(a_u8, (ws, hs), interpolation=cv2.INTER_AREA)
+            p_s = cv2.resize(prot, (ws, hs), interpolation=cv2.INTER_AREA)
+        else:
+            ws, hs, small, a_s, p_s = Wr, Hr, img_r, a_u8, prot
+        sig_w = sig_t * ws / float(Wr)
+
+        def blur(x):
+            return cv2.GaussianBlur(x, (0, 0), sig_w)
+
+        src = ((a_s == 0) & (p_s < 0.5)).astype(np.float32)
+        ns = blur(src)
+        known = src * (ns > 0.1)
+        if float(known.sum()) < 12.0:
+            return False
+        lp_src = blur(small * src[..., None]) / np.maximum(ns, 1e-4)[..., None]
+        # A membrane alone flattens the light: a zone inside a pool of light would come out as a dent, and a zone at
+        # the frame border would lose the slope towards the border. So the slope of the backdrop around the zone is
+        # carried by a surface fitted to it, and the membrane carries only what is left. With backdrop all around
+        # the zone the surface may bend (2nd order); where a side is missing (the frame border, the person) a bent
+        # surface would have to be guessed outwards, so it stays a plane.
+        own_s = cv2.resize(own.astype(np.uint8) * 255, (ws, hs), interpolation=cv2.INTER_AREA) > 0 if reduced else own
+        zone_s = ((a_s > 0) & own_s).astype(np.uint8)
+        ring = (cv2.dilate(zone_s, np.ones((3, 3), np.uint8)) > 0) & (zone_s == 0)
+        at_border = bool(zone_s[0].any() or zone_s[-1].any() or zone_s[:, 0].any() or zone_s[:, -1].any())
+        enclosed = (not at_border) and int((ring & (known > 0)).sum()) >= 0.9 * max(1, int(ring.sum()))
+        gy, gx = np.mgrid[0:hs, 0:ws]
+        gx = gx.astype(np.float64) * (2.0 / max(1, ws - 1)) - 1.0
+        gy = gy.astype(np.float64) * (2.0 / max(1, hs - 1)) - 1.0
+        basis = [np.ones_like(gx), gx, gy] + ([gx * gx, gx * gy, gy * gy] if enclosed else [])
+        # (the surroundings that decide: the backdrop within BRUSH_RING of the size of the zone around it)
+        zr, zc = np.flatnonzero(zone_s.any(axis=1)), np.flatnonzero(zone_s.any(axis=0))
+        if zr.size == 0:
+            return False
+        reach = max(6.0, self.BRUSH_RING * max(zr[-1] - zr[0] + 1, zc[-1] - zc[0] + 1))
+        away = cv2.distanceTransform((zone_s == 0).astype(np.uint8), cv2.DIST_L2, 3)
+        kn = np.flatnonzero(((known > 0) & (away <= reach)).ravel())
+        if kn.size < 50:
+            kn = np.flatnonzero(known.ravel() > 0)
+        del away
+        if kn.size > 20000:
+            kn = kn[:: int(np.ceil(kn.size / 20000.0))]
+        design = np.stack([b.ravel()[kn] for b in basis], axis=1)
+        target = lp_src.reshape(-1, lp_src.shape[2])[kn].astype(np.float64)
+        # The surface is fitted to "most" of the ring (see BRUSH_MOST): a plane through all of it first; then, a few
+        # times over, the densest band of tones around the plane is taken and the plane is laid through that band.
+        tone = target.mean(axis=1)
+        level = max(abs(float(np.median(tone))), 1e-9)
+        tol = self.BRUSH_MOST_TOL * level
+        plane = design[:, :3]
+        usual = np.ones(tone.size, dtype=bool)
+        for _ in range(6):
+            resid = tone - plane @ np.linalg.lstsq(plane[usual], tone[usual], rcond=None)[0]
+            order = np.sort(resid)
+            count = np.searchsorted(order, order + 2.0 * tol, side="right") - np.arange(order.size)
+            lo = float(order[int(np.argmax(count))])
+            pick = (resid >= lo) & (resid <= lo + 2.0 * tol)
+            if int(pick.sum()) < 12 or np.array_equal(pick, usual):
+                break
+            usual = pick
+        two_kinds = False
+        if float(usual.mean()) < self.BRUSH_MOST:
+            # no part of the ring is "most". Is there a second even part, apart from the first?
+            resid = tone - plane @ np.linalg.lstsq(plane[usual], tone[usual], rcond=None)[0]
+            rest = np.sort(resid[~usual])
+            if rest.size:
+                count = np.searchsorted(rest, rest + 2.0 * tol, side="right") - np.arange(rest.size)
+                best = int(np.argmax(count))
+                first = float(np.median(resid[usual]))
+                two_kinds = (count[best] >= self.BRUSH_SECOND * tone.size
+                             and abs(float(rest[best]) + tol - first) > 3.0 * tol)
+            usual = np.ones(tone.size, dtype=bool)  # all of the ring counts
+        coef = np.linalg.lstsq(design[usual], target[usual], rcond=None)[0]
+        trend = np.tensordot(np.stack(basis, axis=2), coef, axes=([2], [0])).astype(np.float32)
+        if not usual.all():
+            resid = tone - (design @ coef).mean(axis=1)
+            spread = max(1.4826 * float(np.median(np.abs(resid[usual] - np.median(resid[usual])))),
+                         self.BRUSH_ODD_FLOOR * level)
+            odd = np.abs((lp_src - trend).mean(axis=2) - float(np.median(resid[usual]))) > self.BRUSH_ODD_K * spread
+            known = known * (~odd)
+        del basis, design, gx, gy
+        rest = self._smooth_fill(lp_src - trend, known)
+        if rest is None:
+            return False
+        fill_s = trend + rest
+        del trend, rest
+        bd = 1.0 - p_s
+        nb = blur(bd)
+        lp_s = blur(small * bd[..., None]) / np.maximum(nb, 1e-4)[..., None]
+        lp_s = np.where((nb > 0.05)[..., None], lp_s, fill_s).astype(np.float32)
+        if two_kinds:
+            fill_s = lp_s  # the tone stays (see BRUSH_SECOND)
+        del lp_src, small
+
+        sx, sy = ws / float(Wr), hs / float(Hr)
+
+        def up(arr, r0, r1):
+            """Rows r0..r1 of the box from an array of the reduced copy (the pixel grid cv2.resize uses)."""
+            if not reduced:
+                return arr[r0:r1]
+            m = np.float32([[sx, 0.0, 0.5 * sx - 0.5], [0.0, sy, (r0 + 0.5) * sy - 0.5]])
+            return cv2.warpAffine(arr, m, (Wr, r1 - r0), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+                                  borderMode=cv2.BORDER_REPLICATE)
+
+        # ---- the grain: a clean square of the backdrop next to the zone ----
+        lum = img_r.mean(axis=2) - up(np.ascontiguousarray(lp_s.mean(axis=2)), 0, Hr)
+        ok_src = (a_u8 == 0) & (prot < 0.5)
+        pick = ok_src[::3, ::3]
+        sigma = 1.4826 * float(np.median(np.abs(lum[::3, ::3][pick]))) if int(pick.sum()) >= 32 else 0.0
+        lum_soft = cv2.GaussianBlur(lum, (0, 0), 1.2)
+        sigma_soft = 1.4826 * float(np.median(np.abs(lum_soft[::3, ::3][pick]))) if sigma > 0.0 else 0.0
+        grain = None
+        if sigma > 0.0 and sigma_soft > 0.0:
+            k_px, k_blob = self.BRUSH_GRAIN_CLEAN
+            clean = (ok_src & (np.abs(lum) <= k_px * sigma) & (np.abs(lum_soft) <= k_blob * sigma_soft)).astype(np.uint8)
+            rows = np.flatnonzero(own.any(axis=1))
+            cols = np.flatnonzero(own.any(axis=0))
+            cy, cx = 0.5 * (rows[0] + rows[-1]), 0.5 * (cols[0] + cols[-1])
+            for side in self.BRUSH_GRAIN_TILES:
+                if side > Hr or side > Wr:
+                    continue
+                whole = cv2.erode(clean, np.ones((side, side), np.uint8), anchor=(0, 0),
+                                  borderType=cv2.BORDER_CONSTANT, borderValue=0)
+                ys, xs = np.nonzero(whole)
+                if ys.size == 0:
+                    continue
+                k = int(np.argmin((ys + 0.5 * side - cy) ** 2 + (xs + 0.5 * side - cx) ** 2))
+                ty, tx = int(ys[k]), int(xs[k])
+                grain = img_r[ty:ty + side, tx:tx + side] - up(lp_s, ty, ty + side)[:, tx:tx + side]
+                own_sigma = 1.4826 * float(np.median(np.abs(grain.mean(axis=2))))
+                grain = grain - grain.reshape(-1, grain.shape[2]).mean(axis=0)
+                if own_sigma > 0.0:
+                    grain *= float(np.clip(sigma / own_sigma, 0.7, 1.4))  # the noise of the place it goes to
+                break
+            del clean
+        if grain is None:
+            # no clean square in reach: plain noise of the measured strength (nothing at all on a noiseless frame)
+            rng = np.random.default_rng([int(seed), int(origin[0]), int(origin[1])])
+            base = cv2.GaussianBlur(rng.normal(0.0, 1.0, (128, 128)).astype(np.float32), (0, 0), 0.6)
+            base *= sigma / max(float(base.std()), 1e-6)
+            grain = np.repeat(base[..., None], img_r.shape[2], axis=2)
+            grain += rng.normal(0.0, 0.3 * sigma, grain.shape).astype(np.float32) if sigma > 0.0 else 0.0
+        block = max(6, (grain.shape[0] // 2) & ~1)
+        del lum, lum_soft
+
+        # ---- the zone itself, in bands (a zone can be most of a 22 MP frame) ----
+        for r0 in range(0, Hr, 1024):
+            r1 = min(Hr, r0 + 1024)
+            sel = (a_u8[r0:r1] > 0) & own[r0:r1]
+            cols = np.flatnonzero(sel.any(axis=0))
+            if cols.size == 0:
+                continue
+            c0, c1 = int(cols[0]), int(cols[-1]) + 1
+            sel = sel[:, c0:c1]
+            a = a_u8[r0:r1, c0:c1].astype(np.float32) * (1.0 / 255.0) * sel
+            lp_b = up(lp_s, r0, r1)[:, c0:c1]
+            fill_b = up(fill_s, r0, r1)[:, c0:c1]
+            dst = img_r[r0:r1, c0:c1]
+            detail = dst - lp_b
+            g_b = self._grain_blocks(grain, block, (origin[0] + r0, origin[1] + c0), sel.shape, sel, int(seed))
+            ang = a * (0.5 * np.pi)
+            dst += (a[..., None] * (fill_b - lp_b) + (np.cos(ang) - 1.0)[..., None] * detail
+                    + np.sin(ang)[..., None] * g_b)
+        return True
+
     # ---- brush / eraser history ("undo") --------------------------------------------------------------------------
     EDIT_HISTORY_MAX = 40                      # steps that can be taken back
     EDIT_HISTORY_MAX_BYTES = 96 * 1024 * 1024  # ...as long as they fit into this much memory
@@ -4273,6 +4719,7 @@ class CleanVinylEngine:
             "paint": self._pack_plane(sess["user_paint_u8"]),
             "erase": self._pack_plane(sess["user_erase_u8"]),
             "inverted": bool(sess.get("inverted")),
+            "fill": bool(sess.get("fill_all")),
             "detached": bool(sess.get("mask_detached")),
             # (these two arrays are replaced, never edited in place - keeping the reference is enough)
             "auto": sess["auto_mask_small_u8"],
@@ -4285,12 +4732,29 @@ class CleanVinylEngine:
     def _snapshot_bytes(snap: dict) -> int:
         return sum(rec[4].nbytes for rec in (snap["paint"], snap["erase"], snap["preview"]) if rec is not None)
 
+    @staticmethod
+    def _brush_strength_small(sess: dict) -> np.ndarray:
+        """How strongly the brush repaints each pixel of the window pictures (0..255): painted, and not erased again."""
+        paint, erase = sess["user_paint_u8"], sess["user_erase_u8"]
+        if not np.any(erase):
+            return paint
+        return np.rint(paint.astype(np.float32) * (1.0 - erase.astype(np.float32) * (1.0 / 255.0))).astype(np.uint8)
+
     def _paint_preview_from_base(self, sess: dict) -> np.ndarray:
         """
-        The cleaned preview with the brush strokes redrawn on it: what the window shows inside painted zones until
-        Apply repairs them for real. Built from the clean preview and the paint layer alone.
+        The cleaned preview with the brush strokes redrawn on it: what the window shows inside painted zones.
+        Built from the clean preview and the paint layer alone. (With "brushSoft" off: the former rough preview,
+        which Apply then repaired in another way.)
         """
         out = sess["clean_base_small_bgr"].copy()
+        if self._brush_soft(sess):
+            strength = self._brush_strength_small(sess)
+            if np.any(strength):
+                work = out.astype(np.float32)
+                self._brush_fill(work, strength, self._session_solid(sess, small=True),
+                                 sess["preview_w"] / float(sess["width"]))
+                out = np.clip(np.rint(work), 0, 255).astype(np.uint8)
+            return out
         if np.any(sess["user_paint_u8"] > 16):
             paint_bin = (sess["user_paint_u8"] > 64).astype(np.uint8)
             inpainted = cv2.inpaint(out, paint_bin, inpaintRadius=7, flags=cv2.INPAINT_TELEA)
@@ -4311,6 +4775,7 @@ class CleanVinylEngine:
                 y0, y1, x0, x1, part = snap[key]
                 arr[y0:y1, x0:x1] = part
         sess["inverted"] = bool(snap["inverted"])
+        sess["fill_all"] = bool(snap.get("fill", False))
         if snap["gen"] == int(sess.get("base_gen", 0)):
             sess["auto_mask_small_u8"] = snap["auto"]
             sess["repair_mask_small_u8"] = snap["repair"]
@@ -4821,6 +5286,7 @@ class CleanVinylEngine:
                     "user_paint_u8": np.zeros((ph, pw), dtype=np.uint8),
                     "user_erase_u8": np.zeros((ph, pw), dtype=np.uint8),
                     "inverted": False,
+                    "fill_all": False,       # True: "fill the whole mask" - the whole layer is visible
                     "params": p,
                     "stage_cache": stage_cache,
                     "auto_fracs_by_edge": fr_cache,
@@ -4943,6 +5409,7 @@ class CleanVinylEngine:
                     sess["user_paint_u8"][:] = 0
                     sess["user_erase_u8"][:] = 0
                     sess["inverted"] = False
+                    sess["fill_all"] = False
                     sess["history"] = {"undo": [], "redo": []}  # the edits were dropped on purpose
                 sess["clean_paint_small_bgr"] = self._paint_preview_from_base(sess)
 
@@ -4980,7 +5447,11 @@ class CleanVinylEngine:
         erase: bool = True,
         dress_smooth: bool = False,
         dress_strength: float = 45.0,
+        softness: float | None = None,
     ) -> dict:
+        """
+        softness: the edge of this stroke, 0 (hard) .. 1 (soft); None = soft. See BRUSH_SOFT_BAND.
+        """
         self._session_or_raise(session_id)
 
         self._begin_job()
@@ -4990,6 +5461,7 @@ class CleanVinylEngine:
                 pw, ph = sess["preview_w"], sess["preview_h"]
                 paint_u8 = sess["user_paint_u8"]
                 erase_u8 = sess["user_erase_u8"]
+                soft_mode = self._brush_soft(sess)
 
                 # "undo" / "redo": one step of the brush, the eraser, fill / clear / invert back, or forward again.
                 # Every other edit first remembers the state it is about to change.
@@ -4999,7 +5471,14 @@ class CleanVinylEngine:
                 elif op in ("fill", "clear", "invert", "reset_auto") or (op == "stroke" and points):
                     self._edit_history_push(sess)
 
-                if op == "fill":
+                if op == "fill" and soft_mode:
+                    # The whole layer becomes visible. Nothing is repainted by that: up to 4.6.0 "fill" marked the
+                    # whole frame as painted, and Apply then inpainted all of it, the person included.
+                    sess["fill_all"] = True
+                    erase_u8[:] = 0
+                    sess["inverted"] = False
+                    sess["clean_paint_small_bgr"] = self._paint_preview_from_base(sess)
+                elif op == "fill":
                     paint_u8[:] = 255
                     erase_u8[:] = 0
                     sess["inverted"] = False
@@ -5007,12 +5486,16 @@ class CleanVinylEngine:
                     erase_u8[:] = 255
                     paint_u8[:] = 0
                     sess["inverted"] = False
+                    if soft_mode:
+                        sess["fill_all"] = False
+                        sess["clean_paint_small_bgr"] = sess["clean_base_small_bgr"].copy()
                 elif op == "invert":
                     sess["inverted"] = not bool(sess.get("inverted", False))
                 elif op == "reset_auto":
                     paint_u8[:] = 0
                     erase_u8[:] = 0
                     sess["inverted"] = False
+                    sess["fill_all"] = False
                     sess["clean_paint_small_bgr"] = sess["clean_base_small_bgr"].copy()
                 elif op == "stroke" and points:
                     pts = []
@@ -5020,6 +5503,35 @@ class CleanVinylEngine:
                         px = int(round(float(pt["x"]) * pw)) if float(pt.get("norm", False)) else int(round(float(pt["x"])))
                         py = int(round(float(pt["y"]) * ph)) if float(pt.get("norm", False)) else int(round(float(pt["y"])))
                         pts.append((max(0, min(pw - 1, px)), max(0, min(ph - 1, py))))
+                    if soft_mode:
+                        if sess.get("inverted"):
+                            # (as below: a stroke on an inverted mask makes the mask on screen the user's own drawing)
+                            flat_eff = self._compute_effective_mask_small(sess)
+                            sess["inverted"] = False
+                            sess["fill_all"] = False
+                            sess["auto_mask_small_u8"] = flat_eff
+                            sess["repair_mask_small_u8"] = flat_eff
+                            sess["mask_detached"] = True
+                            paint_u8[:] = 0
+                            erase_u8[:] = 0
+                        soft = 1.0 if softness is None else float(np.clip(softness, 0.0, 1.0))
+                        alpha, (y0, y1, x0, x1) = self._stroke_alpha(pw, ph, pts, max(2.0, float(radius_px)), soft)
+                        if not erase:
+                            keep_out = self._session_person_small(sess, keep_out=True)
+                            if keep_out is not None:
+                                alpha = self._stroke_off_person(alpha, keep_out[y0:y1, x0:x1], soft)
+                        stroke = np.rint(alpha * 255.0).astype(np.uint8)
+                        paint_v, erase_v = paint_u8[y0:y1, x0:x1], erase_u8[y0:y1, x0:x1]
+                        if erase:
+                            np.maximum(erase_v, stroke, out=erase_v)
+                            paint_v[:] = cv2.subtract(paint_v, stroke)
+                        else:
+                            np.maximum(paint_v, stroke, out=paint_v)
+                            erase_v[:] = cv2.subtract(erase_v, stroke)
+                        # the painted zones as the layer will have them (the eraser can have cut into one)
+                        sess["clean_paint_small_bgr"] = self._paint_preview_from_base(sess)
+                        pts = []  # (done; the former way below is skipped)
+                if op == "stroke" and points and not soft_mode:
                     r = max(2, int(round(float(radius_px))))
                     stroke_mask = np.zeros((ph, pw), dtype=np.uint8)
                     if len(pts) == 1:
@@ -5138,15 +5650,27 @@ class CleanVinylEngine:
                 cleaned_planes = self._rgb_planes(sess["cleaned_base_rgba"])
                 cleaned_f32 = self._to_unit_f32(cleaned_planes, ps_max)
 
-                # Heal any user-painted brush spots that were outside the zones the search repaired. (Not "outside the
-                # layer": with the stain / blur / corner stages the layer covers the whole backdrop, and a stroke
-                # over a defect that was left there has to be repaired all the same.)
+                # What the brush painted is repainted on the real frame the way the window showed it (_brush_fill):
+                # wherever the brush went, also over a zone the search had repaired already.
+                brush_soft = self._brush_soft(sess)
+                if brush_soft:
+                    strength_s = self._brush_strength_small(sess)
+                    if np.any(strength_s):
+                        if progress_cb is not None:
+                            progress_cb(60, "Дочищаємо домальовані пензлем зони...")
+                        strength_full = cv2.resize(strength_s, (w, h), interpolation=cv2.INTER_LINEAR)
+                        self._brush_fill(cleaned_f32, strength_full, self._session_solid(sess, small=False), 1.0)
+                        del strength_full
+
+                # "brushSoft" off - the former way. Heal any user-painted brush spots that were outside the zones the
+                # search repaired. (Not "outside the layer": with the stain / blur / corner stages the layer covers
+                # the whole backdrop, and a stroke over a defect that was left there has to be repaired all the same.)
                 repaired_s = sess.get("repair_mask_small_u8")
                 if repaired_s is None:
                     repaired_s = sess["auto_mask_small_u8"]
                 extra_paint_s = np.maximum(0, sess["user_paint_u8"].astype(np.int16) - repaired_s.astype(np.int16))
                 extra_paint_s[sess["user_erase_u8"] > 128] = 0
-                if np.any(extra_paint_s > 64):
+                if not brush_soft and np.any(extra_paint_s > 64):
                     if progress_cb is not None:
                         progress_cb(60, "Дочищаємо домальовані пензлем зони...")
                     extra_full = (cv2.resize(extra_paint_s.astype(np.uint8), (w, h), interpolation=cv2.INTER_LINEAR) > 64).astype(np.uint8)
