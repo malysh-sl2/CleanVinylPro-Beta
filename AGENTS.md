@@ -60,6 +60,14 @@ written here and in the repository.
   Ctrl+Z works in Photoshop, the corner must go completely, dark grey is dark. He called 4.5.0 the best so
   far. 4.6.0 answers this report. Red ellipses on a result are his way to point: find each circled place
   in the original and in his result, at zoom, before changing anything.
+- His message of 2026-11-20 after trying 4.6.0 (no files). **Its wording is not preserved here**; the agent
+  worked from this list of four points: (1) the brush and the eraser of the big window leave a stripe with
+  a hard edge - make the brush soft, with a switch between soft and hard; (2) of the two speed modes only
+  the quality one should stay, the fast one and its button should go; (3) what do the three fraction
+  buttons and AUTO do; (4) how can the old program (`D:\CleanVinylPro`) be removed without breaking the new
+  one. He was asked three questions with option cards and chose: mode - quality only; fractions - leave
+  them as they are and explain them; brush - soft, plus a switch for a hard edge. 4.7.0 answers this
+  message. He did not write «зливай».
 
 ## 2. What is in the repository
 
@@ -77,6 +85,13 @@ from the repository in 4.3.0 because the owner asked for it. It is still in the 
 `daae6ed`), and it is still installed on his PC in `D:\CleanVinylPro` - the new program must keep running next
 to it (table below). Removing the folder did not make the GitHub repository smaller; only rewriting the history
 would, and he has not been asked about that.
+
+With 4.7.0 he asked how to remove the original program from his PC and got numbered steps (manual, section 6,
+«ЯК ВИДАЛИТИ СТАРУ ПРОГРАМУ»; also in the release notes). Whether he has done it is not known. The new program
+needs nothing from that folder: the libraries were copied (`adopt` in `setup_env.py`), the server reads the
+models only from `MODELS_DIR` or from its own folder (`resolve_models_dir`), Python is the system one. The
+original has no trigger of its own: its task `CleanVinylProServer` runs only when its plugin calls
+`cleanvinyl://`; its `remove_autostart.bat` deletes the Startup file, the task and that protocol key.
 
 ### The product
 
@@ -234,33 +249,98 @@ Both programs must be able to run side by side, so nothing is shared with the or
     whole. The limits come from his frames and are written next to the constants.
   - A dark key is a backdrop below 40 of 255 (`SCENE_DARK_LUMA`, was 26): his dark grey (31) is dark to
     him, his grey (52) is not.
-  - `tests/try_defects.py`: the deliberate defects for these rules, kept in the repository.
+  - `tests/try_defects.py`: the deliberate defects for these rules, kept in the repository. (Its list is
+    replaced with every version; the one of 4.6.0 is in the history, commit `50bae15`.)
+
+- **4.7.0** — the brush and the eraser of the big window, and one mode instead of two, after his message
+  about 4.6.0. In `engine.py` all of it sits under the comment "the brush and the eraser of the big window".
+  Read that comment before you touch anything there: each rule names the frame that asked for it.
+  - The edge of a stroke (`_stroke_alpha`). Soft: full strength inside half the brush radius, half at the
+    circle the user sees, nothing beyond 1.5 radii (`BRUSH_SOFT_BAND`). Hard: a band of a fifth of the
+    radius (`BRUSH_HARD_BAND`), about the edge every stroke had before. The edge travels with each stroke:
+    `softness` 1 / 0 in the body of `/session/mask-edit`, `edit_session_mask(..., softness=None)`; a
+    stroke that names no edge is a soft one.
+  - The soft BRUSH never touches the person and fades out over `BRUSH_PERSON_MARGIN` window pixels around
+    it (`_stroke_off_person`, `_session_person_small`). The hard brush repaints whatever it crosses, so a
+    prop that the search took for a part of the person can still be painted away. The eraser is not limited.
+  - A painted zone is not inpainted any more (`_brush_fill`; the same code draws the window and the
+    layer). Its tone is continued from the even part of the backdrop right around it (`_even_part`,
+    `_brush_fill_zone`) and stretched over the zone like a membrane (`_smooth_fill`); its grain is real
+    grain of the frame, taken from a clean square nearby (`_grain_blocks`). Three rules, each a PAIR of
+    numbers with a gradual change between them (`_ramp`):
+    - `BRUSH_MOST` - when one even surface is most of the surroundings, the rest (a shadow that the stroke
+      only touches) is left out of the tone;
+    - `BRUSH_SECOND` - a second even surface holds a share of the surroundings (the stroke crosses the
+      edge of a shadow or runs along it): the tone of the zone stays, only its grain and fine dirt are
+      renewed;
+    - `BRUSH_RING_MIN` - next to no backdrop is left around the zone (the whole backdrop was painted): the
+      tone and the studio gear stay.
+  - "Fill" (Ctrl + click on the brush) sets the session field `fill_all`: the whole layer becomes visible
+    and nothing is repainted; `layer_share` is 1.0, `mask_share` stays what the search found; a step back
+    undoes it. Up to 4.6.0 it marked the whole frame as painted, the person included.
+  - Session parameter `brushSoft` (on by default). Off = the stroke, the preview and the repair of 4.6.0;
+    `_legacy` of the checks switches it off, because v3.2.1 must still be matched there.
+  - Panel: two buttons under the brush size, `dlgBrushSoft` (the default) and `dlgBrushHard`
+    (`setBrushSoft`, `updateBrushEdgeUI`; `sessState.brushSoft`, kept in the settings and in a backup as
+    `brushSoft`; icons `icons/ui/edge_soft.png`, `edge_hard.png`). One choice serves the brush and the
+    eraser. The cursor ring was left as it is on purpose: it is the middle of the fade, and the tooltip
+    says so.
+  - One mode: the speed button is gone and `main.js` has `const speedMode = "quality"`; a `fast` stored by
+    an older version (settings, presets, backups) is ignored. The engine still has both fills: the light
+    preview draws with the fast one and the request parameter `speedMode` still works.
+  - The fraction buttons were only explained to him (manual, release notes); nothing changed there.
+  - Checks: the new group `brush`; `mask` and `scene` follow the new "fill"; four panel scenarios and five
+    settings cases for the edge buttons and the one mode. `tests/try_defects.py` now holds the 29
+    deliberate defects of 4.7.0 (18 for the engine and the server, 11 for the panel) and can put a defect
+    of the panel into a copy of the plugin folder (`panel("<text in the scenario names>")`,
+    `CV_PLUGIN_DIR`).
 
 ## 3. Current state — update this at the end of every session
 
-_Last updated: 2026-11-19, by the agent of the first session, after releasing 4.6.0._
+_Last updated: 2026-11-20, by the agent of the first session, after releasing 4.7.0._
 
-- **Released:** 4.6.0, tag `cvp2-v4.6.0`, as a pre-release. Direct download:
-  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.6.0/CleanVinylPro2.zip`
-- **Owner's progress:** 4.2.0 to 4.5.0 have been installed and work on his PC (program in
+- **Released:** 4.7.0, tag `cvp2-v4.7.0`, as a pre-release. Direct download:
+  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.7.0/CleanVinylPro2.zip`
+- **Owner's progress:** 4.2.0 to 4.6.0 have been installed and work on his PC (program in
   `D:\Plugin Photoshop\CleanVinylPro2`, libraries copied from the old program without a download, models in
   `D:\model AI fotoshop`, LaMa on `CUDAExecutionProvider`, Python 3.12.10). So the `.bat` files, the
-  installer, the GPU, the real models and the panel HAVE run on Windows. He reported on 4.5.0 with two
-  frames (section 1); 4.6.0 answers that report.
-  **He has not reported on 4.6.0 yet.**
-- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (34 results in
-  966 s; 58 scenarios of the panel test and 39 cases of the settings test among them) on
-  2026-11-19, with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4.
-  Deliberate defects for what is new in 4.6.0 (`tests/try_defects.py`, all in the engine): 34 put in one by one,
-  all 34 caught (1,114 s). While the checks were being written, two defects showed nothing on the
-  drawn frame - "a spot may touch the person" and "any patch above the threshold is a spot": the frame
-  refuses both blobs for a second reason. That is why the rule is also tried on drawn spots with the
-  owner's numbers. The green preview has its own copy of the two new defaults; it is now compared
-  with the cleaning on the new frames.
-  Of the 71 defects tried for 4.5.0 and the 41 for 4.4.0 the runners are gone (they lived in a git-ignored
-  folder that a new sandbox does not have); their checks are still in `tests/run_checks.py`.
-- **What 4.6.0 gives on his frames** (stand-in networks, section 4; the same engine code as on his PC, but
-  another silhouette and another fill):
+  installer, the GPU, the real models and the panel HAVE run on Windows. He wrote about 4.6.0 with four
+  points (section 1); 4.7.0 answers them.
+  **He has not reported on 4.7.0 yet.**
+- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (35 results in
+  1,384 s; 62 scenarios of the panel test and 44 cases of the settings test among them) on
+  2026-11-20, with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4.
+  (Other jobs ran next to it; 4.6.0 took 966 s.) After that run only these changed: one step of the
+  removal instructions in the manual, one scenario of the panel test, `CV_PLUGIN_DIR` in the settings
+  test and `tests/try_defects.py`; the groups `plugin`, `server` and `bat` were run again and passed.
+  Deliberate defects for what is new in 4.7.0 (`tests/try_defects.py`), put in one by one: 17 in the
+  engine and one in `server.py`, all 18 caught (590 s); 11 in the panel (the edge buttons, the one mode),
+  put into a copy of the plugin folder, all 11 caught (52 s). One of the panel defects was let through at
+  first: a built-in preset that an older version had saved with the fast mode was offered to the
+  automatic preset as "fast". The scenario had such a preset only among the user's own, which the
+  automatic preset never offers; now the built-in ones are saved that way too.
+  The runners of earlier versions are gone or replaced (4.6.0: 34 defects, in the history at `50bae15`;
+  4.5.0: 71 and 4.4.0: 41, never committed); their checks are still in `tests/run_checks.py`.
+- **What the brush of 4.7.0 does on his frames** (stand-in silhouette, section 4; strokes made by script,
+  radius in window pixels; "change" = largest / mean difference from the layer without the stroke, in
+  levels of 255):
+
+  | frame | stroke | 4.7.0 |
+  |---|---|---|
+  | `0Q5A3384` grey | soft, r 28, over the light spot at the top-right border | change 12 / 3.59; the spot goes from 56.1 to 52.8 with 52 around it; no edge at five-fold contrast (the stroke of 4.6.0 left an arc with a hard edge) |
+  | | soft, r 16, floor in front of the knee | 8 / 1.53 |
+  | | soft, r 16, across the shadow of the hand | 7 / 1.26; the edge of the shadow stays sharp (32 / 2.78 with one-number thresholds) |
+  | | soft, r 8, a dab inside a shadow | 6 / 1.29; the shadow stays a shadow |
+  | | soft, r 10, along the edge of a shadow | 7 / 1.32 (14 / 3.69 and a faint lighter patch before `BRUSH_SECOND` was gradual) |
+  | | soft, r 12, the floor bottom right | 16 / 1.93 |
+  | `1.jpg` light grey | soft, r 30, a sweep under the toes | 14 / 2.42; the person untouched (before `BRUSH_MOST` the zone came out 7-14 levels darker than the floor had been) |
+  | | nearly the whole backdrop painted (69 % of the window) | mean change 2.76 (36.6 before `BRUSH_RING_MIN`), the person 0; Apply 4.5-6.5 s, peak memory 1.9 → 2.2 GB |
+  | | "fill", then Apply | 0.21 s; the person untouched; a step back gives the same layer |
+
+  The window against the layer inside the painted zones: mean 0.7-1.4 levels (1.0 outside them), 99 % of
+  the pixels within 4. A stroke took 100-270 ms and Apply 0.4-1.0 s on the two CPUs of the sandbox.
+- **What the cleaning gives on his frames since 4.6.0** (stand-in networks, section 4; the same engine code
+  as on his PC, but another silhouette and another fill; 4.7.0 did not change the cleaning):
 
   | frame | preset the automatic picks | 4.5.0 | 4.6.0 |
   |---|---|---|---|
@@ -272,9 +352,9 @@ _Last updated: 2026-11-19, by the agent of the first session, after releasing 4.
 
   Not solved on these frames, and said to him: the light spot at the top-right border of the grey frame is
   evened (no patches any more) but still about 10 levels lighter than the wall around it - the stain stage
-  takes a spot of that size for light. On the right side of frame 3 the joint runs along the rim of a pool
-  of light and is not taken as a line; the dust search repairs bits of it and a dashed remainder shows in a
-  stretched view (4.5.0 did the same).
+  takes a spot of that size for light. (The soft brush of 4.7.0 evens it: the table above.) On the right
+  side of frame 3 the joint runs along the rim of a pool of light and is not taken as a line; the dust
+  search repairs bits of it and a dashed remainder shows in a stretched view (4.5.0 did the same).
 - **Decided by the agent alone for 4.6.0** (he was not asked; change them if he says otherwise):
   - 40 as the limit of a dark backdrop: between his dark grey (31) and his grey (52), nearer to the first;
   - the light spot at the frame border stays (he is told that the brush of the big window repaints it);
@@ -283,7 +363,26 @@ _Last updated: 2026-11-19, by the agent of the first session, after releasing 4.
   - a small shadow of a small thing that lies wholly inside a bigger shadow is repaired like a dirty spot
     (it cannot be told apart; the eraser brings it back);
   - nothing was done about the three questions he has not answered (below).
-- **Not run in Photoshop yet (4.6.0):** all of it. In particular:
+- **Decided by the agent alone for 4.7.0** (he chose "soft, plus a switch" and "quality only"; the rest
+  was not asked - change it if he says otherwise):
+  - the fade of the soft brush is one brush radius wide and centred on the cursor circle; there is no
+    softness slider; soft is the default; one choice serves the brush and the eraser;
+  - the soft brush keeps off the person, the hard one does not;
+  - a painted zone is made of the backdrop's own tone and grain, with no AI fill (LaMa is not called for
+    strokes any more): whatever lies under a stroke - a stain, a cable, a stand - becomes plain backdrop;
+  - a stroke across or along the edge of a shadow keeps the tone and renews only the grain;
+  - nearly the whole backdrop painted over keeps its tone;
+  - Ctrl + click on the brush shows the whole layer and repaints nothing;
+  - for removing the old program he got steps, not a helper `.bat` (it could not be tried on Windows).
+- **Not run in Photoshop yet (4.7.0):** all of it. In particular:
+  - the look and the place of the two edge buttons (36 x 36 icons under the size box of the left column);
+  - the soft brush next to the real silhouette: it keeps off whatever the real model calls the person, a
+    prop included, and paints over a part of the person that the model misses;
+  - time: every opening of the window and every Apply now uses the full AI fill; if he worked in the fast
+    mode, both take longer. It cannot be timed here;
+  - the steps for removing the old program were written from the files of both programs; nobody has
+    walked them on Windows. They rename the old folder before it is deleted so that he can go back.
+- **Not run in Photoshop yet (4.6.0)** (he wrote about 4.6.0 without saying how these went): in particular:
   - the real silhouette. The stand-in missed the stool, a leg and a shoe under the dress on the black frame
     and the train of the dress on frame 1; they were added to the stand-in matte by hand. His result of
     4.5.0 left the stool untouched, so the real model very likely takes the stool as part of the person;
@@ -294,14 +393,16 @@ _Last updated: 2026-11-19, by the agent of the first session, after releasing 4.
   - of 4.5.0, still unconfirmed: opening the backup folder from the panel, the look of the new buttons,
     the one-time preset moves. (Ctrl+Z works in Photoshop: he confirmed it.)
 - **Merging:** pull request #1 (`arena/33f1ced8-cleanvinylpro-beta` into `main`) is open and deliberately not
-  merged yet: fixes that follow his report on 4.6.0 should come from the session that knows the code. He
+  merged yet: fixes that follow his report on 4.7.0 should come from the session that knows the code. He
   asked what merging into `main` means and was told: the version is already published and can be downloaded;
   merging only marks it on GitHub as the main one and changes nothing on his PC; he should write «зливай»
   when he wants it. Merge it when he writes that or when the session ends (section 6). If `main` already
   contains this file, that has happened. Merging also removes the folder `CleanVinylPro/` from `main`.
 
-### Open questions (ask when he reports on 4.6.0)
+### Open questions (ask when he reports on 4.7.0)
 
+- New with 4.7.0: is the soft edge as soft as he wants (the fade is one brush radius; `BRUSH_SOFT_BAND`)?
+  Is the one mode fast enough on his PC? Did the removal of the old program go through?
 - Answered after 4.5.0: Ctrl+Z works in Photoshop; the corner on a black backdrop must go completely;
   dark grey counts as dark (the limit is 40 now).
 - Should a light spot at the frame border (a lamp that shines into the frame) be removed by the program?
@@ -320,6 +421,8 @@ _Last updated: 2026-11-19, by the agent of the first session, after releasing 4.
 - rewriting the history so that the 666 MB of the removed original program really leave GitHub (needs a force
   push of `main`; ask him first, and do it only at the very start of a session);
 - a switch "update nothing until I press a button" for the big window;
+- a softness slider for the brush instead of the two buttons; a helper `.bat` that removes the old program
+  (neither was offered to him in words; both came up while 4.7.0 was built);
 - a turnkey preset, a wall/floor switch, batch processing.
 
 ### Ideas worth doing when the installer is touched next
@@ -342,6 +445,23 @@ _Last updated: 2026-11-19, by the agent of the first session, after releasing 4.
 
 ### Known limits of the image processing
 
+- The brush (4.7.0) makes a zone like what surrounds it. A stroke that covers only the middle of a large
+  spot is surrounded by the spot and changes next to nothing; he is told to paint a spot whole, with a
+  margin. Whatever lies under a stroke becomes plain backdrop - it cannot draw a texture or a pattern.
+- The brush at a shadow (4.7.0): where the surroundings of a stroke are two even surfaces - it crosses the
+  edge of a shadow or runs along it - the tone stays and only grain and fine dirt (finer than
+  `BRUSH_TONE_SIGMA`) are renewed. So a stain right at the edge of a shadow is not evened by a stroke
+  that also covers the shadow; a smaller brush that stays off the shadow does it. Between the two numbers
+  of `BRUSH_SECOND` the rule holds in part.
+- The soft brush and the person (4.7.0): it follows the silhouette of the session
+  (`_session_person_small`). What the model takes for the person is not painted (the hard brush does it);
+  what the model misses is painted like backdrop. Right next to the person the stroke fades over 8 window
+  pixels, so dirt that touches a shoe stays in that rim.
+- The brush where almost nothing but people is left around the zone (`BRUSH_RING_MIN`): the tone and the
+  gear stay, only the grain is renewed. Painting 69 % of the window took Apply 4.5-6.5 s here.
+- The pictures of the window show a painted zone with 88-93 % of the grain around it (a reduced JPEG);
+  the layer has all of it (1.05 against 1.05 on the drawn frame of the check).
+- The cursor ring of the soft brush is the middle of the fade: the stroke reaches half a radius beyond it.
 - Gear (4.6.0): a cast shadow or a broad light panel that leaves the frame over the left, right or top
   border is still gear, as before - nothing is cleaned along its edge. A dark thing with backdrop on both
   sides is gear whatever it is; the narrow shadow of a finger (a quarter of the light missing) counts.
@@ -403,8 +523,18 @@ _Last updated: 2026-11-19, by the agent of the first session, after releasing 4.
 
 ## 4. Working in the sandbox
 
-The sandbox is Linux with no Windows, no GPU, no models and no Photoshop. It is recreated often and `/tmp` is
-then empty. The system `python3` has no NumPy.
+The sandbox is Linux with no Windows, no GPU, no models and no Photoshop. It is recreated often - also in
+the middle of a turn - and `/tmp` is then empty. The system `python3` has no NumPy.
+
+A recreated sandbox can come back at an OLDER state of the branch, with the folder `CleanVinylPro/` (666 MB,
+the original program of the base commit) in the root. Only what was pushed is safe. To get back:
+
+```bash
+git fetch origin && git reset --mixed origin/<the session branch> && git status --short
+rm -rf CleanVinylPro        # the stray copy of the original program; never commit it
+```
+
+Then build the environment below again. Push work in progress after every finished step for that reason.
 
 ```bash
 # once per sandbox
@@ -412,17 +542,25 @@ python3 -m venv /tmp/cvenv
 /tmp/cvenv/bin/pip install numpy opencv-python-headless fastapi uvicorn httpx Pillow
 npm install --prefix tests jsdom@24      # for the panel test; the folder is git-ignored
 
-# the checks: the quick run takes about 15 minutes and ends with "ALL CHECKS PASSED"
+# the checks: the quick run takes about 17 to 23 minutes and ends with "ALL CHECKS PASSED"
 /tmp/cvenv/bin/python tests/run_checks.py
 /tmp/cvenv/bin/python tests/run_checks.py install bat    # only the groups named
 /tmp/cvenv/bin/python tests/run_checks.py --full         # more random cases
+
+# the deliberate defects of the latest version: about 11 minutes; it patches engine.py / server.py in place
+/tmp/cvenv/bin/python tests/try_defects.py               # ends with "N of N defects caught"
+/tmp/cvenv/bin/python tests/try_defects.py panel:        # only the defects of the panel (a minute, on a copy)
+/tmp/cvenv/bin/python tests/try_defects.py --list
 
 # after ANY change inside CleanVinylPro2: the .ccx first, because it is inside the ZIP
 python3 tools/build_ccx.py && python3 tools/build_zip.py
 python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
 ```
 
-- Run the 15-minute check in the background and poll it; a single blocking wait times out.
+- Run the full check and the deliberate defects in the background (`start_process`, output to a file in
+  `/tmp`) and wait for the exit; a single blocking command times out. While either runs, do not edit
+  anything under `CleanVinylPro2/` or `tests/`, do not build and do not `git add -A`: the checks read the
+  files when each group starts, and the defects runner holds a deliberate defect in the working tree.
 - The comparisons with v3.2.1 (`process`, `session`, `http`) load the old engine and server from
   `tests/baseline_v321/`. If that folder is missing they are skipped and the group `server` fails.
 - No real AI models here, so what the person-matting model returns is faked (`FakeMatting`). To try something
@@ -439,6 +577,12 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
 - **Version number:** it lives in `server/server.py` (`APP_VERSION`), `uxp-plugin/manifest.json`,
   `uxp-plugin/main.js` (`PLUGIN_VERSION`), the `echo` lines of `install_windows.bat`, `start_gpu_server.bat`
   and `restart_gpu_server.bat`, and the manual. The group `server` fails if they disagree.
+  `start_gpu_server.bat` also compares the version of a running server in two Python one-liners
+  (`d.get('version')=='X'`). In the three `.bat` the old number stands in 1, 1 and 6 places and nowhere
+  else: replace it as bytes, so that CRLF stays. `README.md` (link and number) and the manual (title, the
+  update heading, a new «ЩО ЗМІНИЛОСЯ» block, section 5) are done by hand.
+- **The manual** is CRLF with lines of at most 80 characters; patch it with exact replacements that keep
+  both, and check the longest line afterwards.
 - **The owner's photos** arrive in `/tmp/arena-coding-uploads/`. They show his clients: never commit them and
   never publish previews made from them. `_local/` is git-ignored for such experiments.
 
@@ -457,6 +601,14 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
 - Useful numbers for a tone stage: what is left of a known stain pattern; depth of shadows before and after;
   growth of the gradient of the low-passed frame (new edges); change of a row profile across a slope of light.
 - Do not open a picture in the same step that writes it: the viewer shows the previous file.
+- Brush strokes on his frames are made by script, the way `check_brush` in `tests/run_checks.py` does it:
+  `r = eng.start_session(image, 8, params)`, then
+  `eng.edit_session_mask(r["session_id"], "stroke", [{"x": 0.5, "y": 0.5, "norm": 1}, ...], radius, erase,
+  False, 45.0, softness)` (radius in window pixels, softness 1 / 0) and
+  `eng.apply_session(r["session_id"], 100.0, False, False, 45.0)[0]` for the layer (RGBA). `"reset_auto"`
+  as the operation takes all strokes back. Compare the layer with the layer without the stroke, look at
+  the pair at five-fold contrast, and compare the window picture (`comp_jpg_b64` of the answer) with the
+  reduced layer.
 
 ### Traps already paid for
 
@@ -524,8 +676,35 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   replacement, runs the group the defect belongs to, restores the file and logs caught / not caught) and
   close the holes it shows. Replace its list when you add rules. Do not edit the program files or build
   while it runs: it patches them in place.
-- `_local/` and `/tmp` do not survive a new sandbox; the working tree does. Whatever the next session
-  needs - a runner, release notes, a probe - belongs in the repository or in this file.
+- `_local/`, `/tmp` and every commit that was not pushed do not survive a new sandbox; the working tree
+  comes back at an older pushed state (top of this section). Whatever the next session needs - a runner,
+  release notes, a probe - belongs in the repository or in this file, pushed.
+- The brush (4.7.0), ways that were tried and dropped - do not go back to them:
+  - looking for "most of the surroundings" with the wide tolerance (`BRUSH_MOST_TOL`): a plane tilted across
+    the two sides of a shadow edge passes for one uneven surface, and a stroke along the edge smears it
+    (+9.9 / -10.2 levels on a drawn frame). The slope is found with the narrow `BRUSH_FIT_TOL` (`_even_part`);
+  - rules that switch at one number: a stroke across the shadow of a hand on his grey frame had shares of
+    0.73 and 0.236 against limits of 0.55 and 0.25 and ate into the shadow (largest change 32). And the
+    window and the layer, which work on copies of different size, landed on different sides of a limit.
+    Hence the pairs and `_ramp`;
+  - taking the tone of a zone from the strip that is left around the people when the whole backdrop is
+    painted: mean change 37 levels on his frame 1, and a stand in the zone became a dark smear (213);
+  - a zone that ends sharply at the person stands there in a tone of its own (a halo); one that takes its
+    tone from the strip next to the person spreads the contact shadow of a foot over the whole zone;
+  - raising the floor of the tone sigma to keep more grain in the window pictures gives next to nothing.
+- Measuring grain inside a painted zone at the size of the window: specks of 3 px fall into the edge band
+  at the reduced scale and look like "grain 0.78 in the core, 3.42 in the band". That was the probe.
+- A debug copy of the engine with prints: `sys.path.insert(0, <its folder>)` works only AFTER
+  `import harness`, which puts the server folder first. And never leave such a copy where it can be
+  imported as the engine.
+- A deliberate defect is "caught" only if the same command passes without it IN THE SAME SETTING. The first
+  run of the panel defects reported all 11 caught, in 0 s each: the copy of the plugin folder lacked
+  `server/presets_defaults.json`, which the window test reads next to the plugin, and the test crashed
+  before any scenario. `tests/try_defects.py` now runs the panel tests on an untouched copy first. Read
+  the reason printed after "<-": a stack trace there is a crash, not a catch.
+- A panel scenario that needs a user preset: add it with `env.state(...)`. A `disk["presets_local.json"]`
+  that holds only that preset leaves the built-in ones out, and the automatic preset then offers 6 sets
+  instead of 8.
 - A check run tests the engine as it was when the run STARTED (the module is imported once). After the last
   edit, run the groups again.
 - The search for defects always works at the "quality" size (`fast_mode=False` in `process` and in
@@ -606,5 +785,8 @@ Read this twice. The owner lost two days because a download link died.
       ```
 
    5. give him that one link in the chat, and update the link and version in `README.md`.
+   6. bring pull request #1 up to date through the API (`gh pr edit` fails here, section 4): the version in
+      its title and in its first list, and a new «Версія X.Y.Z» paragraph above the older ones. Keep it
+      open.
 6. Ask before anything that changes what the public sees in a new way. He agreed to the branch, the releases
    and merging into `main`; he has not been asked about anything else.

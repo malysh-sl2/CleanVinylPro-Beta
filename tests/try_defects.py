@@ -124,11 +124,18 @@ def _label(groups) -> str:
     return groups if isinstance(groups, str) else groups[0]
 
 
+def _plugin_copy(tmp):
+    """A copy of the plugin folder inside tmp, with the one file of the server that the window test reads next to it."""
+    copy = os.path.join(tmp, "uxp-plugin")
+    shutil.copytree(os.path.join(ROOT, PLUGIN), copy)
+    os.makedirs(os.path.join(tmp, "server"))
+    shutil.copy2(os.path.join(ROOT, "CleanVinylPro2", "server", "presets_defaults.json"), os.path.join(tmp, "server"))
+    return copy
+
+
 def _run_panel_tests(plugin_dir, text):
     """(exit code, output) of the settings test and of the window scenarios named `text`, on the plugin in plugin_dir."""
-    env = dict(os.environ)
-    if plugin_dir:
-        env["CV_PLUGIN_DIR"] = plugin_dir
+    env = dict(os.environ, CV_PLUGIN_DIR=plugin_dir)
     code, out = 0, ""
     for test, args in ((PANEL_TESTS[0], []), (PANEL_TESTS[1], [text])):
         try:
@@ -150,8 +157,12 @@ def main() -> int:
             print(f"{_label(groups):8s} {name}   [{rel}]")
         return 0
     for text in sorted({d[1][1] for d in chosen if not isinstance(d[1], str)}):
-        # a defect of the panel counts as caught only if the same tests pass without it
-        code, out = _run_panel_tests(None, text)
+        # a defect of the panel counts as caught only if the same tests pass without it, on such a copy
+        tmp = tempfile.mkdtemp(prefix="cv_panel_")
+        try:
+            code, out = _run_panel_tests(_plugin_copy(tmp), text)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
         if code is None:
             print(f"the panel tests cannot run here ({out[:200]}). Nothing was changed.")
             return 2
@@ -187,8 +198,7 @@ def main() -> int:
             else:  # the panel: the defect goes into a copy of the plugin folder
                 tmp = tempfile.mkdtemp(prefix="cv_panel_")
                 try:
-                    copy = os.path.join(tmp, "uxp-plugin")
-                    shutil.copytree(os.path.join(ROOT, PLUGIN), copy)
+                    copy = _plugin_copy(tmp)
                     with open(os.path.join(copy, os.path.relpath(rel, PLUGIN)), "w", encoding="utf-8", newline="") as f:
                         f.write(texts[rel].replace(old, new))
                     code, out = _run_panel_tests(copy, groups[1])

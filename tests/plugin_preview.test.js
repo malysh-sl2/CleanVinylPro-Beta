@@ -1586,8 +1586,10 @@ async function main() {
       expect(env.doc.getElementById("dlgSpeedPill") === null && !/Швидкий|Якісний/.test(env.doc.body.textContent),
         "the speed button and its two names must be gone from the window");
       expect(env.state("speedMode") === "quality" && env.state("buildSettingsSnapshot().speedMode") === "quality", "one mode: " + env.state("speedMode"));
-      // a preset of the user's own, saved by an older version while the fast mode was on
+      // presets saved by an older version while the fast mode was on: the built-in ones that the user saved again
+      // (the automatic preset offers them to the server) and one of the user's own
       env.state(`(function () {
+        presetsList.forEach((p) => { p.cfg.speedMode = "fast"; });
         presetsList.push({ id: "usr_fast", name: "Мій швидкий", color: "#54d182", builtin: false, cfg: Object.assign({}, presetsList[0].cfg, { spots: 41, speedMode: "fast" }) });
         renderPresets();
       })()`);
