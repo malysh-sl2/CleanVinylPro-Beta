@@ -4271,26 +4271,32 @@ class CleanVinylEngine:
     # The tone of a painted zone is taken from the backdrop right around it - from most of it. "Right around":
     # within BRUSH_RING of the size of the zone; a dab inside a shadow is surrounded by shadow and stays shadow,
     # however much lit floor lies farther out. "Most": the largest part of that ring that lies on one even slope,
-    # give or take BRUSH_MOST_TOL of the tone. When it is at least BRUSH_MOST of the ring, the rest of the ring - a
-    # shadow that the stroke runs into, a thing nobody outlined - is not what the zone is made like: whatever is
+    # give or take BRUSH_MOST_TOL of the tone (_even_part; the slope itself is found with the narrower
+    # BRUSH_FIT_TOL, see there). When it is a large enough share of the ring (BRUSH_MOST), the rest of the ring -
+    # a shadow that the stroke touches, a thing nobody outlined - is not what the zone is made like: whatever is
     # farther from that slope than BRUSH_ODD_K spreads of the even part (at least BRUSH_ODD_FLOOR of the tone)
     # is left out. Without this a stroke under a foot took the shadows next to the foot for its tone and came out
-    # 7-14 levels darker than the floor had been (his frame 1).
-    # Where no part of the ring is "most", two cases. The ring is of two kinds - a second even part, apart from
-    # the first, holds BRUSH_SECOND of it (a stroke along the edge of a shadow): the brush cannot know which of
-    # the two the zone should become, and a slope from one to the other would smear the edge - a dark blob in
-    # the lit floor on his grey frame. The tone of the zone is then left as it is; only its grain and fine dirt
-    # are renewed. Otherwise the ring is simply uneven (a dirty floor): all of it counts and the zone is a smooth
-    # surface between its parts.
-    # The tone also stays where there is next to no ring at all: the known backdrop around the zone is less than
-    # BRUSH_RING_MIN of the zone itself (the whole backdrop was painted over; what is left is a strip around the
-    # people). A zone at the frame border or in a corner of the frame has about half of its own size around it.
-    # In such a zone the studio gear stays too: there is no backdrop tone to paint it away with.
+    # 7-14 levels darker than the floor had been (his frame 1). Where no part of the ring is "most", the ring is
+    # simply uneven (a dirty floor): all of it counts and the zone is a smooth surface between its parts.
+    # The ring can be of two kinds: a second even part with a slope of its own, apart from the first, holds a
+    # share of it (BRUSH_SECOND) - the stroke crosses the edge of a shadow or runs along it. The brush cannot
+    # know which of the two the zone should become; a slope from one to the other smears the edge (a dark blob in
+    # the lit floor on his grey frame), and making the zone like the larger kind eats into the other one. The
+    # tone of the zone is then left as it is; only its grain and fine dirt are renewed.
+    # The tone also stays where there is next to no ring at all: the known backdrop around the zone is a small
+    # share of the zone itself (BRUSH_RING_MIN; the whole backdrop was painted over, what is left is a strip
+    # around the people). A zone at the frame border or in a corner of the frame has about half of its own size
+    # around it. In such a zone the studio gear stays too: there is no backdrop tone to paint it away with.
+    # Each of the three shares is a pair: nothing of the rule below the first number, all of it from the second
+    # on, a gradual change between them (_ramp). A rule that switched at one number gave two different pictures
+    # for nearly the same stroke - and the window and the layer, which work on copies of different size, could
+    # land on different sides of it.
     BRUSH_RING = 0.2
-    BRUSH_RING_MIN = 0.15
-    BRUSH_MOST = 0.55
+    BRUSH_RING_MIN = (0.10, 0.20)
+    BRUSH_MOST = (0.45, 0.65)
     BRUSH_MOST_TOL = 0.04
-    BRUSH_SECOND = 0.25
+    BRUSH_FIT_TOL = 0.015
+    BRUSH_SECOND = (0.10, 0.25)
     BRUSH_ODD_K = 3.0
     BRUSH_ODD_FLOOR = 0.012
 
@@ -4500,6 +4506,56 @@ class CleanVinylEngine:
                 done += 1
         return done
 
+    @staticmethod
+    def _ramp(x: float, lo: float, hi: float) -> float:
+        """0 up to `lo`, 1 from `hi` on, a smooth step between them."""
+        t = min(1.0, max(0.0, (float(x) - lo) / max(hi - lo, 1e-9)))
+        return t * t * (3.0 - 2.0 * t)
+
+    @staticmethod
+    def _even_part(plane: np.ndarray, tone: np.ndarray, cand: np.ndarray, tol_fit: float, tol: float):
+        """
+        The largest part of the ring points `cand` that lies on one even slope.
+        plane: N x 3 (1, x, y) of every ring point; tone: N; cand: N bool.
+        Returns (members, off) or None: members - the points of `cand` within `tol` of the slope; off - how far every
+        ring point is from it.
+
+        The slope is the plane with the most points within the narrow `tol_fit`, found from two starts - the plane
+        through everything, and the most common tone. The wide `tol` cannot find it: a plane tilted across the two
+        sides of a shadow edge passes within it through the middle of both sides and holds as many points as either
+        side does - the ring of two kinds then counted as one uneven surface and the edge was smeared, and a stroke
+        that only touched a shadow counted as lying half in it. Within the narrow band such a plane keeps a thin
+        strip of each side, while the plane of one side keeps the whole side.
+        """
+        idx = np.flatnonzero(cand)
+        if idx.size < 12:
+            return None
+        pl, tn = plane[idx], tone[idx]
+
+        def densest(v):
+            order = np.sort(v)
+            count = np.searchsorted(order, order + 2.0 * tol_fit, side="right") - np.arange(order.size)
+            lo = float(order[int(np.argmax(count))])
+            return (v >= lo) & (v <= lo + 2.0 * tol_fit)
+
+        best = None
+        for sel in (np.ones(tn.size, dtype=bool), densest(tn)):
+            for _ in range(8):
+                if int(sel.sum()) < 12:
+                    break
+                pick = densest(tn - pl @ np.linalg.lstsq(pl[sel], tn[sel], rcond=None)[0])
+                if int(pick.sum()) < 12 or np.array_equal(pick, sel):
+                    break
+                sel = pick
+            if int(sel.sum()) >= 12 and (best is None or int(sel.sum()) > int(best.sum())):
+                best = sel
+        if best is None:
+            return None
+        coef = np.linalg.lstsq(pl[best], tn[best], rcond=None)[0]
+        off = tone - plane @ coef
+        off -= float(np.median(off[idx[best]]))
+        return cand & (np.abs(off) <= tol), off
+
     def _brush_fill_zone(self, img_r: np.ndarray, a_u8: np.ndarray, own: np.ndarray, solid_u8: np.ndarray | None,
                          px_scale: float, origin: tuple, seed: int) -> bool:
         """
@@ -4560,7 +4616,8 @@ class CleanVinylEngine:
         reach = max(6.0, self.BRUSH_RING * max(zr[-1] - zr[0] + 1, zc[-1] - zc[0] + 1))
         away = cv2.distanceTransform((zone_s == 0).astype(np.uint8), cv2.DIST_L2, 3)
         kn = np.flatnonzero(((known > 0) & (away <= reach)).ravel())
-        lone = kn.size < self.BRUSH_RING_MIN * int(np.count_nonzero(zone_s))  # (see BRUSH_RING_MIN)
+        # (see BRUSH_RING_MIN) 1: next to nothing is left around the zone
+        lone = 1.0 - self._ramp(kn.size / max(1.0, float(np.count_nonzero(zone_s))), *self.BRUSH_RING_MIN)
         if kn.size < 50:
             kn = np.flatnonzero(known.ravel() > 0)
         del away
@@ -4568,54 +4625,53 @@ class CleanVinylEngine:
             kn = kn[:: int(np.ceil(kn.size / 20000.0))]
         design = np.stack([b.ravel()[kn] for b in basis], axis=1)
         target = lp_src.reshape(-1, lp_src.shape[2])[kn].astype(np.float64)
-        # The surface is fitted to "most" of the ring (see BRUSH_MOST): a plane through all of it first; then, a few
-        # times over, the densest band of tones around the plane is taken and the plane is laid through that band.
+        # The surface is fitted to "most" of the ring (see BRUSH_MOST).
         tone = target.mean(axis=1)
         level = max(abs(float(np.median(tone))), 1e-9)
         tol = self.BRUSH_MOST_TOL * level
+        tol_fit = self.BRUSH_FIT_TOL * level
         plane = design[:, :3]
-        usual = np.ones(tone.size, dtype=bool)
-        for _ in range(6):
-            resid = tone - plane @ np.linalg.lstsq(plane[usual], tone[usual], rcond=None)[0]
-            order = np.sort(resid)
-            count = np.searchsorted(order, order + 2.0 * tol, side="right") - np.arange(order.size)
-            lo = float(order[int(np.argmax(count))])
-            pick = (resid >= lo) & (resid <= lo + 2.0 * tol)
-            if int(pick.sum()) < 12 or np.array_equal(pick, usual):
-                break
-            usual = pick
-        two_kinds = False
-        if float(usual.mean()) < self.BRUSH_MOST:
-            # no part of the ring is "most". Is there a second even part, apart from the first?
-            resid = tone - plane @ np.linalg.lstsq(plane[usual], tone[usual], rcond=None)[0]
-            rest = np.sort(resid[~usual])
-            if rest.size:
-                count = np.searchsorted(rest, rest + 2.0 * tol, side="right") - np.arange(rest.size)
-                best = int(np.argmax(count))
-                first = float(np.median(resid[usual]))
-                two_kinds = (count[best] >= self.BRUSH_SECOND * tone.size
-                             and abs(float(rest[best]) + tol - first) > 3.0 * tol)
-            usual = np.ones(tone.size, dtype=bool)  # all of the ring counts
-        coef = np.linalg.lstsq(design[usual], target[usual], rcond=None)[0]
-        trend = np.tensordot(np.stack(basis, axis=2), coef, axes=([2], [0])).astype(np.float32)
-        if not usual.all():
-            resid = tone - (design @ coef).mean(axis=1)
-            spread = max(1.4826 * float(np.median(np.abs(resid[usual] - np.median(resid[usual])))),
-                         self.BRUSH_ODD_FLOOR * level)
-            odd = np.abs((lp_src - trend).mean(axis=2) - float(np.median(resid[usual]))) > self.BRUSH_ODD_K * spread
-            known = known * (~odd)
-        del basis, design, gx, gy
-        rest = self._smooth_fill(lp_src - trend, known)
-        if rest is None:
+        everything = np.ones(tone.size, dtype=bool)
+        first = self._even_part(plane, tone, everything, tol_fit, tol)
+        usual = first[0] if first is not None else everything
+        most = self._ramp(float(usual.mean()), *self.BRUSH_MOST)  # how far the rest of the ring is left out
+        keep = lone                                               # how far the tone of the zone stays as it is
+        if first is not None and not usual.all():
+            # is there a second even part, apart from the first?
+            second = self._even_part(plane, tone, ~usual, tol_fit, tol)
+            if second is not None and float(np.median(np.abs(first[1][second[0]]))) > 3.0 * tol:
+                keep = max(keep, self._ramp(float(second[0].mean()), *self.BRUSH_SECOND))
+        shapes = np.stack(basis, axis=2)
+
+        def surface(part):
+            """The tone of the zone continued from the ring points `part`; None: nothing to continue it from."""
+            coef = np.linalg.lstsq(design[part], target[part], rcond=None)[0]
+            trend = np.tensordot(shapes, coef, axes=([2], [0])).astype(np.float32)
+            src_ok = known
+            if not part.all():
+                resid = tone - (design @ coef).mean(axis=1)
+                spread = max(1.4826 * float(np.median(np.abs(resid[part] - np.median(resid[part])))),
+                             self.BRUSH_ODD_FLOOR * level)
+                odd = np.abs((lp_src - trend).mean(axis=2) - float(np.median(resid[part]))) > self.BRUSH_ODD_K * spread
+                src_ok = known * (~odd)
+            rest = self._smooth_fill(lp_src - trend, src_ok)
+            return None if rest is None else trend + rest
+
+        fill_s = surface(usual) if most > 0.001 else None
+        if fill_s is None or most < 0.999:
+            whole = surface(everything)  # all of the ring counts
+            if whole is not None:
+                fill_s = whole if fill_s is None else most * fill_s + (1.0 - most) * whole
+            del whole
+        del basis, shapes, design, gx, gy
+        if fill_s is None:
             return False
-        fill_s = trend + rest
-        del trend, rest
         bd = 1.0 - p_s
         nb = blur(bd)
         lp_s = blur(small * bd[..., None]) / np.maximum(nb, 1e-4)[..., None]
         lp_s = np.where((nb > 0.05)[..., None], lp_s, fill_s).astype(np.float32)
-        if two_kinds or lone:
-            fill_s = lp_s  # the tone stays (see BRUSH_SECOND, BRUSH_RING_MIN)
+        if keep > 0.001:
+            fill_s = keep * lp_s + (1.0 - keep) * fill_s  # (see BRUSH_SECOND, BRUSH_RING_MIN)
         del lp_src, small
 
         sx, sy = ws / float(Wr), hs / float(Hr)
@@ -4679,8 +4735,8 @@ class CleanVinylEngine:
             c0, c1 = int(cols[0]), int(cols[-1]) + 1
             sel = sel[:, c0:c1]
             a = a_u8[r0:r1, c0:c1].astype(np.float32) * (1.0 / 255.0) * sel
-            if lone:
-                a *= 1.0 - prot[r0:r1, c0:c1]
+            if lone > 0.001:
+                a *= 1.0 - lone * prot[r0:r1, c0:c1]
             lp_b = up(lp_s, r0, r1)[:, c0:c1]
             fill_b = up(fill_s, r0, r1)[:, c0:c1]
             dst = img_r[r0:r1, c0:c1]

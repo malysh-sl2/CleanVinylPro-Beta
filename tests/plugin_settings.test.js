@@ -8,7 +8,9 @@
 //     made once, only where the stored value is still the former default, never in the user's own presets;
 //   - the built-in presets added by a new version (4.5.0: three dark presets by framing) land under the preset
 //     they follow, once, and never come back after the user deleted them;
-//   - the automatic preset knows the dark framings.
+//   - the automatic preset knows the dark framings;
+//   - 4.7.0: the edge of the brush and the eraser (soft unless a file says otherwise) is read and written back; the
+//     speed mode of an older file is not read - the file written back names the one mode that is left.
 //   node tests/plugin_settings.test.js
 const fs = require("fs");
 const path = require("path");
@@ -32,9 +34,11 @@ if (!consts) throw new Error("idle-unload constants block not found in main.js")
 
 const code = `
 ${consts[0]}
-let activePresetId = "std", speedMode = "fast", makeMaskDefault = false, fracAuto = true, fracAutoUser = true, autoPreset = true;
+const speedMode = "quality";
+let activePresetId = "std", makeMaskDefault = false, fracAuto = true, fracAutoUser = true, autoPreset = true;
 let deletedDefaultIds = [], knownDefaultIds = [], presetsList = [], appliedPresetMoves = [];
-const sessState = { brushSize: 24 };
+const sessState = { brushSize: 24, brushSoft: true };
+function sayInWindow() {}
 const pills = [30, 120, 300, 0].map((sec) => ({ dataset: { sec: String(sec) }, active: sec === 120 }));
 pills.forEach((p) => (p.classList = { toggle: (cls, on) => (p.active = on) }));
 function el(id) { return id === "gIdlePills" ? { querySelectorAll: () => pills } : null; }
@@ -43,12 +47,15 @@ function readCurrentConfig() { return {}; }
 function applyConfig() {}
 ${grab("setIdleUnloadSec")}
 ${grab("setAutoPreset")}
+${grab("updateBrushEdgeUI")}
+${grab("setBrushSoft")}
 ${grab("buildSettingsSnapshot")}
 ${grab("applySettingsSnapshot")}
 module.exports = function run(snapshot) {
   idleUnloadSec = DEFAULT_IDLE_UNLOAD_SEC;
   settingsMigrated = false;
   fracAuto = fracAutoUser = autoPreset = true;
+  sessState.brushSoft = true;
   pills.forEach((p) => (p.active = Number(p.dataset.sec) === 120));
   applySettingsSnapshot(snapshot);
   return {
@@ -105,6 +112,21 @@ for (const [name, snapshot, expAutoPreset, expUser, expNow] of newKeys) {
     console.log("FAIL " + name + " -> " + JSON.stringify(r.saved));
   }
 }
+// [name, saved file, expected in the file written back: brushSoft, speedMode]
+const brushKeys = [
+  ["nothing saved yet: the soft edge", {}, true],
+  ["a file of 4.6.0 (no word of the edge, fast mode): soft edge, the one mode", { schemaVersion: 5, speedMode: "fast", brushSize: 40 }, true],
+  ["the hard edge was chosen", { schemaVersion: 5, speedMode: "quality", brushSoft: false }, false],
+  ["the soft edge was chosen", { schemaVersion: 5, brushSoft: true }, true],
+  ["a broken value is ignored", { schemaVersion: 5, brushSoft: "hard", speedMode: 7 }, true]
+];
+for (const [name, snapshot, expSoft] of brushKeys) {
+  const r = run(snapshot);
+  if (r.saved.brushSoft !== expSoft || r.saved.speedMode !== "quality") {
+    failed++;
+    console.log("FAIL " + name + " -> " + JSON.stringify(r.saved));
+  }
+}
 // ------------------------------------------------------------------ one-time moves of changed preset defaults
 const movesConst = src.match(/const PRESET_DEFAULT_MOVES = \[[\s\S]*?\n\];\n/);
 if (!movesConst) throw new Error("PRESET_DEFAULT_MOVES not found in main.js");
@@ -113,7 +135,8 @@ if (!switchesConst) throw new Error("PRESET_SWITCHES not found in main.js");
 const movesCode = `
 ${movesConst[0]}
 ${switchesConst[0]}
-let activePresetId = "std", speedMode = "fast", makeMaskDefault = false, fracAuto = true, fracAutoUser = true, autoPreset = true;
+const speedMode = "quality";
+let activePresetId = "std", makeMaskDefault = false, fracAuto = true, fracAutoUser = true, autoPreset = true;
 let idleUnloadSec = 120, settingsMigrated = false, smokeEnabled = true;
 const DEFAULT_IDLE_UNLOAD_SEC = 120, LEGACY_IDLE_UNLOAD_SEC = 30, SETTINGS_SCHEMA_VERSION = 5;
 let deletedDefaultIds = [], knownDefaultIds = [], presetsList = [], appliedPresetMoves = [];
@@ -309,6 +332,6 @@ moveCase("...a deleted dark preset is simply not offered (the server then takes 
 moveCase("a preset that does not say whether smoke is protected: it is not", sceneApi.norm({}).smokeOn === false &&
   sceneApi.norm({ smokeOn: true }).smokeOn === true && sceneApi.norm({ smokeOn: false }).smokeOn === false, sceneApi.norm({}));
 
-const total = cases.length + newKeys.length + moveCases;
+const total = cases.length + newKeys.length + brushKeys.length + moveCases;
 console.log(failed ? `plugin settings migration: ${failed} of ${total} cases FAILED` : `plugin settings migration: ${total} cases pass`);
 process.exit(failed ? 1 : 0);

@@ -16,7 +16,11 @@
 //   - "Скинути пресет" gives one built-in preset the values it ships with, after a second press;
 //   - the backup of the settings: saved through the server, listed, restored after a second click, with a copy of
 //     what was there before;
-//   - a dark backdrop takes the dark preset of its framing.
+//   - a dark backdrop takes the dark preset of its framing;
+//   - one mode: there is no speed button, and every request asks for the full AI fill, whatever settings and
+//     presets of an older version say;
+//   - the edge of the brush and the eraser: soft unless the user chose the hard one; the choice travels with every
+//     stroke and is kept with the settings.
 //
 //   node tests/plugin_preview.test.js
 //   node tests/plugin_preview.test.js "preset click" remembered     (only the scenarios whose name has one of the texts)
@@ -560,19 +564,17 @@ async function main() {
     expect(env.recomputes().length === 4, "no further recompute after AUTO was answered");
   });
 
-  await scenario("speed mode and the 'exact preview' button recompute in full, with the progress card", { recomputeDelay: 300 }, async (env, expect) => {
+  await scenario("the 'exact preview' button recomputes in full, with the progress card", { recomputeDelay: 300 }, async (env, expect) => {
     await env.open();
-    env.click("dlgSpeedPill");
-    await sleep(150);
-    expect(env.progressCardVisible(), "the progress card must be shown for a full recompute");
-    await env.settle(600);
     env.click("dlgBtnGear");
     env.click("gBtnRecompute");
+    await sleep(150);
+    expect(env.progressCardVisible(), "the progress card must be shown for a full recompute");
     await env.settle(700);
     const rs = env.recomputes();
-    expect(rs.length === 2, `two recomputes expected, got ${rs.length}`);
-    expect(rs.every((r) => r.body.quick === undefined && typeof r.body.jobId === "string"), "both must be full recomputes with a progress job");
-    if (rs[0]) expect(rs[0].body.params.speedMode === "quality", "the first must switch to the quality mode");
+    expect(rs.length === 1, `one recompute expected, got ${rs.length}`);
+    expect(rs.every((r) => r.body.quick === undefined && typeof r.body.jobId === "string"), "it must be a full recompute with a progress job");
+    if (rs[0]) expect(rs[0].body.params.speedMode === "quality", "the full AI fill must be asked for");
     expect(!env.progressCardVisible(), "the progress card must be hidden afterwards");
     expect(!env.el("dlgGearPopover").classList.contains("visible"), "the exact preview closes the settings popover");
     expect(env.badge() === "", "badge hidden: " + env.badge());
@@ -680,7 +682,8 @@ async function main() {
 
   await scenario("'Скасувати' on the progress card stops a full recompute and keeps the window", { recomputeDelay: 800 }, async (env, expect) => {
     await env.open();
-    env.click("dlgSpeedPill");
+    env.click("dlgBtnGear");
+    env.click("gBtnRecompute");
     await sleep(200);
     env.click("dlgBtnCancelScan");
     await env.settle(1000);
@@ -837,7 +840,7 @@ async function main() {
       const start = env.of("/session/start")[0];
       const sp = start.body.scenePresets || {};
       expect(Object.keys(sp).sort().join() === "close,dark,dark_close,dark_medium,dark_wide,default,medium,wide", "eight sets must be sent, got " + Object.keys(sp).sort().join());
-      expect(sp.wide && sp.wide.spots === 85 && sp.wide.scuffs === 78 && sp.wide.edge === 66 && sp.wide.speedMode === "fast" && sp.wide.autoFractions === true,
+      expect(sp.wide && sp.wide.spots === 85 && sp.wide.scuffs === 78 && sp.wide.edge === 66 && sp.wide.speedMode === "quality" && sp.wide.autoFractions === true,
         "the 'wide' set must be the preset 'Дальній план': " + JSON.stringify(sp.wide));
       expect(sp.dark && sp.dark.spots === 80 && sp.close && sp.close.fracLarge === false && sp.close.autoFractions === false && sp.default && sp.default.spots === 75,
         "the other sets must be 'Темний ключ', 'Ближній план', 'Студія'");
@@ -1442,7 +1445,7 @@ async function main() {
       applyPreset(presetsList[0]);
       setAutoPreset(false);
       makeMaskDefault = true;
-      speedMode = "quality";
+      setBrushSoft(false, false);
       sessState.brushSize = 61;
       renderPresets();
       updateSliderVisuals();
@@ -1470,7 +1473,7 @@ async function main() {
       applyPreset(presetsList[0]);
       setAutoPreset(true);
       makeMaskDefault = false;
-      speedMode = "fast";
+      setBrushSoft(true, false);
       sessState.brushSize = 28;
       renderPresets();
       updateSliderVisuals();
@@ -1489,7 +1492,7 @@ async function main() {
     const reads = env.of("/backup/read");
     expect(reads.length === 1 && reads[0].body.file === env.server.backups[0].file, "the second click must read that backup");
     expect(env.state("JSON.stringify([presetsList, buildSettingsSnapshot()])") === kept, "the presets and the settings must be exactly as they were saved");
-    expect(env.state("autoPreset") === false && env.state("makeMaskDefault") === true && env.state("speedMode") === "quality" && env.state("sessState.brushSize") === 61 &&
+    expect(env.state("autoPreset") === false && env.state("makeMaskDefault") === true && env.state("sessState.brushSoft") === false && env.state("sessState.brushSize") === 61 &&
       env.state("activePresetId") === "usr_7" && env.state("deletedDefaultIds.join()") === "gentle", "the switches, the active preset and the deleted preset must be back");
     expect(env.state("getSliderVal('gSlSpots')") === 44 && env.el("dlgChkSmoke").checked && !env.el("dlgChkAutoPreset").checked && env.el("dlgChkMakeMask").checked &&
       env.el("dlgActivePresetName").textContent === "Мій сірий фон", "the controls must show it: " + env.el("dlgActivePresetName").textContent);
@@ -1574,6 +1577,104 @@ async function main() {
       "the controls of the active preset must follow");
     expect(env.server.disk["user_settings.json"].presetMoves.length === 4, "the moves must be remembered: " + JSON.stringify(env.server.disk["user_settings.json"].presetMoves));
   });
+
+  // ---------------------------------------------------------------- one mode; the edge of the brush and the eraser
+  await scenario("one mode: no speed button; settings and presets of an older version that say 'fast' change nothing",
+    { disk: { "user_settings.json": { schemaVersion: 5, speedMode: "fast", presetMoves: ["cyc65", "smokeOff", "lowkeySpots80", "lowkeyCyc65"] } },
+      scene: { kind: "wide", framing: "wide", dark: false } }, async (env, expect) => {
+      await sleep(500);
+      expect(env.doc.getElementById("dlgSpeedPill") === null && !/Швидкий|Якісний/.test(env.doc.body.textContent),
+        "the speed button and its two names must be gone from the window");
+      expect(env.state("speedMode") === "quality" && env.state("buildSettingsSnapshot().speedMode") === "quality", "one mode: " + env.state("speedMode"));
+      // a preset of the user's own, saved by an older version while the fast mode was on
+      env.state(`(function () {
+        presetsList.push({ id: "usr_fast", name: "Мій швидкий", color: "#54d182", builtin: false, cfg: Object.assign({}, presetsList[0].cfg, { spots: 41, speedMode: "fast" }) });
+        renderPresets();
+      })()`);
+      await env.open();
+      const start = env.of("/session/start")[0].body;
+      const sets = Object.keys(start.scenePresets || {});
+      expect(start.params.speedMode === "quality", "the first scan must ask for the full AI fill: " + start.params.speedMode);
+      expect(sets.length === 8 && sets.every((k) => start.scenePresets[k].speedMode === "quality"),
+        "every set offered to the automatic preset must ask for it too: " + sets.map((k) => k + "=" + start.scenePresets[k].speedMode).join());
+      env.click("dlgBtnPresets");
+      env.clickPreset("Мій швидкий");
+      await env.settle(800);
+      const rs = env.recomputes();
+      expect(rs.length === 1 && rs[0].body.params.spots === 41 && rs[0].body.params.speedMode === "quality",
+        "a preset saved with the fast mode must be sent with the full AI fill: " + JSON.stringify(rs.map((r) => [r.body.params.spots, r.body.params.speedMode])));
+      env.click("dlgBtnApply");
+      await env.settle(700);
+      const a = env.of("/session/apply");
+      expect(a.length === 1 && a[0].body.params && a[0].body.params.speedMode === "quality", "Apply must ask for the full AI fill");
+      expect(env.server.disk["user_settings.json"].speedMode === "quality", "the settings file must say it from now on: " + env.server.disk["user_settings.json"].speedMode);
+    });
+
+  await scenario("the edge of the brush and the eraser: soft unless the hard one is chosen; the choice goes with every stroke and is kept",
+    { disk: {} }, async (env, expect) => {
+      const lit = (id) => env.el(id).classList.contains("active");
+      const dots = () => Array.from(env.doc.querySelectorAll("#dlgStrokeDots .stroke-dot"));
+      const last = () => { const e = env.edits(); return e[e.length - 1].body; };
+      await env.open();
+      expect(env.state("sessState.brushSoft") === true && lit("dlgBrushSoft") && !lit("dlgBrushHard"), "a fresh installation: the soft edge is chosen");
+      env.press("dlgViewport", 100);                         // the eraser is the tool on start
+      expect(dots().length === 1 && dots()[0].style.opacity === "0.2", "the trace of a soft stroke is pale: " + dots().map((d) => d.style.opacity).join());
+      env.move(120);
+      env.release();
+      await env.settle(200);
+      expect(env.edits().length === 1 && last().op === "stroke" && last().erase === true && last().softness === 1,
+        "a soft eraser stroke must say so to the server: " + JSON.stringify([last().erase, last().softness]));
+      env.click("dlgBrushHard");
+      expect(env.state("sessState.brushSoft") === false && !lit("dlgBrushSoft") && lit("dlgBrushHard"), "the lower button chooses the hard edge");
+      expect(env.hint().includes("жорсткий"), "the window must say what was chosen: " + env.hint());
+      expect(env.edits().length === 1 && env.recomputes().length === 0, "choosing the edge asks the server for nothing");
+      env.press("dlgViewport", 100);
+      expect(dots().length === 1 && dots()[0].style.opacity === "0.65", "the trace of a hard stroke is solid: " + dots().map((d) => d.style.opacity).join());
+      env.move(120);
+      env.release();
+      await env.settle(200);
+      expect(env.edits().length === 2 && last().erase === true && last().softness === 0, "a hard eraser stroke: " + JSON.stringify([last().erase, last().softness]));
+      env.click("dlgToolBrush");
+      env.press("dlgViewport", 100);
+      env.move(120);
+      env.release();
+      await env.settle(200);
+      expect(env.edits().length === 3 && last().erase === false && last().softness === 0, "the brush has the same edge as the eraser: " + JSON.stringify([last().erase, last().softness]));
+      await env.settle(500);                                 // the settings are saved a moment after the click
+      expect(env.server.disk["user_settings.json"] && env.server.disk["user_settings.json"].brushSoft === false,
+        "the choice must be written into the settings: " + JSON.stringify(env.server.disk["user_settings.json"] && env.server.disk["user_settings.json"].brushSoft));
+      env.click("dlgBrushSoft");
+      expect(env.state("sessState.brushSoft") === true && lit("dlgBrushSoft") && !lit("dlgBrushHard") && env.hint().includes("м’який"), "the upper button brings the soft edge back: " + env.hint());
+      env.press("dlgViewport", 100);
+      env.move(120);
+      env.release();
+      await env.settle(200);
+      expect(env.edits().length === 4 && last().softness === 1, "the next stroke is soft again");
+      env.el("retouchModal").close("cancel");               // a window opened again shows the choice that was made
+      await env.waitFor(() => env.state("isBusy") === false);
+      env.click("dlgBrushHard");
+      await env.open();
+      expect(lit("dlgBrushHard") && !lit("dlgBrushSoft"), "a new window must show the edge that is chosen");
+    });
+
+  await scenario("the hard edge kept in the settings is there after Photoshop is started again",
+    { disk: { "user_settings.json": { schemaVersion: 5, brushSoft: false, brushSize: 40, presetMoves: ["cyc65", "smokeOff", "lowkeySpots80", "lowkeyCyc65"] } } }, async (env, expect) => {
+      await sleep(500);
+      expect(env.state("sessState.brushSoft") === false && env.state("sessState.brushSize") === 40, "the settings must bring the hard edge back");
+      await env.open();
+      expect(env.el("dlgBrushHard").classList.contains("active") && !env.el("dlgBrushSoft").classList.contains("active"), "the window must show it");
+      env.press("dlgViewport", 100);
+      env.move(120);
+      env.release();
+      await env.settle(200);
+      expect(env.edits().length === 1 && env.edits()[0].body.softness === 0 && env.edits()[0].body.radius_px === 40, "...and the strokes must have it");
+    });
+
+  await scenario("settings of an older version say nothing of the edge: it is soft",
+    { disk: { "user_settings.json": { schemaVersion: 5, brushSize: 52, presetMoves: ["cyc65", "smokeOff", "lowkeySpots80", "lowkeyCyc65"] } } }, async (env, expect) => {
+      await sleep(500);
+      expect(env.state("sessState.brushSoft") === true && env.state("sessState.brushSize") === 52, "soft, with the brush size that was saved");
+    });
 
   const failed = results.filter((r) => r.problems.length);
   if (!results.length) {

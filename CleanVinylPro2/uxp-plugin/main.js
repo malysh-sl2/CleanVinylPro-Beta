@@ -102,7 +102,11 @@ let fracAutoUser = true;  // ...and as the user left it (a preset that names its
 let autoPreset = true;    // pick the preset that suits the frame every time the big window opens
 let dressSmoothEnabled = false;
 let cleanPasses = 1;
-let speedMode = "fast";
+// How the found defects are closed. One way is left: the full AI fill (what used to be the mode "✦ Якісний").
+// The fast mode and its button were removed in 4.7.0 at the owner's request; a "fast" kept in settings or presets
+// that an older version saved is ignored. (The light preview after a slider move is still drawn the fast way by
+// the server - that is the server's own business and does not depend on this value.)
+const speedMode = "quality";
 // How long the AI models stay in GPU memory after the last job. 2 minutes: long enough to retouch the
 // result and come back for the next frame without paying for the model reload again.
 const DEFAULT_IDLE_UNLOAD_SEC = 120;
@@ -166,6 +170,9 @@ let sessState = {
   ph: 0,
   tool: "eraser", // default to Eraser on start so user can erase extra green immediately!
   brushSize: 28,
+  // The edge of the brush and the eraser: soft (a stroke fades out, no stripe and no sharp step) or hard (it ends
+  // about where the cursor circle is). Soft unless the user chose otherwise; kept with the settings.
+  brushSoft: true,
   // What the photo area shows: "result" - the cleaned photo (the window opens with it), "original" - the photo as
   // it was, "mask" - the cleaned photo under the red/green mask (green = will be cleaned). See setView().
   view: "result",
@@ -365,14 +372,14 @@ const USER_GUIDE_TIPS = [
   "💡 Кнопка «Маска»: яскраво-зелене — знайдені дефекти, блідо-зелене — фон, який вирівнюється. Гумка (E) стирає зайве зелене з одягу, взуття або тіней.",
   "💡 Розводи й сліди на підлозі вирівнюються аж до самих ніг, тіні лишаються. Лінію стіна–підлога прибирає «Циклорама»; щоб лишити її — поставте 0%.",
   "💡 Пресет підбирається сам під кадр: темний фон, ближній, середній план чи повний зріст. Іншої думки — виберіть свій у списку.",
-  "💡 Ctrl + Клік по іконці Пензля (B) заливає всю маску; Ctrl + Клік по Гумці (E) — повністю очищає маску.",
+  "💡 Ctrl + Клік по іконці Пензля (B) показує шар на всьому кадрі; Ctrl + Клік по Гумці (E) — повністю очищає маску.",
   "💡 Увімкніть іконку сукні зверху, щоб AI делікатно розгладив різкі складки на одязі без впливу на шкіру й волосся.",
   "💡 Натисніть квадратики фракцій знизу (Дрібна / Середня / Велика), щоб швидко вмикати або вимикати типи чистки.",
   "💡 Колесо миші масштабує фото, а Пробіл + мишка дає змогу плавно рухати кадр у наближенні.",
   "💡 Гарячі клавіші [ і ] миттєво зменшують або збільшують розмір пензля й гумки.",
   "💡 Поставте галочку «Make Mask» зверху, якщо хочете отримати у Photoshop редаговану маску шару.",
   "💡 Якщо на фоні є стійки, кабелі чи прилади — увімкніть їх видалення в налаштуваннях (шестигранник) або пресеті «Без стійок (AI)».",
-  "💡 Режим «⚡ Швидкий» очищає кадр за кілька секунд; «✦ Якісний» використовує повний прохід LaMa для складних сцен.",
+  "💡 Пензель і гумка мають м’який край — без смуги й різкого переходу. Потрібен чіткий край — нижній кружечок під розміром пензля.",
   "💡 Перегляд оновлюється сам, щойно відпустите повзунок. Повний розрахунок робиться один раз — коли натиснете «Застосувати»."
 ];
 
@@ -701,9 +708,6 @@ function updateFractionButtonsUI() {
   if (el("dlgFracMed")) el("dlgFracMed").classList.toggle("active", fracMed);
   if (el("dlgFracLarge")) el("dlgFracLarge").classList.toggle("active", fracLarge);
   if (el("dlgFracAuto")) el("dlgFracAuto").classList.toggle("active", fracAuto);
-  if (el("dlgSpeedPill")) {
-    el("dlgSpeedPill").textContent = speedMode === "quality" ? "✦ Якісний" : "⚡ Швидкий";
-  }
 }
 
 function setIdleUnloadSec(sec, persist = true) {
@@ -730,6 +734,7 @@ function buildSettingsSnapshot() {
     fracAutoNow: fracAuto,    // ...and what the active preset made of it
     autoPreset,
     brushSize: sessState.brushSize,
+    brushSoft: sessState.brushSoft,
     deletedDefaultIds: Array.from(new Set(deletedDefaultIds)),
     knownDefaultIds: Array.from(new Set(knownDefaultIds)),
     presetMoves: Array.from(new Set(appliedPresetMoves))
@@ -742,7 +747,7 @@ function applySettingsSnapshot(s) {
   if (Array.isArray(s.knownDefaultIds)) knownDefaultIds = Array.from(new Set(s.knownDefaultIds));
   // (settings saved by an older version carry no list: every move is still to be made - applyPresetDefaultMoves)
   appliedPresetMoves = Array.isArray(s.presetMoves) ? Array.from(new Set(s.presetMoves.filter((x) => typeof x === "string"))) : [];
-  if (s.speedMode) speedMode = s.speedMode === "quality" ? "quality" : "fast";
+  // (s.speedMode of an older version is not read: there is one mode now)
   if (s.idleUnloadSec !== undefined) {
     // Settings saved before schema 5 always carry the former default (30 s), whether or not the option was
     // ever touched -> move that one value to the new default. Any other choice is kept as it was.
@@ -764,6 +769,7 @@ function applySettingsSnapshot(s) {
   }
   if (typeof s.autoPreset === "boolean") setAutoPreset(s.autoPreset);
   if (typeof s.brushSize === "number" && s.brushSize >= 4) sessState.brushSize = Math.round(s.brushSize);
+  if (typeof s.brushSoft === "boolean") setBrushSoft(s.brushSoft, false);
   if (s.activePresetId && presetsList.some((p) => p.id === s.activePresetId)) activePresetId = s.activePresetId;
   if (s.cfg && typeof s.cfg === "object") applyConfig(s.cfg);
 }
@@ -1774,6 +1780,22 @@ function adjustBrushSize(delta) {
   scheduleSaveSettings();
 }
 
+// The two buttons under the brush size: the upper one is the soft edge, the lower one the hard edge
+function updateBrushEdgeUI() {
+  if (el("dlgBrushSoft")) el("dlgBrushSoft").classList.toggle("active", sessState.brushSoft);
+  if (el("dlgBrushHard")) el("dlgBrushHard").classList.toggle("active", !sessState.brushSoft);
+}
+
+function setBrushSoft(soft, byUser = true) {
+  sessState.brushSoft = !!soft;
+  updateBrushEdgeUI();
+  if (!byUser) return;
+  scheduleSaveSettings();
+  sayInWindow(sessState.brushSoft
+    ? "Край пензля і гумки: м’який — мазок плавно сходить нанівець, людину пензель не чіпає."
+    : "Край пензля і гумки: жорсткий — мазок закінчується біля кола курсора; такий пензель перемальовує все, по чому пройде.");
+}
+
 function clearStrokeDots() {
   const d = el("dlgStrokeDots");
   if (d) d.innerHTML = "";
@@ -1817,6 +1839,9 @@ function renderBrushCursorAndDot(hoverPt, addDot = false) {
       dot.style.left = Math.round(hoverPt.x * dispW - half) + "px";
       dot.style.top = Math.round(hoverPt.y * dispH - half) + "px";
       dot.style.background = sessState.tool === "eraser" ? "#b41822" : "#22ee58";
+      // (the trace under the pointer until the server answers: pale dots that add up towards the middle of the
+      // stroke look like the soft edge the stroke will have; the hard brush leaves the solid trace it always had)
+      dot.style.opacity = sessState.brushSoft ? "0.2" : "0.65";
       el("dlgStrokeDots").appendChild(dot);
     }
   }
@@ -1850,6 +1875,7 @@ function sendMaskEditOp(op, points = null) {
     op,
     points,
     radius_px: sessState.brushSize,
+    softness: sessState.brushSoft ? 1 : 0,   // the edge of the stroke: 1 soft, 0 hard (a server before 4.7.0 ignores it)
     erase: sessState.tool === "eraser",
     dressSmooth: dressSmoothEnabled,
     dressStrength: getSliderVal("gSlDress")
@@ -2433,6 +2459,7 @@ async function openInteractiveWorkspace() {
   if (el("dlgChkAutoPreset")) el("dlgChkAutoPreset").checked = autoPreset;
   if (el("dlgChkMakeMask")) el("dlgChkMakeMask").checked = makeMaskDefault;
   if (el("dlgBrushSizeVal")) el("dlgBrushSizeVal").textContent = String(sessState.brushSize);
+  updateBrushEdgeUI();
   if (el("dlgOrigImg")) el("dlgOrigImg").src = "";
   if (el("dlgCompImg")) el("dlgCompImg").src = "";
   if (el("dlgOverlayImg")) el("dlgOverlayImg").src = "";
@@ -3544,6 +3571,8 @@ function initEvents() {
 
   el("dlgBrushSmaller").addEventListener("click", () => adjustBrushSize(-6));
   el("dlgBrushBigger").addEventListener("click", () => adjustBrushSize(6));
+  el("dlgBrushSoft").addEventListener("click", () => setBrushSoft(true));
+  el("dlgBrushHard").addEventListener("click", () => setBrushSoft(false));
 
   // Viewport Mouse Interactions: Draw / Pan / Peek Clean Photo Outside Image!
   const vp = el("dlgViewport");
@@ -3647,7 +3676,7 @@ function initEvents() {
     }
   });
 
-  // Bottom Bar: Fractions + Auto + Speed + Zoom + Apply/Cancel
+  // Bottom Bar: Fractions + Auto + Zoom + Apply/Cancel
   el("dlgFracFine").addEventListener("click", () => {
     fracAuto = fracAutoUser = false;
     fracFine = !fracFine;
@@ -3674,15 +3703,6 @@ function initEvents() {
     updateFractionButtonsUI();
     scheduleSaveSettings();
     if (fracAuto) refreshPreviewAfterClick(true);  // the server picks the fractions again
-  });
-
-  // The speed mode only changes HOW the found defects are closed, and the light preview always draws the fast
-  // way - so this switch is shown by a full recompute, the only way to see what the quality mode gives.
-  el("dlgSpeedPill").addEventListener("click", async () => {
-    speedMode = speedMode === "fast" ? "quality" : "fast";
-    updateFractionButtonsUI();
-    scheduleSaveSettings();
-    await recomputeInteractiveSession(true, false);
   });
 
   el("dlgZoomOut").addEventListener("click", () => {

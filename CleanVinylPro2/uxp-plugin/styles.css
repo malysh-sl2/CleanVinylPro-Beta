@@ -1361,6 +1361,37 @@ html, body {
   color: #9ec4ff;
 }
 
+/* Край пензля / гумки: дві кнопки одна під одною — м'який (верхня) і жорсткий (нижня); вибрана підсвічена */
+.r4m-edge-box {
+  gap: 3px;
+}
+
+.edge-btn {
+  width: 24px;
+  height: 20px;
+  border-radius: 3px;
+  border: 1px solid #526278;
+  background: #2e3847;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.6;
+}
+
+.edge-btn:hover {
+  background: #3c4a5e;
+  border-color: #738cb0;
+  opacity: 1;
+}
+
+.edge-btn.active {
+  background: #1e5294;
+  border-color: #5ca7ff;
+  opacity: 1;
+}
+
 /* Viewport & Photo Stage */
 .r4m-viewport {
   flex: 1;
@@ -1667,26 +1698,6 @@ html, body {
   line-height: 1;
   margin-top: -1px;
   color: #d6ecff;
-}
-
-.r4m-speed-btn {
-  height: 26px;
-  padding: 0 9px;
-  border-radius: 4px;
-  border: 1px solid #4f6485;
-  background: #273447;
-  color: #e2eeff;
-  font-size: 10.5px;
-  font-weight: 600;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.r4m-speed-btn:hover {
-  background: #33455e;
-  border-color: #6e8cb8;
 }
 
 .r4m-zoom-btn {

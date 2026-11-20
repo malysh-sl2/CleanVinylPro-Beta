@@ -295,7 +295,8 @@
               <div class="info-text">
                 • Вікно відкривається з <b>чистим фото</b>. <b>«До / Після»</b> показує оригінал, ще раз — знову результат.<br/>
                 • <b>«Маска»</b> показує, що зміниться: яскраво-зелене — знайдені дефекти (їх буде перемальовано), блідо-зелене — фон, який вирівнюється, червоне — не чіпається. <b>Гумка (E)</b> стирає зайве зелене з одягу, взуття або тіней; <b>Пензель (B)</b> домальовує там, де треба дочистити. Перший же мазок сам вмикає маску.<br/>
-                • <b>Ctrl + Клік</b> по Пензлю — залити всю маску; по Гумці — очистити всю маску.<br/>
+                • Пензель і гумка мають <b>м’який край</b>: без смуги й різкого переходу. Потрібен чіткий край — натисніть нижній кружечок під розміром пензля (<b>жорсткий</b>); верхній повертає м’який.<br/>
+                • <b>Ctrl + Клік</b> по Пензлю — показати шар на всьому кадрі; по Гумці — очистити всю маску.<br/>
                 • <b>Ctrl + Z</b> (або кнопка <b>↺</b> ліворуч) — скасувати останній мазок: випадково клацнули по фото — один крок назад, і сліду немає. <b>Ctrl + Shift + Z</b> (кнопка <b>↻</b>) — повернути.<br/>
                 • <b>Пресет</b> підбирається сам під кадр; інший можна вибрати у списку вгорі праворуч.<br/>
                 • <b>Колесо миші</b> — зум; <b>[ / ]</b> — розмір пензля; <b>Пробіл + мишка</b> — рух фото.<br/>
@@ -318,12 +319,12 @@
           </div>
 
           <!-- Brush (Ctrl+Click fill) -->
-          <div role="button" tabindex="0" class="r4m-tool-btn" id="dlgToolBrush" data-tip="Пензель (B) — домалювати зелену зону очищення (маска вмикається сама). Ctrl + Клік = залити всю маску. Намалювали зайве — Ctrl + Z">
+          <div role="button" tabindex="0" class="r4m-tool-btn" id="dlgToolBrush" data-tip="Пензель (B) — проведіть по плямі чи подряпині: це місце буде зафарбовано тоном і зерном фону поруч, без різкого краю (маска вмикається сама). М’який пензель людину не чіпає. Ctrl + Клік = показати шар на всьому кадрі (нічого не перемальовує). Намалювали зайве — Ctrl + Z">
             <img src="icons/ui/brush.png" class="ui-icon" alt="" />
           </div>
 
           <!-- Eraser (Default on start! Ctrl+Click clear) -->
-          <div role="button" tabindex="0" class="r4m-tool-btn eraser-active" id="dlgToolEraser" data-tip="Гумка (E) — стерти зайве зелене, щоб не чіпати ділянку (маска вмикається сама). Ctrl + Клік = стерти всю маску. Стерли зайве — Ctrl + Z">
+          <div role="button" tabindex="0" class="r4m-tool-btn eraser-active" id="dlgToolEraser" data-tip="Гумка (E) — стерти зайве зелене, щоб не чіпати ділянку (маска вмикається сама). Край стертого плавний, без різкого переходу. Ctrl + Клік = стерти всю маску. Стерли зайве — Ctrl + Z">
             <img src="icons/ui/eraser.png" class="ui-icon" alt="" />
           </div>
 
@@ -349,6 +350,16 @@
             <div role="button" tabindex="0" class="size-step-btn" id="dlgBrushSmaller" data-tip="Зменшити розмір пензля ([)">−</div>
             <div class="size-badge" id="dlgBrushSizeVal">28</div>
             <div role="button" tabindex="0" class="size-step-btn" id="dlgBrushBigger" data-tip="Збільшити розмір пензля (])">+</div>
+          </div>
+
+          <!-- Край пензля / гумки: м'який (так вибрано зразу) або жорсткий -->
+          <div class="r4m-size-box r4m-edge-box" data-tip="Край пензля і гумки: м’який або жорсткий">
+            <div role="button" tabindex="0" class="edge-btn active" id="dlgBrushSoft" data-tip="М’який край — мазок пензля і слід гумки плавно сходять нанівець, без смуги й різкого переходу. Коло курсора показує середину цього переходу. М’який пензель не зачіпає людину: ним можна вести просто біля ніг чи подолу">
+              <img src="icons/ui/edge_soft.png" class="ui-icon" alt="" />
+            </div>
+            <div role="button" tabindex="0" class="edge-btn" id="dlgBrushHard" data-tip="Жорсткий край — мазок закінчується майже там, де коло курсора. Для точної роботи біля краю предмета. Жорсткий пензель перемальовує все, по чому пройде, також людину">
+              <img src="icons/ui/edge_hard.png" class="ui-icon" alt="" />
+            </div>
           </div>
         </div>
 
@@ -401,12 +412,10 @@
           <div role="button" tabindex="0" class="r4m-frac-btn active" id="dlgFracLarge" data-tip="Велика фракція — великі розводи, шов з’єднання вінілу та стійки">
             <img src="icons/ui/frac_large.png" class="ui-icon ui-icon-frac" alt="" />
           </div>
-          <div role="button" tabindex="0" class="r4m-frac-btn r4m-auto-btn active" id="dlgFracAuto" data-tip="Авто-фракції — AI автоматично підбирає, які розміри дефектів чистити на цьому фото">
+          <div role="button" tabindex="0" class="r4m-frac-btn r4m-auto-btn active" id="dlgFracAuto" data-tip="AUTO — програма сама дивиться на кожне фото й вирішує, бруд якого розміру на ньому чистити (дрібний, середній, великий). Не знаєте, що вибрати — лишайте AUTO. Клік по одному з трьох квадратиків ліворуч вимикає AUTO: далі чиститься лише те, що ввімкнули самі">
             <img src="icons/ui/frac_auto.png" class="ui-icon-auto" alt="" />
             <span class="auto-txt">AUTO</span>
           </div>
-
-          <div role="button" tabindex="0" class="r4m-speed-btn" id="dlgSpeedPill" data-tip="Режим швидкості. Обидва режими знаходять ОДНАКОВІ дефекти — різниця лише в тому, чим їх закрити: ⚡ Швидкий — швидка заливка; ✦ Якісний — повна AI-заливка LaMa (акуратніша на великих ділянках, але довша). Перемикання одразу перераховує кадр повністю — інакше різницю не побачити.">⚡ Швидкий</div>
         </div>
 
         <div class="r4m-bot-center">
