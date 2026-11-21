@@ -815,15 +815,19 @@ async def session_recompute(request: Request):
         session_id = str(body.get("session_id", ""))
         params = body.get("params", {})
         preserve_edits = bool(body.get("preserve_edits", True))
-        # quick: update only the preview; the real frame is computed once, at Apply (the answer repeats "quick")
+        # quick: update only the preview; the real frame is computed later (the answer repeats "quick")
         quick = bool(body.get("quick", False))
+        # background: the window asks by itself for the exact picture; such a run gives way to every other request
+        # of the window and then answers {"ok": true, "superseded": true} (see engine.recompute_session)
+        background = bool(body.get("background", False))
         job_id = body.get("jobId") or None
 
         def _pcb(pct: int, stage: str):
             _set_progress(job_id, pct, stage, done=False)
 
-        res = await run_in_threadpool(eng.recompute_session, session_id, params, preserve_edits, _pcb, quick)
-        _set_progress(job_id, 100, "Оновлено!", done=True)
+        res = await run_in_threadpool(eng.recompute_session, session_id, params, preserve_edits, _pcb, quick, background)
+        gave_way = bool(res.get("superseded") or res.get("skipped"))
+        _set_progress(job_id, 0 if gave_way else 100, "" if gave_way else "Оновлено!", done=True)
         return JSONResponse(status_code=200, content=res)
     except Exception as exc:
         _set_progress(job_id, 0, f"Помилка: {exc}", done=True)
@@ -890,13 +894,15 @@ async def session_apply(request: Request):
         params = body.get("params")
         if not isinstance(params, dict):
             params = None
+        # A background recompute is on its way for these very settings: wait for it instead of stopping it
+        follow_background = bool(body.get("followBackground", False))
         job_id = body.get("jobId") or None
 
         def _pcb(pct: int, stage: str):
             _set_progress(job_id, pct, stage, done=False)
 
         out_rgba, layer_mask_u8, stats = await run_in_threadpool(
-            eng.apply_session, session_id, blend, make_mask, dress_smooth, dress_strength, _pcb, params
+            eng.apply_session, session_id, blend, make_mask, dress_smooth, dress_strength, _pcb, params, follow_background
         )
         _set_progress(job_id, 95, "Запис шару у Photoshop...", done=True)
 

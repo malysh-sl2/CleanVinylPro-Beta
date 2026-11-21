@@ -51,6 +51,11 @@ Part 2 - what Clean Vinyl Pro 2 does differently, each with its own measurable p
             and a light gap in it are not (the rule is also tried on drawn spots with the owner's numbers)
   undo      the big window: every mask edit (brush, eraser, fill, clear, invert) can be taken back and made again,
             also after the sliders were moved; Apply after a step back == Apply without that edit
+  exact     the exact picture of the big window comes by itself: a background recompute gives the frame of a full
+            recompute; the brush and the eraser are answered while it computes and stay in the result; new slider
+            values, Apply, closing the window or another photo make it stop at its next safe place with the
+            session untouched (tried at every such place); Apply waits for it when it computes the very frame
+            Apply needs; a mask that is the user's own drawing is never replaced by itself
 
 Part 3 - the program around the engine:
   server    settings migration, binary packets, one version everywhere, and no name / port shared with the
@@ -2605,6 +2610,40 @@ def _http_quick_round_trip(client, srv, packet, split, bad) -> int:
                 bad.append("/session/apply with settings: the layer differs from 'full recompute, then apply'")
             if m_new["stats"].get("dress_smooth") is not False or m_new != m_ref:
                 bad.append("/session/apply with settings: the answer header differs from 'full recompute, then apply'")
+        # The exact picture by itself: "background" in /session/recompute, "followBackground" in /session/apply
+        # (what a background run does when other requests come in is checked on the engine - see check_exact)
+        p3 = dict(p2, spots=70)
+        r = client.post("/session/recompute", json=dict(session_id=sid, params=p3, preserve_edits=True, quick=True)); n += 1
+        light = r.json()
+        r = client.post("/session/recompute", json=dict(session_id=sid, params=p3, preserve_edits=True, background=True, jobId="b")); n += 1
+        exact = r.json()
+        if r.status_code != 200 or light.get("exact") is not False or exact.get("exact") is not True or exact.get("quick") is not False \
+                or exact.get("rev") != light.get("rev", -9) + 1 or not exact.get("comp_jpg_b64") or exact.get("superseded") or exact.get("skipped"):
+            bad.append("/session/recompute with background=true must compute the real frame and say exact=true with the next rev")
+        prog = client.get("/progress", params={"job_id": "b"}).json(); n += 1
+        if prog.get("pct") != 100 or prog.get("done") is not True:
+            bad.append(f"/progress of a finished background recompute must be 100 %, done: {prog}")
+        r = client.post("/session/mask-edit", json=dict(session_id=sid, op="invert")); n += 1
+        edit1 = r.json()
+        r = client.post("/session/mask-edit", json=dict(session_id=sid, op="stroke", radius_px=20, erase=False,
+                                                        points=[{"x": 0.3, "y": 0.8, "norm": 1}, {"x": 0.4, "y": 0.8, "norm": 1}])); n += 1
+        edit2 = r.json()
+        if not (exact.get("rev", 0) < edit1.get("rev", 0) < edit2.get("rev", 0)) or edit2.get("exact") is not True:
+            bad.append("/session/mask-edit must carry a growing rev and say whether the real frame is behind the pictures")
+        r = client.post("/session/dress-preview", json=dict(session_id=sid, dressSmooth=False, dressStrength=45)); n += 1
+        if r.json().get("rev") != edit2.get("rev") or r.json().get("exact") is not True:
+            bad.append("/session/dress-preview must carry the rev of the pictures as they are (it changes nothing)")
+        client.post("/session/recompute", json=dict(session_id=sid, params=p3, preserve_edits=True, quick=True)); n += 1
+        client.post("/session/mask-edit", json=dict(session_id=sid, op="invert")); n += 1
+        client.post("/session/mask-edit", json=dict(session_id=sid, op="stroke", radius_px=20, erase=False,
+                                                    points=[{"x": 0.6, "y": 0.8, "norm": 1}])); n += 1
+        r = client.post("/session/recompute", json=dict(session_id=sid, params=p3, preserve_edits=True, background=True, jobId="c")); n += 1
+        if r.status_code != 200 or r.json().get("skipped") is not True or r.json().get("exact") is not False or "comp_jpg_b64" in r.json():
+            bad.append("/session/recompute with background=true and the user's own mask on screen must answer skipped=true")
+        r_follow = client.post("/session/apply", json=dict(body, params=p3, followBackground=True)); n += 1
+        r_plain = client.post("/session/apply", json=dict(body, params=p3)); n += 1
+        if r_follow.status_code != 200 or r_plain.status_code != 200 or split(r_follow.content)[1] != split(r_plain.content)[1]:
+            bad.append("/session/apply with followBackground=true and nothing running must give the layer of a plain Apply")
         client.post("/session/close", json=dict(session_id=sid))
     finally:
         srv.ENGINE = keep
@@ -2750,8 +2789,9 @@ def check_http():
         # ("quick" is new: a recompute says whether it only refreshed the preview; "scene", "smoke", "mask_share" and
         #  "layer_share" are new: the answer describes the frame, what was seen of smoke, and how much of the frame
         #  was found and repaired / is covered by the layer; "history" is new: how many mask edits can be taken
-        #  back and made again)
-        d = {k: v for k, v in d.items() if k not in ("session_id", "mask_png_b64", "quick", "scene", "smoke", "mask_share", "layer_share", "history")}
+        #  back and made again; "rev" and "exact" are new: the number of the pictures in order, and whether the
+        #  real frame is behind them - see check_exact)
+        d = {k: v for k, v in d.items() if k not in ("session_id", "mask_png_b64", "quick", "scene", "smoke", "mask_share", "layer_share", "history", "rev", "exact")}
         if "stats" in d:
             d["stats"] = {k: v for k, v in d["stats"].items() if k not in ("elapsed_ms", "reused_stages", "smoke")}
         return d
@@ -3549,6 +3589,335 @@ def check_undo():
            if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
+def check_exact():
+    """
+    The exact picture comes by itself: recompute_session(background=True) - see engine.py.
+    Nothing here depends on timing: a background run is either held at one of its progress points by the check
+    (Gate) while the other requests are made, or told to give way at its k-th safe place.
+    """
+    # (the console of the engine is silenced once for the whole group: _quiet() swaps sys.stdout, and that cannot
+    #  be done from two threads at a time)
+    bad, n_places, tried = _quiet(_exact_cases)
+    report("exact", not bad,
+           f"a background recompute gives the frame of a full one ({n_places} safe places); it gave way at {tried} of them with the "
+           "session untouched and the next run correct; strokes are answered and kept meanwhile; new values, Apply, closing "
+           "and another photo stop it; Apply waits for the frame it needs (computed once); the user's own mask is never replaced"
+           if not bad else "wrong:\n   " + "\n   ".join(bad))
+
+
+def _exact_cases():
+    import hashlib
+    import threading
+
+    bad = []
+    w, h = 2600, 1740  # (the long side must reach PREVIEW_PROXY_MIN_DIM, or there is no quick preview to replace)
+    img, sil = H.make_studio_image(w, h, n_dust=70, n_hair=6, seed=5, rgba=True)
+    base = dict(H.STD, speedMode="quality", smokeAuto=True, autoFractions=False)
+    moved = dict(base, spots=88, scuffs=80, blur=25)   # the sliders after the user moved them
+    moved_again = dict(moved, scuffs=40)
+    stroke_a = [{"x": 0.30, "y": 0.80, "norm": 1}, {"x": 0.36, "y": 0.83, "norm": 1}, {"x": 0.40, "y": 0.80, "norm": 1}]
+    stroke_b = [{"x": 0.70, "y": 0.85, "norm": 1}, {"x": 0.76, "y": 0.86, "norm": 1}]
+
+    def state(eng):
+        """Everything of the session that a recompute or a mask edit can change, as one short text."""
+        s = eng._active_session
+        hsh = hashlib.sha1()
+        for key in ("cleaned_base_rgba", "core_mask_u8", "clean_base_small_bgr", "clean_paint_small_bgr",
+                    "auto_mask_small_u8", "repair_mask_small_u8", "user_paint_u8", "user_erase_u8"):
+            hsh.update(np.ascontiguousarray(s[key]).tobytes())
+        hsh.update(repr((bool(s["base_stale"]), bool(s["mask_detached"]), bool(s["inverted"]), bool(s["fill_all"]),
+                         sorted(s["params"].items()), len(s["history"]["undo"]), len(s["history"]["redo"]))).encode())
+        return hsh.hexdigest()
+
+    def pictures(ans):
+        return ans.get("comp_jpg_b64"), ans.get("overlay_jpg_b64")
+
+    def opened():
+        """A window with the quick preview for `moved` on screen: the real frame is still the one for `base`."""
+        eng = H.make_engine(E, sil)
+        first = eng.start_session(img, 8, dict(base))
+        sid = first["session_id"]
+        ans = eng.recompute_session(sid, dict(moved), True, None, True)
+        if first.get("exact") is not True or not isinstance(first.get("rev"), int) or ans.get("quick") is not True \
+                or ans.get("exact") is not False or ans.get("rev") != first.get("rev", 0) + 1:
+            bad.append(f"opening must answer exact=True with a rev, a light refresh quick=True, exact=False and the next rev: "
+                       f"{first.get('exact')}, {first.get('rev')} / {ans.get('quick')}, {ans.get('exact')}, {ans.get('rev')}")
+        return eng, sid
+
+    def recompute(eng, sid, params, quick=False, background=False, cb=None):
+        return eng.recompute_session(sid, dict(params), True, cb, quick, background)
+
+    def stroke(eng, sid, pts, erase, radius=24.0):
+        return eng.edit_session_mask(sid, "stroke", pts, radius, erase, False, 45.0)
+
+    def apply(eng, sid, params, cb=None, follow=False):
+        return eng.apply_session(sid, 100.0, False, False, 45.0, cb, dict(params), follow)
+
+    class Gate:
+        """A progress callback that holds the run at its first progress point from `pct` on, until open()."""
+        def __init__(self, pct=79):
+            self.pct, self.reached, self.go, self.used = pct, threading.Event(), threading.Event(), False
+
+        def __call__(self, pct, txt):
+            if not self.used and pct >= self.pct:
+                self.used = True
+                self.reached.set()
+                self.go.wait(120)
+
+        def open(self):
+            self.go.set()
+
+    def in_thread(fn):
+        box = {}
+
+        def run():
+            try:
+                box["ans"] = fn()
+            except BaseException as exc:  # noqa: B036  (the check must see whatever came out)
+                box["err"] = exc
+
+        th = threading.Thread(target=run, daemon=True)
+        th.start()
+        return th, box
+
+    def held_run(eng, sid, params=moved):
+        """A background recompute, held in its middle: (gate, thread, box of its answer)."""
+        gate = Gate()
+        th, box = in_thread(lambda: recompute(eng, sid, params, background=True, cb=gate))
+        if not gate.reached.wait(120):
+            gate.open()
+            th.join(120)
+            raise RuntimeError(f"the background run did not reach its middle: {box}")
+        return gate, th, box
+
+    def wait_for_waiter(eng):
+        for _ in range(1200):
+            if eng._compute_waiters > 0:
+                return True
+            time.sleep(0.01)
+        return False
+
+    def idle(eng):
+        return (not eng._compute_lock.locked() and not eng.lock.locked() and eng._active_jobs == 0
+                and eng._compute_waiters == 0 and getattr(eng._bg_local, "check", None) is None and eng._bg_follower is None)
+
+    def gave_way(ans):
+        return isinstance(ans, dict) and ans.get("superseded") is True and "comp_jpg_b64" not in ans
+
+    # ---- 1. a background recompute gives exactly what a recompute the user waits for gives
+    eng, sid = opened()
+    light_state = state(eng)
+    ref = recompute(eng, sid, moved)
+    ref_state = state(eng)
+    eng, sid = opened()
+    if state(eng) != light_state:
+        bad.append("two windows opened the same way differ (the check itself is not repeatable)")
+    cold_cache = dict(eng._active_session["stage_cache"])
+    plain_checkpoint = eng._checkpoint
+    places = [0]
+
+    def counting():
+        if getattr(eng._bg_local, "check", None) is not None:
+            places[0] += 1
+        plain_checkpoint()
+
+    eng._checkpoint = counting
+    ans = recompute(eng, sid, moved, background=True)
+    eng._checkpoint = plain_checkpoint
+    n_places = places[0]
+    if pictures(ans) != pictures(ref) or state(eng) != ref_state or ans.get("exact") is not True or ans.get("quick") is not False \
+            or ans.get("rev") != ref.get("rev") or ans.get("superseded") or ans.get("skipped") or not idle(eng):
+        bad.append("a background recompute must give the pictures, the session and the answer of a full recompute")
+    if n_places < 20:
+        bad.append(f"a background recompute passed only {n_places} safe places")
+
+    # ---- 2. it gives way at every safe place and leaves nothing behind; the next run ends with the same frame
+    eng, sid = opened()
+    sess = eng._active_session
+    plain_checkpoint = eng._checkpoint  # (of this engine: the one above belongs to the window before)
+    tried, wrong_at, warm = 0, [], {}
+    resume_at = {max(1, n_places // 4), max(1, n_places // 2), max(1, (3 * n_places) // 4)}
+    for k in range(1, n_places + 1):
+        if not FULL and 3 < k < n_places - 2 and k % 3 and k not in resume_at:
+            continue
+        tried += 1
+        sess["stage_cache"] = dict(cold_cache)  # (as if no run had been here before: every place is met again)
+        seen = [0]
+
+        def waiter_at_k():
+            if getattr(eng._bg_local, "check", None) is not None:
+                seen[0] += 1
+                if seen[0] == k:
+                    eng._compute_waiters += 1  # from here on somebody is waiting for the frame
+            plain_checkpoint()
+
+        eng._checkpoint = waiter_at_k
+        try:
+            ans = recompute(eng, sid, moved, background=True)
+        finally:
+            eng._checkpoint = plain_checkpoint
+            if seen[0] >= k:
+                eng._compute_waiters -= 1
+        if seen[0] < k or not gave_way(ans) or state(eng) != light_state or not idle(eng):
+            wrong_at.append(k)
+        if k in resume_at:
+            warm[k] = dict(sess["stage_cache"])
+    if wrong_at:
+        bad.append(f"giving way at safe place(s) {wrong_at} of {n_places}: the answer must be 'superseded', the session untouched, the locks free")
+    # (the cache now holds whatever the last run finished - nearly everything)
+    ans = recompute(eng, sid, moved, background=True)
+    if pictures(ans) != pictures(ref) or state(eng) != ref_state:
+        bad.append("after giving way at the last safe place, the next background run must end with the frame of an undisturbed one")
+    for k in sorted(warm):
+        eng, sid = opened()
+        eng._active_session["stage_cache"] = warm[k]  # what a run that gave way at place k left behind
+        ans = recompute(eng, sid, moved, background=True)
+        if pictures(ans) != pictures(ref) or state(eng) != ref_state:
+            bad.append(f"after giving way at safe place {k}, the next background run must end with the frame of an undisturbed one")
+
+    # ---- 3. the brush and the eraser are answered while the run computes, and stay in the result
+    eng, sid = opened()
+    stroke(eng, sid, stroke_a, False)
+    stroke(eng, sid, stroke_b, True, 30.0)
+    ref_drawn = recompute(eng, sid, moved)
+    ref_drawn_state = state(eng)
+    eng, sid = opened()
+    gate, th, box = held_run(eng, sid)
+    s1 = stroke(eng, sid, stroke_a, False)
+    s2 = stroke(eng, sid, stroke_b, True, 30.0)
+    answered_meanwhile = th.is_alive() and not gate.go.is_set()
+    gate.open()
+    th.join(120)
+    ans = box.get("ans") or {}
+    if not answered_meanwhile:
+        bad.append("brush strokes must be answered while a background recompute is still computing")
+    if s1.get("exact") is not False or s2.get("exact") is not False or not (s1.get("rev", 0) < s2.get("rev", 0) < ans.get("rev", 0)):
+        bad.append(f"strokes during a background run: exact must stay False and the rev must grow: {s1.get('rev')}, {s2.get('rev')}, {ans.get('rev')}")
+    if pictures(ans) != pictures(ref_drawn) or state(eng) != ref_drawn_state or ans.get("exact") is not True \
+            or ans.get("history") != {"undo": 2, "redo": 0} or not idle(eng):
+        bad.append("strokes made during a background run: the result must be that of 'the strokes, then a full recompute'")
+
+    # ---- 4. new slider values go first: the run gives way, the session is as if it had never started
+    eng, sid = opened()
+    ref_light2 = recompute(eng, sid, moved_again, quick=True)
+    ref_light2_state = state(eng)
+    eng, sid = opened()
+    gate, th, box = held_run(eng, sid)
+    th2, box2 = in_thread(lambda: recompute(eng, sid, moved_again, quick=True))
+    waited = wait_for_waiter(eng)
+    gate.open()
+    th.join(120)
+    th2.join(120)
+    ans2 = box2.get("ans") or {}
+    if not waited or not gave_way(box.get("ans")) or pictures(ans2) != pictures(ref_light2) or state(eng) != ref_light2_state \
+            or ans2.get("exact") is not False or not idle(eng):
+        bad.append("new slider values during a background run: the run must give way and the light refresh must come out as without it")
+    # ...and so does an older background run for a newer one
+    gate, th, box = held_run(eng, sid, moved_again)
+    th2, box2 = in_thread(lambda: recompute(eng, sid, moved, background=True))
+    waited = wait_for_waiter(eng)
+    gate.open()
+    th.join(120)
+    th2.join(120)
+    ans2 = box2.get("ans") or {}
+    if not waited or not gave_way(box.get("ans")) or ans2.get("exact") is not True or pictures(ans2) != pictures(ref) or not idle(eng):
+        bad.append("a newer background run must make the older one give way, and come out as an undisturbed one")
+
+    # ---- 5. Apply: waits for a run that computes the very frame it needs; stops it otherwise. The layer is the same.
+    eng, sid = opened()
+    ref_layer = apply(eng, sid, moved)[0]
+    for follow in (True, False):
+        eng, sid = opened()
+        runs = []
+        plain_process = eng.process
+
+        def counted(*a, **k):
+            runs.append(1)
+            return plain_process(*a, **k)
+
+        eng.process = counted
+        shown = []
+        gate, th, box = held_run(eng, sid)
+        th2, box2 = in_thread(lambda: apply(eng, sid, moved, cb=lambda pct, txt: shown.append(pct), follow=follow))
+        if follow:
+            for _ in range(1200):
+                if eng._bg_follower is not None:
+                    break
+                time.sleep(0.01)
+        else:
+            wait_for_waiter(eng)
+        gate.open()
+        th.join(120)
+        th2.join(240)
+        eng.process = plain_process
+        out = box2.get("ans")
+        ans = box.get("ans") or {}
+        if out is None or not np.array_equal(out[0], ref_layer) or not idle(eng):
+            bad.append(f"Apply during a background run (follow={follow}): the layer must be the one of a plain Apply: {box2.get('err')}")
+        elif follow and (ans.get("exact") is not True or len(runs) != 1 or out[2].get("recomputed") is not False
+                         or any(b < a for a, b in zip(shown, shown[1:])) or not shown or shown[0] >= 60):
+            bad.append(f"Apply that follows a background run: the frame must be computed once (was {len(runs)}), by that run, "
+                       f"and the progress must go on from its numbers without going back: {shown[:3]}..{shown[-3:]}")
+        elif not follow and (not gave_way(ans) or out[2].get("recomputed") is not True):
+            bad.append("Apply without 'follow' must stop the background run and compute the frame itself")
+
+    # ---- 6. a mask that is the user's own drawing is never replaced by itself
+    eng, sid = opened()
+    eng.edit_session_mask(sid, "invert")
+    stroke(eng, sid, stroke_a, False)
+    drawn = state(eng)
+    ans = recompute(eng, sid, moved, background=True)
+    if ans.get("skipped") is not True or "comp_jpg_b64" in ans or ans.get("exact") is not False or state(eng) != drawn or not idle(eng):
+        bad.append("with the user's own mask on screen a background recompute for the same settings must do nothing")
+    layer_drawn = apply(eng, sid, moved)[0]  # (Apply computes the real frame then, and keeps the mask - as before)
+    if eng._active_session["mask_detached"] is not True or eng._active_session["base_stale"] is not False:
+        bad.append("Apply with the user's own mask must compute the real frame and keep that mask")
+    eng, sid = opened()
+    gate, th, box = held_run(eng, sid)
+    eng.edit_session_mask(sid, "invert")
+    stroke(eng, sid, stroke_a, False)
+    gate.open()
+    th.join(120)
+    ans = box.get("ans") or {}
+    if ans.get("skipped") is not True or state(eng) != drawn or not idle(eng):
+        bad.append("a mask drawn by hand while a background recompute was computing must not be replaced by its result")
+    elif not np.array_equal(apply(eng, sid, moved)[0], layer_drawn):
+        bad.append("Apply after such a skipped run must give the layer of a plain Apply")
+    ans = recompute(eng, sid, moved_again, background=True)  # new values are the user's own doing: as any recompute
+    if ans.get("skipped") or ans.get("exact") is not True or eng._active_session["mask_detached"] is not False:
+        bad.append("a background recompute for NEW slider values must work as any recompute (also with the user's own mask)")
+
+    # ---- 7. closing the window stops the run; opening another photo does too
+    eng, sid = opened()
+    gate, th, box = held_run(eng, sid)
+    eng.close_session(sid)
+    gate.open()
+    th.join(120)
+    if not gave_way(box.get("ans")) or not idle(eng):
+        bad.append("closing the window must stop a background recompute")
+    eng, sid = opened()
+    gate, th, box = held_run(eng, sid)
+    th2, box2 = in_thread(lambda: eng.start_session(img, 8, dict(base)))
+    waited = wait_for_waiter(eng)
+    gate.open()
+    th.join(120)
+    th2.join(240)
+    if not waited or not gave_way(box.get("ans")) or not (box2.get("ans") or {}).get("session_id") or not idle(eng):
+        bad.append("opening another photo must stop a background recompute of the former window")
+
+    # ---- 8. no quick way (2 passes): the background run is the only refresh, and it is a full recompute
+    eng, sid = opened()
+    twice = dict(moved, cleanPasses=2)
+    ref2 = recompute(eng, sid, twice)
+    ref2_state = state(eng)
+    eng, sid = opened()
+    ans = recompute(eng, sid, twice, background=True)
+    if pictures(ans) != pictures(ref2) or state(eng) != ref2_state or ans.get("exact") is not True or ans.get("quick") is not False:
+        bad.append("2 passes: a background recompute must give the pictures and the session of a full recompute")
+
+    return bad, n_places, tried
+
+
 def check_plugin():
     root = H.REPO_ROOT
     r = subprocess.run([sys.executable, os.path.join(root, "tools", "build_ccx.py"), "--check"], capture_output=True, text=True)
@@ -3577,6 +3946,7 @@ GROUPS = [("convert", check_convert), ("process", check_process), ("stage", chec
           ("format", check_format), ("scene", check_scene), ("stains", check_stains), ("seam", check_seam), ("mask", check_mask),
           ("brush", check_brush),
           ("dark", check_dark), ("gear", check_gear), ("shadow", check_shadow), ("undo", check_undo),
+          ("exact", check_exact),
           ("server", check_server), ("http", check_http),
           ("folders", lambda: IC.check_folders(report)), ("install", lambda: IC.check_install(report)),
           ("bat", lambda: IC.check_bat(report)), ("plugin", check_plugin)]

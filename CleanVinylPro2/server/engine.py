@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import gc
 import os
 import sys
@@ -116,6 +117,15 @@ ort = _import_or_install_ort()
 DEFAULT_IDLE_UNLOAD_SEC = 120.0
 
 
+class JobSuperseded(BaseException):
+    """
+    A background recompute of the big window (recompute_session(background=True)) stopped at a safe place: a
+    request the user is waiting for needs the frame, or the window was closed. Nothing of the session was changed;
+    the stages that were finished stay in the stage cache.
+    (Not an Exception on purpose: the "except Exception" fallbacks of the pipeline must let it through.)
+    """
+
+
 def _cudnn_algo_from_env() -> str:
     """
     cuDNN convolution algorithm search used when a model is (re)loaded onto the GPU.
@@ -165,6 +175,14 @@ class CleanVinylEngine:
         self._state_lock = threading.Lock()
         # Serializes start / recompute / brush / apply of the interactive session (they share its cached state)
         self._session_lock = threading.RLock()
+        # One computation of the session frame at a time: they share the stage cache. Always taken BEFORE
+        # _session_lock. A background recompute holds only this lock while it computes - the brush and the eraser
+        # are answered meanwhile - and gives way at its next safe place as soon as somebody else waits for it
+        # (see _compute_turn, _checkpoint, recompute_session).
+        self._compute_lock = threading.Lock()
+        self._compute_waiters = 0
+        self._bg_local = threading.local()  # .check is set in the thread of a background recompute
+        self._bg_follower = None            # the progress of the running background recompute also goes here
         self._active_jobs = 0
         self._last_used_mono = time.monotonic()
         self._unload_timer = None
@@ -202,6 +220,41 @@ class CleanVinylEngine:
                 self._unload_timer = None
         if self.idle_unload_sec > 0 and self.is_loaded:
             self._schedule_idle_unload()
+
+    @contextlib.contextmanager
+    def _compute_turn(self, ask_way: bool = True, follower=None):
+        """
+        The right to compute the frame of the session and to use its stage cache.
+        ask_way: a background recompute that is running gives way at its next safe place. False: wait until it has
+        finished - Apply does that when the background run is computing the very frame Apply needs; `follower(pct,
+        text)` then receives the progress of that run during the wait.
+        """
+        with self._state_lock:
+            if ask_way:
+                self._compute_waiters += 1
+            elif follower is not None:
+                self._bg_follower = follower
+        try:
+            self._compute_lock.acquire()
+        finally:
+            with self._state_lock:
+                if ask_way:
+                    self._compute_waiters -= 1
+                elif follower is not None and self._bg_follower is follower:
+                    self._bg_follower = None
+        try:
+            yield
+        finally:
+            self._compute_lock.release()
+
+    def _checkpoint(self) -> None:
+        """
+        A safe place to stop: nothing shared is half-written here. Does something only in the thread of a background
+        recompute, where it raises JobSuperseded as soon as that run has to give way (see recompute_session).
+        """
+        check = getattr(self._bg_local, "check", None)
+        if check is not None:
+            check()
 
     def _begin_job(self):
         with self._state_lock:
@@ -1177,6 +1230,7 @@ class CleanVinylEngine:
         best_thin = np.zeros((sh, sw), dtype=np.float32)
         best_wide = np.zeros((sh, sw), dtype=np.float32)
         for angle in angles:
+            self._checkpoint()
             M = cv2.getRotationMatrix2D((sw / 2.0, sh / 2.0), angle, 1.0)
             M_inv = cv2.getRotationMatrix2D((sw / 2.0, sh / 2.0), -angle, 1.0)
             Lr = cv2.warpAffine(Ls, M, (sw, sh), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
@@ -1225,6 +1279,7 @@ class CleanVinylEngine:
         cand_horiz = cv2.morphologyEx(cand, cv2.MORPH_CLOSE, np.ones((1, close_w), np.uint8))
         num_lbl, labels, stats, _ = cv2.connectedComponentsWithStats(cand_horiz, connectivity=8)
 
+        self._checkpoint()
         seam_s = np.zeros((sh, sw), dtype=np.uint8)
         # Every thin piece: where it is, the straight line through it, how line-like it is (thin against wide signal)
         min_w = (0.05 if join else 0.24) * sw
@@ -1592,6 +1647,7 @@ class CleanVinylEngine:
             if info is not None:
                 info["shadow_spots"] = tried
 
+        self._checkpoint()
         spot_full = (cv2.resize(clean_spots, (w, h), interpolation=cv2.INTER_LINEAR) > 64).astype(np.uint8)
 
         if not (frac_fine or frac_med):
@@ -1631,8 +1687,11 @@ class CleanVinylEngine:
         grain_full = max(0.85, float(np.median(hp_full[fg_sub])) * 1.4826) if np.any(fg_sub) else 2.0
 
         k_bh = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (bh_k, bh_k))
+        self._checkpoint()
         bh_full = cv2.morphologyEx(L_work, cv2.MORPH_BLACKHAT, k_bh)
+        self._checkpoint()
         th_full = cv2.morphologyEx(L_work, cv2.MORPH_TOPHAT, k_bh)
+        self._checkpoint()
 
         thr_strong = max(8, int(round(6.0 * grain_full * sens)))
         thr_hair = max(5, int(round(3.8 * grain_full * sens)))
@@ -1671,6 +1730,7 @@ class CleanVinylEngine:
         for arr in (fine_strong, fine_soft):
             arr[:pad_b, :] = 0; arr[-pad_b:, :] = 0; arr[:, :pad_b] = 0; arr[:, -pad_b:] = 0
 
+        self._checkpoint()
         num_f, lbl_f, st_f, _ = cv2.connectedComponentsWithStats(fine_strong, connectivity=8)
         lut_f = np.zeros(num_f, dtype=np.uint8)
         if num_f > 1:
@@ -1679,6 +1739,7 @@ class CleanVinylEngine:
             lut_f[1:] = ((ar_f >= (3 if fast_mode else 5)) & (ar_f <= 2500) & f_frac_ok).astype(np.uint8)
         fine_keep = lut_f[lbl_f]
 
+        self._checkpoint()
         num_s, lbl_s, st_s, _ = cv2.connectedComponentsWithStats(fine_soft, connectivity=8)
         lut_s = np.zeros(num_s, dtype=np.uint8)
         if num_s > 1:
@@ -1757,6 +1818,7 @@ class CleanVinylEngine:
                 progress_cb(52, f"AI-заливка дефектів: 0/{total_tiles} тайлів...")
 
         for y1, y2, x1, x2, mt in active_tiles:
+            self._checkpoint()
             patch_u8 = img_rgb_u8[y1:y2, x1:x2]
             ph, pw = patch_u8.shape[:2]
             if ph != tile_size or pw != tile_size:
@@ -1832,6 +1894,8 @@ class CleanVinylEngine:
         small_specks = 0
 
         for idx in range(1, num_c):
+            if idx % 64 == 0:
+                self._checkpoint()
             area = int(st_c[idx, cv2.CC_STAT_AREA])
             x, y, bw, bh = (
                 int(st_c[idx, cv2.CC_STAT_LEFT]),
@@ -2539,7 +2603,9 @@ class CleanVinylEngine:
         flat = lab.copy()
         flat[..., 0] -= light
         guide = flat[..., 0] / dark_tol
+        self._checkpoint()
         evened, conf = self._even_by_tone(guide, flat, valid, sigma_s, sigma_r)
+        self._checkpoint()
         # A pixel with next to no backdrop of its tone within reach has nothing to be evened with (the average
         # would be a guess from a few pixels). The bar is low on purpose: a stain inside a small dark corner has
         # only that corner to be evened with, and must still go.
@@ -2560,7 +2626,9 @@ class CleanVinylEngine:
         # Carry the correction under the soft edge of the silhouette and into the soft zone around the gear from the
         # backdrop next to it, so that it ends gradually there instead of at a visible border
         sigma_e = max(1.5, 0.010 * long_side)
+        self._checkpoint()
         corr_near = self._blur_valid(corr, valid, sigma_e)
+        self._checkpoint()
         reach = np.clip(cv2.GaussianBlur(valid, (0, 0), sigma_e) / 0.25, 0.0, 1.0)
         corr = corr * valid[..., None] + corr_near * ((1.0 - valid) * reach)[..., None]
         lab_new = lab + corr
@@ -2656,6 +2724,7 @@ class CleanVinylEngine:
         valid_s = background(st_s, ST_CORE)
 
         # ---------- B. exact shape of the line at full resolution (tilt + slight lens curvature) ----------
+        self._checkpoint()
         r_sharp = int(max(40, 0.022 * h))
         fit = np.zeros(3, np.float64)  # extra offset: c0 + c1*u + c2*u^2 with u = (x - cx) / w
 
@@ -2731,6 +2800,7 @@ class CleanVinylEngine:
             fit = np.zeros(3, np.float64)
 
         # ---------- C. cove = vertical blur of the row-wise background, on the small copy ----------
+        self._checkpoint()
         sig_v = (0.012 + 0.058 * s) * h  # half-width of the cove, full-res px
         mix_max = min(1.0, 0.35 + 1.3 * s)
         delta_s = ((line_rows((xs_s + 0.5) / sc - 0.5) - line_rows(np.float32(cx))) * sc).astype(np.float32)
@@ -2837,6 +2907,7 @@ class CleanVinylEngine:
         corr = cv2.warpAffine(corr_s, M_up, (w, rb - ra), **up)
 
         # ---------- D. the sharp part of the step, which the small copy cannot hold, in a thin full-res strip ----------
+        self._checkpoint()
         try:
             y0, y1, ya, yb, delta, straight, ok_s = strip_inputs(r_sharp)
             lf_f, den_f = self._box_norm_x(straight, ok_s, int(w * 0.045))
@@ -2865,6 +2936,7 @@ class CleanVinylEngine:
             pass
 
         # ---------- E. apply to the background only ----------
+        self._checkpoint()
         # right up to the silhouette: the correction is a soft tone shift of a few levels, it cannot hurt hair or hems
         gate_lut = 1.0 - np.clip((np.arange(256, dtype=np.float32) / 255.0 - 0.30) / 0.40, 0.0, 1.0)
         gate = cv2.LUT(np.ascontiguousarray(eff_fg_u8[ra:rb]), gate_lut)
@@ -3406,6 +3478,7 @@ class CleanVinylEngine:
         self._begin_job()
         try:
             def _prog(pct: int, txt: str):
+                self._checkpoint()
                 if progress_cb is not None:
                     progress_cb(pct, txt)
 
@@ -3680,6 +3753,7 @@ class CleanVinylEngine:
                                     seam_mask[core_mask_u8 > 140] = 0
                                     _sc_put("seam", k_seam, (seam_mask,))
 
+                            self._checkpoint()
                             if spots_eff > 0 and has_any_frac:
                                 rec_part = _sc_get("spots", k_spots)
                                 if rec_part is not None:
@@ -3809,6 +3883,7 @@ class CleanVinylEngine:
                         lama_is_u8 = lama_f32.dtype == np.uint8
                         bw_h = x1h - x0h
                         for ys_b in range(y0h, y1h, 1024):
+                            self._checkpoint()
                             ye_b = min(y1h, ys_b + 1024)
                             bh_h = ye_b - ys_b
                             n_full = n_fine = None
@@ -3861,6 +3936,7 @@ class CleanVinylEngine:
                     else:
                         sc.pop("heal", None)  # almost the whole frame was healed: recomputing is cheaper than the RAM
 
+            self._checkpoint()
             if proxy_seed is not None:
                 # The frame right after the repair, at the size of the quick-preview copy (a tone-only change of the
                 # preview then starts from this real repair instead of a rough one). Always stored as a "fast" record:
@@ -3908,6 +3984,7 @@ class CleanVinylEngine:
                 del small_f32, fg_half, st_half, sm_half
                 _sc_put("scuffs", k_scuffs, scuff_rec)
             if scuff_rec is not None:
+                self._checkpoint()
                 diff_s, scuff_s = scuff_rec
                 diff_full = cv2.resize(diff_s, (w, h), interpolation=cv2.INTER_LINEAR)
                 cleaned_f32 += diff_full
@@ -3920,6 +3997,7 @@ class CleanVinylEngine:
             # Normalized Shadow-Safe Masked Background Blur (smooths vinyl wrinkles with zero dark-backdrop wash or halo!)
             blur_rec = _sc_get("blur", k_blur) if blur_str > 0 else None
             if blur_rec is not None:
+                self._checkpoint()
                 blur_diff_s, blur_s = blur_rec
                 blur_diff_full = cv2.resize(blur_diff_s, (w, h), interpolation=cv2.INTER_LINEAR)
                 cleaned_f32 += blur_diff_full
@@ -3943,6 +4021,7 @@ class CleanVinylEngine:
                 bg_w = np.clip(ramp_b * env_b, 0.0, 1.0)
                 bg_src_w = (fg_b < 0.08).astype(np.float32) * (1.0 - 0.88 * st_b) * (1.0 - np.clip(sh_b_smooth * 1.35, 0.0, 1.0))
 
+                self._checkpoint()
                 blur_eff = min(140.0, blur_str * (1.0 + 0.35 * max(0.0, boost - 1.0)))
                 sigma_b = 1.5 + (blur_eff / 100.0) * (max(bw, bh) * 0.024)
                 num_b = cv2.GaussianBlur(small_b * bg_src_w[..., None], (0, 0), sigmaX=sigma_b, sigmaY=sigma_b)
@@ -3991,6 +4070,7 @@ class CleanVinylEngine:
                     shadow_spots=shadow_spots,
                 )
                 spot2_mask[heal_mask > 0] = 0
+                self._checkpoint()
                 if np.any(spot2_mask > 0):
                     p2_src = pass2_u8
                     if np.any(eff_fg_for_spots > 22):
@@ -5229,7 +5309,7 @@ class CleanVinylEngine:
         t0 = time.perf_counter()
         self._begin_job()
         try:
-            with self._session_lock:
+            with self._compute_turn(), self._session_lock:
                 self._active_session = None
                 gc.collect()
 
@@ -5358,6 +5438,7 @@ class CleanVinylEngine:
                     "base_stale": False,     # True: the preview is ahead of `cleaned_base_rgba` (quick preview)
                     "mask_detached": False,  # True: the mask on screen was flattened by "invert + brush"
                     "base_gen": 0,           # goes up every time the frame is computed anew (see _edit_restore)
+                    "rev": 1,                # number of the pictures the window was last sent (see _picture_state)
                     "history": {"undo": [], "redo": []},  # brush / eraser steps that can be taken back
                     "preview_q": self._preview_quality(orig_small_bgr, p.get("previewQuality")),
                 }
@@ -5387,18 +5468,145 @@ class CleanVinylEngine:
                     "smoke": stats.get("smoke"),
                     "mask_share": previews["mask_share"],
                     "layer_share": previews["layer_share"],
+                    **self._picture_state(sess),
                 }
         finally:
             self._end_job()
 
+    def _recompute_params(self, sess: dict, params: dict) -> tuple[dict, dict]:
+        """The parameters of a recompute request as the session keeps them, and as the base clean reads them."""
+        p = dict(params or {})
+        if p.get("autoFractions", False):
+            auto_fracs = self._auto_fractions_cached(
+                sess.setdefault("auto_fracs_by_edge", {}), sess.setdefault("stage_cache", {}), sess["img_rgba_orig"],
+                sess["bit_depth"], sess["fg_raw_1024"], float(p.get("edge", 70)),
+            )
+            p["fracFine"] = auto_fracs["fracFine"]
+            p["fracMed"] = auto_fracs["fracMed"]
+            p["fracLarge"] = auto_fracs["fracLarge"]
+        return p, self._session_clean_params(p)
+
+    def _recompute_quick(self, sess: dict, clean_params: dict, progress_cb=None) -> dict:
+        """The quick preview for `clean_params` (see _quick_preview). Nothing of the session is changed here."""
+        ps_max = 32768.0 if sess["bit_depth"] == 16 else 255.0
+        found, cleaned_small, stats = self._quick_preview(sess, clean_params, progress_cb)
+        small = self._session_proxies_quick(
+            sess, cleaned_small, found["heal_mask"], ps_max, tone=self._tone_stages_on(clean_params),
+        )
+        return {"quick": True, "core": found["core_mask_u8"], "small": small, "stats": stats}
+
+    def _recompute_full(self, sess: dict, clean_params: dict, progress_cb=None) -> dict:
+        """
+        The real frame for `clean_params`, and its small pictures. Nothing of the session is changed here except
+        its stage cache, which only gains finished stages - so the caller holds _compute_lock, and a background
+        run may be stopped at any _checkpoint() on the way.
+        """
+        bit_depth = sess["bit_depth"]
+        ps_max = 32768.0 if bit_depth == 16 else 255.0
+        px = sess.get("proxy")
+        seed = {"size": (px["w"], px["h"])} if px is not None else None
+        out_cache: dict = {}
+        cleaned_rgba, stats = self.process(
+            sess["img_rgba_orig"],
+            bit_depth,
+            clean_params,
+            selection_alpha=sess.get("selection_alpha"),
+            progress_cb=progress_cb,
+            cached_fg_raw_1024=sess["fg_raw_1024"],
+            out_cache=out_cache,
+            stage_cache=sess.setdefault("stage_cache", {}),
+            proxy_seed=seed,
+        )
+        self._checkpoint()
+        small = self._session_proxies(
+            cleaned_rgba, out_cache.get("heal_mask_full"), sess["preview_w"], sess["preview_h"], ps_max,
+            tone=self._tone_stages_on(clean_params), heal_pass2=out_cache.get("heal_mask_pass2"),
+        )
+        return {"quick": False, "cleaned_rgba": cleaned_rgba, "core": out_cache["core_mask_u8"], "seed": seed,
+                "small": small, "stats": stats}
+
+    def _recompute_commit(self, sess: dict, p: dict, computed: dict, preserve_edits: bool, t0: float) -> dict:
+        """Puts a computed frame (_recompute_quick / _recompute_full) into the session and renders the answer."""
+        took_quick = bool(computed["quick"])
+        if not took_quick:
+            self._seed_session_proxy(sess.get("proxy"), computed["seed"])
+            sess["cleaned_base_rgba"] = computed["cleaned_rgba"]
+        sess["core_mask_u8"] = computed["core"]
+        sess["base_stale"] = took_quick  # True: `cleaned_base_rgba` is behind the preview until somebody asks for it
+        sess["mask_detached"] = False  # the automatic mask is back on screen
+        sess["clean_base_small_bgr"], sess["auto_mask_small_u8"], sess["repair_mask_small_u8"] = computed["small"]
+        sess["params"] = p
+        sess["base_gen"] = int(sess.get("base_gen", 0)) + 1  # the steps taken before belong to the former frame
+        if "previewQuality" in p:
+            sess["preview_q"] = self._preview_quality(sess["orig_small_bgr"], p.get("previewQuality"))
+
+        if not preserve_edits:
+            sess["user_paint_u8"][:] = 0
+            sess["user_erase_u8"][:] = 0
+            sess["inverted"] = False
+            sess["fill_all"] = False
+            sess["history"] = {"undo": [], "redo": []}  # the edits were dropped on purpose
+        sess["clean_paint_small_bgr"] = self._paint_preview_from_base(sess)
+
+        dress_on = bool(p.get("dressSmooth", False))
+        dress_str = float(p.get("dressStrength", 45))
+        previews = self._render_session_previews(sess, dress_on, dress_str, need_comp=True, need_mask=False)
+        stats = computed["stats"]
+        stats["elapsed_ms"] = int((time.perf_counter() - t0) * 1000)
+
+        return {
+            "ok": True,
+            "session_id": sess["id"],
+            "auto_fractions": {
+                "fracFine": bool(p.get("fracFine", True)),
+                "fracMed": bool(p.get("fracMed", True)),
+                "fracLarge": bool(p.get("fracLarge", True)),
+            },
+            "comp_jpg_b64": previews["comp_jpg_b64"],
+            "overlay_jpg_b64": previews["overlay_jpg_b64"],
+            "stats": stats,
+            "quick": took_quick,
+            "smoke": stats.get("smoke"),
+            "mask_share": previews["mask_share"],
+            "layer_share": previews["layer_share"],
+            "history": self._edit_history_counts(sess),
+            **self._picture_state(sess, changed=True),
+        }
+
+    @staticmethod
+    def _picture_state(sess: dict, changed: bool = False) -> dict:
+        """
+        What every answer of the big window says about the pictures it carries:
+          "rev":   their number in order. Answers can reach the window out of order (a brush stroke is answered
+                   while a background recompute is on its way); a picture with a lower number than the one on
+                   screen is older and must not replace it. changed=True: the session has just changed.
+          "exact": True when the real frame is behind the preview; False after a quick preview, until the real
+                   frame is computed (by a background recompute, or by Apply).
+        """
+        if changed:
+            sess["rev"] = int(sess.get("rev", 0)) + 1
+        return {"rev": int(sess.get("rev", 0)), "exact": not bool(sess.get("base_stale"))}
+
     def recompute_session(self, session_id: str, params: dict, preserve_edits: bool = True, progress_cb=None,
-                          quick: bool = False) -> dict:
+                          quick: bool = False, background: bool = False) -> dict:
         """
         New slider values for the open window.
         quick=False: the real frame is recomputed right away (only the stages whose sliders moved).
-        quick=True:  only the preview is updated (see _quick_preview); the real frame is computed once, when Apply
-                     needs it. Falls back to the full way by itself where the quick one cannot be used (small frame,
-                     selection, 2 passes). The answer says which way was taken ("quick").
+        quick=True:  only the preview is updated (see _quick_preview); the real frame is computed later - by a
+                     background recompute, or by Apply. Falls back to the full way by itself where the quick one
+                     cannot be used (small frame, 2 passes). The answer says which way was taken ("quick").
+        background=True: nobody is waiting for this run. The window asks for it by itself, to put the exact picture
+                     in place of a quick preview (or to show new values where there is no quick way). The real frame
+                     is computed as with quick=False, but:
+                       * the brush, the eraser and the clothing switch are answered meanwhile: the session is locked
+                         only while the result is put in place, and what was drawn meanwhile is kept;
+                       * a request that needs the frame itself - new slider values, Apply, another photo - makes the
+                         run stop at its next safe place, and so does closing the window. The answer is then
+                         {"ok": True, "superseded": True}: the session is as it was, the finished stages stay cached;
+                       * with the settings the preview already shows and a mask that is the user's own drawing
+                         ("invert + brush"), nothing is done ({"ok": True, "skipped": True}): a recompute puts the
+                         automatic mask back on screen, and that must never happen by itself. (Apply computes the
+                         real frame in that case, as before, without touching the mask.)
         """
         stale_msg = "Сесія застаріла. Закрийте вікно й запустіть «Очистити фон» ще раз."
         self._session_or_raise(session_id, stale_msg)
@@ -5406,99 +5614,52 @@ class CleanVinylEngine:
         t0 = time.perf_counter()
         self._begin_job()
         try:
-            with self._session_lock:
-                sess = self._session_or_raise(session_id, stale_msg)
-                p = dict(params or {})
-                w, h = sess["width"], sess["height"]
-                pw, ph = sess["preview_w"], sess["preview_h"]
-                bit_depth = sess["bit_depth"]
-                ps_max = 32768.0 if bit_depth == 16 else 255.0
-                stage_cache = sess.setdefault("stage_cache", {})
+            if not background:
+                with self._compute_turn(), self._session_lock:
+                    sess = self._session_or_raise(session_id, stale_msg)
+                    p, clean_params = self._recompute_params(sess, params)
+                    if bool(quick) and self._quick_preview_possible(sess, clean_params):
+                        computed = self._recompute_quick(sess, clean_params, progress_cb)
+                    else:
+                        computed = self._recompute_full(sess, clean_params, progress_cb)
+                    return self._recompute_commit(sess, p, computed, preserve_edits, t0)
 
-                if p.get("autoFractions", False):
-                    auto_fracs = self._auto_fractions_cached(
-                        sess.setdefault("auto_fracs_by_edge", {}), stage_cache, sess["img_rgba_orig"], bit_depth,
-                        sess["fg_raw_1024"], float(p.get("edge", 70)),
-                    )
-                    p["fracFine"] = auto_fracs["fracFine"]
-                    p["fracMed"] = auto_fracs["fracMed"]
-                    p["fracLarge"] = auto_fracs["fracLarge"]
+            # A background run waits for its turn like everybody else (so an older background run gives way to a
+            # newer one), but holds the session itself only at the two ends.
+            with self._compute_turn():
+                with self._session_lock:
+                    sess = self._session_or_raise(session_id, stale_msg)
+                    p, clean_params = self._recompute_params(sess, params)
+                    refine_only = self._clean_signature(p) == self._clean_signature(sess["params"])
+                    if refine_only and sess.get("mask_detached"):
+                        return {"ok": True, "session_id": session_id, "skipped": True, **self._picture_state(sess)}
 
-                clean_params = self._session_clean_params(p)
+                def give_way():
+                    if self._compute_waiters > 0 or self._active_session is not sess:
+                        raise JobSuperseded()
 
-                took_quick = bool(quick) and self._quick_preview_possible(sess, clean_params)
-                if took_quick:
-                    found, cleaned_small, stats = self._quick_preview(sess, clean_params, progress_cb)
-                    clean_small_bgr, auto_mask_small, repair_mask_small = self._session_proxies_quick(
-                        sess, cleaned_small, found["heal_mask"], ps_max, tone=self._tone_stages_on(clean_params),
-                    )
-                    del cleaned_small
-                    sess["core_mask_u8"] = found["core_mask_u8"]
-                    sess["base_stale"] = True  # `cleaned_base_rgba` is behind the preview until Apply asks for it
-                else:
-                    px = sess.get("proxy")
-                    seed = {"size": (px["w"], px["h"])} if px is not None else None
-                    out_cache: dict = {}
-                    cleaned_rgba, stats = self.process(
-                        sess["img_rgba_orig"],
-                        bit_depth,
-                        clean_params,
-                        selection_alpha=sess.get("selection_alpha"),
-                        progress_cb=progress_cb,
-                        cached_fg_raw_1024=sess["fg_raw_1024"],
-                        out_cache=out_cache,
-                        stage_cache=stage_cache,
-                        proxy_seed=seed,
-                    )
-                    self._seed_session_proxy(px, seed)
+                def progress(pct: int, txt: str):
+                    if progress_cb is not None:
+                        progress_cb(pct, txt)
+                    follower = self._bg_follower  # an Apply that waits for this very frame shows its progress
+                    if follower is not None:
+                        follower(pct, txt)
 
-                    clean_small_bgr, auto_mask_small, repair_mask_small = self._session_proxies(
-                        cleaned_rgba, out_cache.get("heal_mask_full"), pw, ph, ps_max,
-                        tone=self._tone_stages_on(clean_params), heal_pass2=out_cache.get("heal_mask_pass2"),
-                    )
+                self._bg_local.check = give_way
+                try:
+                    computed = self._recompute_full(sess, clean_params, progress)
+                except JobSuperseded:
+                    return {"ok": True, "session_id": session_id, "superseded": True}
+                finally:
+                    self._bg_local.check = None
 
-                    sess["cleaned_base_rgba"] = cleaned_rgba
-                    sess["core_mask_u8"] = out_cache["core_mask_u8"]
-                    sess["base_stale"] = False
-                sess["mask_detached"] = False  # the automatic mask is back on screen
-                sess["clean_base_small_bgr"] = clean_small_bgr
-                sess["auto_mask_small_u8"] = auto_mask_small
-                sess["repair_mask_small_u8"] = repair_mask_small
-                sess["params"] = p
-                sess["base_gen"] = int(sess.get("base_gen", 0)) + 1  # the steps taken before belong to the former frame
-                if "previewQuality" in p:
-                    sess["preview_q"] = self._preview_quality(sess["orig_small_bgr"], p.get("previewQuality"))
-
-                if not preserve_edits:
-                    sess["user_paint_u8"][:] = 0
-                    sess["user_erase_u8"][:] = 0
-                    sess["inverted"] = False
-                    sess["fill_all"] = False
-                    sess["history"] = {"undo": [], "redo": []}  # the edits were dropped on purpose
-                sess["clean_paint_small_bgr"] = self._paint_preview_from_base(sess)
-
-                dress_on = bool(p.get("dressSmooth", False))
-                dress_str = float(p.get("dressStrength", 45))
-                previews = self._render_session_previews(sess, dress_on, dress_str, need_comp=True, need_mask=False)
-                stats["elapsed_ms"] = int((time.perf_counter() - t0) * 1000)
-
-                return {
-                    "ok": True,
-                    "session_id": session_id,
-                    "auto_fractions": {
-                        "fracFine": bool(p.get("fracFine", True)),
-                        "fracMed": bool(p.get("fracMed", True)),
-                        "fracLarge": bool(p.get("fracLarge", True)),
-                    },
-                    "comp_jpg_b64": previews["comp_jpg_b64"],
-                    "overlay_jpg_b64": previews["overlay_jpg_b64"],
-                    "stats": stats,
-                    "quick": took_quick,
-                    "smoke": stats.get("smoke"),
-                    "mask_share": previews["mask_share"],
-                    "layer_share": previews["layer_share"],
-                    "history": self._edit_history_counts(sess),
-                }
+                with self._session_lock:
+                    if self._active_session is not sess:
+                        return {"ok": True, "session_id": session_id, "superseded": True}
+                    if refine_only and sess.get("mask_detached"):
+                        # the mask became the user's own drawing while the frame was being computed
+                        return {"ok": True, "session_id": session_id, "skipped": True, **self._picture_state(sess)}
+                    return self._recompute_commit(sess, p, computed, True, t0)
         finally:
             self._end_job()
 
@@ -5642,7 +5803,7 @@ class CleanVinylEngine:
 
                 previews = self._render_session_previews(sess, dress_smooth, dress_strength, need_comp=True, need_mask=False)
                 out = {"ok": True, "inverted": bool(sess.get("inverted", False)), **previews,
-                       "history": self._edit_history_counts(sess)}
+                       "history": self._edit_history_counts(sess), **self._picture_state(sess, changed=True)}
                 if stepped is not None:
                     out["stepped"] = bool(stepped)  # False: there was nothing to take back / to redo
                 return out
@@ -5656,7 +5817,7 @@ class CleanVinylEngine:
             with self._session_lock:
                 sess = self._session_or_raise(session_id)
                 previews = self._render_session_previews(sess, dress_smooth, dress_strength, need_comp=True, need_mask=False)
-                return {"ok": True, **previews}
+                return {"ok": True, **previews, **self._picture_state(sess)}
         finally:
             self._end_job()
 
@@ -5669,18 +5830,30 @@ class CleanVinylEngine:
         dress_strength: float = 45.0,
         progress_cb=None,
         params: dict | None = None,
+        follow_background: bool = False,
     ) -> tuple[np.ndarray, np.ndarray | None, dict]:
         """
         params: the settings on the sliders at the moment of Apply (optional). The layer is always made for them:
         if the real frame was computed for other values (quick preview, or sliders moved without any refresh),
         it is computed here, once.
+        follow_background: the window knows that a background recompute is on its way for exactly these settings.
+        Apply then waits for it instead of stopping it (what it has done so far would be done again) and shows its
+        progress as the first part of its own. Without it, Apply stops a background run like any other request.
         """
         self._session_or_raise(session_id)
 
         t0 = time.perf_counter()
         self._begin_job()
         try:
-            with self._session_lock:
+            follower, followed = None, []
+            if follow_background and progress_cb is not None:
+                first_cb = progress_cb
+
+                def follower(pct: int, txt: str):  # the same share of the progress bar as the refresh below
+                    followed.append(pct)
+                    first_cb(int(4 + 0.58 * pct), txt)
+
+            with self._compute_turn(ask_way=not follow_background, follower=follower), self._session_lock:
                 sess = self._session_or_raise(session_id)
                 w, h = sess["width"], sess["height"]
                 bit_depth = sess["bit_depth"]
@@ -5701,6 +5874,10 @@ class CleanVinylEngine:
                     if user_cb is not None:
                         # the rest of Apply continues the same progress bar (it used to start at 45%)
                         progress_cb = lambda pct, txt: user_cb(int(60 + (pct - 45) * 0.62), txt)  # noqa: E731
+                elif followed:
+                    # the frame was computed by the background run Apply waited for: the bar goes on from there
+                    user_cb = progress_cb
+                    progress_cb = lambda pct, txt: user_cb(int(60 + (pct - 45) * 0.62), txt)  # noqa: E731
 
                 if progress_cb is not None:
                     progress_cb(45, "Фінальна збірка шару...")
