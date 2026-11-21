@@ -2802,6 +2802,9 @@ async function openInteractiveWorkspace() {
       if (sessState.scanAborted || !sessState.open) return;
 
       sessState.id = res.session_id;
+      // The working size of the window: the photo, the brush and the strokes are placed by it. The pictures
+      // themselves are larger since 4.8.0 (up to twice, so that the person is sharp in a big window) and are
+      // simply drawn into the same box - never ask a picture for its size.
       sessState.pw = res.preview_w;
       sessState.ph = res.preview_h;
       sessState.lastStats = res.stats || null;

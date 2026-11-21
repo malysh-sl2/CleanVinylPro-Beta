@@ -4206,6 +4206,8 @@ class CleanVinylEngine:
     # by "preview_w" / "preview_h" and merely draws a picture with more pixels into the same box.
     # "previewLong" of the start request overrules the size; at or below the working size (the checks against
     # v3.2.1 ask for 1080) the working pictures themselves are sent, as before.
+    # (Comments written before 4.8.0 say "the window pictures" and "window pixels" for the WORKING size: the
+    # brush radius, the band widths, the margins and the masks are all in working pixels.)
     DISPLAY_LONG = 2160
     DISPLAY_MIN_GAIN = 1.25      # a display picture less than this much larger than the working one is not worth it
 

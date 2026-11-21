@@ -58,6 +58,11 @@ Part 2 - what this program does differently from v3.2.1, each with its own measu
             session untouched (tried at every such place), and so does the window when a slider is taken; Apply
             waits for it when it computes the very frame Apply needs; a mask that is the user's own drawing is
             never replaced by itself; the clothing switch used meanwhile shows in the exact pictures
+  sharp     the pictures the big window is sent are twice the working size (up to 2160 px, never larger than the
+            frame): what the layer leaves alone - the person - is the photo of that size, pixel for pixel, several
+            times sharper than the working picture enlarged; the layer shows what it showed (also after a stroke,
+            the eraser, a light refresh, the exact picture); ironed clothing keeps the weave of the cloth; the
+            working size, by which the window places everything, is unchanged
 
 Part 3 - the program around the engine:
   server    settings migration, binary packets, one version everywhere; the name a person reads has no 2 (since
@@ -2563,6 +2568,11 @@ def check_server():
             bad.append(f"layer names: main.js lacks {want!r}")
     if re.search(r'create(Pixel)?Layer\(\{ name: "', main_js):
         bad.append("layer names: a layer is created under a name written in place (use LAYER_NAME_AI / LAYER_NAME_SELECTION)")
+    # The pictures of the big window are larger than its working size (check_sharp). The window places the photo,
+    # the brush and the strokes by "preview_w" / "preview_h" of the answer and must never ask a picture for its size.
+    if re.search(r"natural(Width|Height)", main_js) or "sessState.pw = res.preview_w;" not in main_js \
+            or "sessState.ph = res.preview_h;" not in main_js:
+        bad.append("the big window must take its working size from preview_w / preview_h, never from the pictures (naturalWidth)")
 
     # The icon of the plugin (Photoshop: the list of plugins). Adobe asks for a picture without transparency, in
     # the size the manifest names and twice that, for every theme of the interface.
@@ -3720,6 +3730,12 @@ def check_sharp():
 
         left_d, left_w = creases(c_g) / creases(o_g), creases(c_gw) / creases(o_gw)   # what the ironing leaves of them
         kept = fine(c_g, cloth) / max(1e-6, fine(o_g, cloth))
+        weave = lambda pic: (pic[:, :, 1].astype(np.float32) - cv2.GaussianBlur(pic[:, :, 1].astype(np.float32), (0, 0), 1.5))[cloth]  # noqa: E731
+        # Is it the weave of the photo, thread for thread? (The two pictures are JPEGs of a weave two levels deep:
+        # about 0.8 is what they can agree. An enlarged layer gives next to nothing, a wrong sign a negative number.)
+        own = float(np.corrcoef(weave(c_g), weave(o_g))[0, 1])
+        if not own >= 0.6:
+            bad.append(f"ironed clothing: the fine detail of the cloth is not that of the photo (correlation {own:.2f}, at least 0.60)")
         if not left_w <= 0.85:
             bad.append(f"test frame: the ironing leaves {left_w:.0%} of the creases in the working picture")
         if not abs(left_d - left_w) <= 0.12:
@@ -3731,7 +3747,8 @@ def check_sharp():
         deep = cv2.erode(cloth.astype(np.uint8), np.ones((65, 65), np.uint8)) > 0
         if c_off.shape != c_g.shape or not np.array_equal(c_off[deep], o_g[deep]):
             bad.append("clothing switched off: the cloth must be the photo again, at the size of the other pictures")
-        notes.append(f"ironed clothing keeps {kept:.0%} of the weave and shows the same ironing ({left_d:.0%} of the creases left; working picture: {left_w:.0%})")
+        notes.append(f"ironed clothing keeps {kept:.0%} of the weave (the photo's own: correlation {own:.2f}) and shows the same ironing "
+                     f"({left_d:.0%} of the creases left; working picture: {left_w:.0%})")
 
     # ---- 5. a small frame: the working pictures are the frame
     simg, ssil = H.make_studio_image(900, 600, n_dust=20, n_hair=2, seed=3)

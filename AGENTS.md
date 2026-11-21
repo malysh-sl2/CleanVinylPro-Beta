@@ -77,6 +77,11 @@ written here and in the repository.
   said that the old program is removed from his PC and that 4.7.0 works. He was asked two questions with
   option cards and chose: after a stroke - the cleaned photo stays on screen (not the mask); the name -
   yes, remove the 2. 4.8.0 answers this message. He did not write «зливай».
+- While 4.8.0 was being built he added a sixth point, in his words: «і ще коли дивишся на фото у цьому вікні
+  виглядає людина розмито але коли приміню все ок» - the person looks blurred in the big window and is fine
+  after Apply. His screenshots show how he works: a 4K monitor (3840 x 2160), the window large, the view
+  zoomed far in. The window was showing a 1080 px copy of a 5760 px frame. 4.8.0 answers this as well: the
+  window gets pictures of twice the size.
 
 ## 2. What is in the repository
 
@@ -370,13 +375,48 @@ second plugin next to the installed one and lose his presets.
     desktop app shows no custom icon for a plugin installed from a local `.ccx` (answers of Adobe staff on
     the developer forum, found in this session); nothing inside the plugin changes that, and he was told
     so.
-  - Checks: the new group `exact`; `http` sends `background` / `followBackground` through the HTTP layer;
-    `server` checks the name, the layer names and the icon. The scripted server of the panel test speaks
-    the protocol of 4.8.0 (`bgAware`, `rev`, `exact`, background runs that give way, `skipped`); without
-    `rev` / `exact` in its answers the panel would take it for an older server and ask nothing.
-    `env.recomputes()` are the requests a control asked for, `env.exacts()` the background ones.
-    `tests/try_defects.py` holds the 48 deliberate defects of 4.8.0 (13 for the engine and the server, 35
-    for the panel); a panel defect can now name several scenario texts (`panel("a", "b")`).
+  - **A slider that is taken stops the background run at once.** `stopBackgroundRun()` in the panel posts
+    `/session/stop-background` on the `mousedown` of a slider that changes the frame (not Blend, not
+    Clothing) while an exact request is on its way. `stop_background(session_id)` raises `_bg_stop`; a
+    run whose mark (`stop_mark`, taken when its request enters `recompute_session`) is older stops at its
+    next safe place, or does not start at all if it still waited for its turn. Runs asked for later are
+    not affected. Without this the run stopped only when the refresh after the release arrived, and that
+    refresh had to wait for it. What was put off when Blend or Clothing was taken - a light refresh, the
+    exact picture - goes on after the release.
+  - **The pictures of the window are twice the working size** (his sixth point). The session still works
+    at <= 1080 px: masks, strokes, the cleaned proxy, `preview_w` / `preview_h`, the brush radius. Only
+    the three JPEGs are larger: `DISPLAY_LONG` = 2160 px on the long side, never larger than the frame,
+    and not at all where less than `DISPLAY_MIN_GAIN` (1.25) would be gained (`_display_size`).
+    `sess["orig_disp_bgr"]` is the photo at that size; `_compose_display` lays the layer of the working
+    size, enlarged, over it: where the layer shows nothing the result IS the photo, pixel for pixel.
+    Ironed clothing takes only the change the ironing makes (`relit_small`), so the weave of the cloth
+    stays sharp. `_overlay_display` draws the mask view of that size: the same tints as
+    `_encode_overlay_jpg`, as three maps that are made at the working size and enlarged (the old way took
+    147 ms at that size, this one about 25).
+    `previewLong` of the start request overrules the size. The legacy regime of the checks asks for 1080
+    and gets the working pictures, byte for byte as before.
+    The panel needed no change: the stage is sized by `preview_w` x zoom and each `<img>` fills it.
+    `main.js` must never ask a picture for its size (`naturalWidth`); the group `server` checks that.
+    "Window pixels" and "the window pictures" in this file and in comments written before 4.8.0 mean the
+    WORKING size: the brush radius, band widths, margins and masks are all in working pixels.
+    Measured on his 3840 x 5760 frame in the sandbox: drawing the two pictures of an answer takes about
+    90 ms at 2160 px (about 70 ms at 1080 px before), a stroke takes the same time as before within the
+    noise of the measurement; a picture weighs about 220 KB instead of 66 KB (quality 90; on a dark
+    frame, quality 100, about 0.5 MB). 2880 px was measured too: 170 ms and 400 KB. 2160 was chosen
+    because every answer carries two pictures and nobody knows how fast Photoshop decodes them.
+    What did NOT gain: the cleaned backdrop is still the working-size proxy, enlarged. The next step, if
+    he asks for more: load the visible part of the frame at full resolution when the view is zoomed in
+    (the real frame is in the session once the exact picture is there). Not built.
+  - Checks: the new groups `exact` and `sharp`; `http` sends `background` / `followBackground` /
+    `stop-background` through the HTTP layer; `server` checks the name, the layer names, the icon and
+    that the panel never reads the size of a picture; `mask` and `dark` read the larger pictures. The
+    scripted server of the panel test speaks the protocol of 4.8.0 (`bgAware`, `rev`, `exact`,
+    background runs that give way or are stopped, `skipped`); without `rev` / `exact` in its answers the
+    panel would take it for an older server and ask nothing. `env.recomputes()` are the requests a
+    control asked for, `env.exacts()` the background ones.
+    `tests/try_defects.py` holds the 70 deliberate defects of 4.8.0 (14 `exact`, 15 `sharp`, 3 `http`, 38
+    for the panel); a panel defect can now name several scenario texts (`panel("a", "b")`). The runner
+    says CRASHED, not "caught", when a check run ends without a FAIL line (section 4).
 
 ## 3. Current state — update this at the end of every session
 
