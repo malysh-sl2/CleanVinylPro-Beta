@@ -112,6 +112,9 @@ DEFECTS = [
     ("sharp: the larger pictures do not show the strokes and the eraser", "sharp", ENGINE,
      "                comp_bgr = self._compose_display(disp, orig_s, layer_s, alpha_s, relit_s)\n",
      "                comp_bgr = self._compose_display(disp, orig_s, layer_s, sess[\"auto_mask_small_u8\"].astype(np.float32) / 255.0, relit_s)\n"),
+    ("sharp: the larger pictures do not show what the brush painted", "sharp", ENGINE,
+     "                comp_bgr = self._compose_display(disp, orig_s, layer_s, alpha_s, relit_s)\n",
+     "                comp_bgr = self._compose_display(disp, orig_s, sess[\"clean_base_small_bgr\"], alpha_s, relit_s)\n"),
     ("sharp: ironed clothing is shown from the enlarged layer (the weave is lost)", "sharp", ENGINE,
      "                comp_bgr = self._compose_display(disp, orig_s, layer_s, alpha_s, relit_s)\n",
      "                comp_bgr = self._compose_display(disp, orig_s, layer_s, alpha_s, None)\n"),
@@ -341,7 +344,7 @@ def main() -> int:
             why = ""
             if caught:
                 nxt = lines[at + 1] if at + 1 < len(lines) else ""
-                why = (nxt if nxt and not nxt.startswith(("[", "FAIL ", "plugin ")) else lines[at])[:150]
+                why = (nxt if nxt and not nxt.startswith(("[", "FAIL ", "FAILED", "plugin ")) else lines[at])[:190]
                 state = "caught    "
             elif code:
                 why = f"the checks did not finish (exit code {code}); last line: {(lines[-1] if lines else '')[:110]}"

@@ -3538,8 +3538,9 @@ def check_sharp():
         cleaned picture as in the picture of the original, and several times sharper than the working picture
         enlarged;
       * the layer shows what it showed: reduced to the working size, the pictures are the working pictures (the
-        cleaned photo and the mask view), also after a stroke, the eraser, a light refresh and the exact picture;
-      * the eraser brings the photo back at its full sharpness;
+        cleaned photo and the mask view), also after the eraser, a light refresh and the exact picture;
+      * the eraser brings the photo back (the specks it erased along are as dark as in the picture of the
+        original), and what the brush paints away is gone in the larger picture too;
       * ironed clothing keeps the weave of the cloth: the photo takes only the change the ironing makes;
       * a small frame gets the working pictures, as before.
     """
@@ -3586,7 +3587,12 @@ def check_sharp():
     f = img.astype(np.float32)
     f[person] += np.random.default_rng(11).normal(0.0, 12.0, (h, w)).astype(np.float32)[person][:, None]
     img = np.clip(f, 0, 255).astype(np.uint8)
-    params = dict(H.STD, speedMode="fast", smokeAuto=True)
+    dust = [(int((0.66 + 0.02 * i) * w), int(0.70 * h)) for i in range(7)]   # a row of specks on the floor (see 3.)
+    for x, y in dust:
+        cv2.circle(img, (x, y), 3, tuple(int(v) - 40 for v in img[y, x]), -1, lineType=cv2.LINE_AA)
+    # (smoke protection off, as in the owner's presets: with it the stand-in frame keeps parts of the floor
+    #  uncleaned, and the row of specks must be something the search removes)
+    params = dict(H.STD, speedMode="fast", smokeOn=False)
 
     def opened(image, matte, **over):
         eng = H.make_engine(E, matte)
@@ -3678,16 +3684,46 @@ def check_sharp():
             bad.append(f"the mask view: the tints of _overlay_display are {d_new:.2f} levels from the rule at most (allowed 1), "
                        f"the JPEG of _encode_overlay_jpg {d_old:.2f} on average (allowed 2)")
 
-    # ---- 3. a stroke, the eraser, a light refresh, the exact picture: the same on both, and the size stays
-    line_b = [(0.12 + 0.01 * i, 0.30) for i in range(10)]
-    line_e = [(0.70 + 0.01 * i, 0.82) for i in range(12)]
-    same_layer("after a brush stroke", stroke(e_d, r_d, line_b, 26), stroke(e_w, r_w, line_b, 26))
-    rd, rw = stroke(e_d, r_d, line_e, 30, erase=True), stroke(e_w, r_w, line_e, 30, erase=True)
+    # ---- 3. the eraser, the brush, a light refresh, the exact picture: the same on both, and the size stays
+    def dark(pic, at, core=1.5):
+        """How dark a mark at `at` (frame pixels) is against the backdrop around it (levels of 255), at the size of the picture."""
+        sc = pic.shape[0] / float(h)
+        cx_, cy_ = int(round(at[0] * sc)), int(round(at[1] * sc))
+        far, near = max(6, int(round(24 * sc))), max(0, int(round(core * sc)))
+        around = pic[cy_ - far:cy_ + far + 1, cx_ - far:cx_ + far + 1].astype(np.float32).mean(axis=2)
+        return float(np.median(around) - around[far - near:far + near + 1, far - near:far + near + 1].min())
+
+    specks = lambda pic: float(np.mean([dark(pic, at) for at in dust]))  # noqa: E731
+
+    # The eraser is drawn along the row of specks, which the search removes. Where it erased, the specks must be
+    # back - in the larger picture as dark as in the picture of the original.
+    d_photo, d_clean = specks(o_d), specks(c_d)
+    if not (d_photo >= 15.0 and d_clean <= 0.3 * d_photo):
+        bad.append(f"test frame: the specks are {d_photo:.1f} levels dark in the picture of the original and {d_clean:.1f} in the cleaned one")
+    line_e = [(0.66 + 0.01 * i, 0.70) for i in range(13)]
+    rd, rw = stroke(e_d, r_d, line_e, 26, erase=True), stroke(e_w, r_w, line_e, 26, erase=True)
     c_e = same_layer("after the eraser", rd, rw)
-    erased = np.zeros((dh, dw), bool)   # the core of the erased band
-    erased[int(0.82 * dh) - 30:int(0.82 * dh) + 30, int(0.71 * dw):int(0.80 * dw)] = True
-    if not gap(c_e, o_d, erased) <= 1.5:
-        bad.append(f"the eraser must bring the photo back at its full size: the erased band is {gap(c_e, o_d, erased):.2f} levels from the picture of the original")
+    d_erased, d_work, d_work_photo = specks(c_e), specks(dec(rw["comp_jpg_b64"])), specks(o_w)
+    if not (d_erased >= 0.75 * d_photo and d_work >= 0.5 * d_work_photo):
+        bad.append(f"the eraser must bring the photo back at the full size of the picture: where it erased, the specks are {d_erased:.1f} "
+                   f"levels dark ({d_photo:.1f} in the picture of the original; the working pictures: {d_work:.1f} of {d_work_photo:.1f})")
+
+    # The brush: a mark that the search leaves alone is painted away - in the larger picture too.
+    mark = (int(0.20 * w), int(0.30 * h))
+    marked_img = img.copy()
+    cv2.circle(marked_img, mark, 9, tuple(int(v) - 45 for v in marked_img[mark[1], mark[0]]), -1, lineType=cv2.LINE_AA)
+    spot = lambda pic: dark(pic, mark, core=4.0)  # noqa: E731
+
+    e_m, r_m = opened(marked_img, sil, spots=0, seamOn=False)       # (the search takes nothing; the backdrop is still evened)
+    s_photo, s_before = spot(dec(r_m["orig_jpg_b64"])), spot(dec(r_m["comp_jpg_b64"]))
+    r_p = stroke(e_m, r_m, [(mark[0] / float(w), mark[1] / float(h))], 14)
+    s_after = spot(dec(r_p["comp_jpg_b64"]))
+    if not (s_photo >= 25.0 and s_before >= 0.7 * s_photo):
+        bad.append(f"test frame: the mark is {s_photo:.0f} levels dark in the picture of the original and {s_before:.0f} in the cleaned one before the brush")
+    if not s_after <= 0.3 * s_photo:
+        bad.append(f"a mark painted over with the brush is still in the larger picture: {s_photo:.0f} -> {s_after:.0f} levels")
+    _quiet(e_m.close_session, r_m["session_id"])
+
     moved = dict(params, spots=40, seam=30)
     recompute = lambda eng, r, **k: _quiet(eng.recompute_session, r["session_id"], dict(moved), True, None, **k)  # noqa: E731
     same_layer("after a light refresh", recompute(e_d, r_d, quick=True), recompute(e_w, r_w, quick=True))
@@ -3760,8 +3796,10 @@ def check_sharp():
     report("sharp", not bad,
            (f"a 3000x2000 frame: the window gets pictures of 2160x1440 and still works at 1080x720; inside the person the cleaned "
             f"picture is the photo of that size, pixel for pixel: fine detail {f_disp:.1f} levels (the photo: {f_photo:.1f}; the "
-            f"working picture enlarged: {f_work:.1f}); the layer shows what it showed, also after a stroke, the eraser, a light "
-            f"refresh and the exact picture; " + "; ".join(notes) + "; a small frame gets its own size")
+            f"working picture enlarged: {f_work:.1f}); the layer shows what it showed, also after the eraser, a light refresh and "
+            f"the exact picture; the eraser brings the specks of the photo back ({d_clean:.1f} -> {d_erased:.1f} levels, the photo: "
+            f"{d_photo:.1f}), the brush paints a mark away ({s_photo:.0f} -> {s_after:.0f} levels); "
+            + "; ".join(notes) + "; a small frame gets its own size")
            if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
