@@ -394,7 +394,9 @@ second plugin next to the installed one and lose his presets.
     `_encode_overlay_jpg`, as three maps that are made at the working size and enlarged (the old way took
     147 ms at that size, this one about 25).
     `previewLong` of the start request overrules the size. The legacy regime of the checks asks for 1080
-    and gets the working pictures, byte for byte as before.
+    and gets the working pictures, byte for byte as before. (Like `previewQuality`, it is read from the
+    parameters that are in force after the automatic preset was put in place: a request that names it
+    next to `scene_presets` loses it. Only the checks pass it, and they pass no scene presets with it.)
     The panel needed no change: the stage is sized by `preview_w` x zoom and each `<img>` fills it.
     `main.js` must never ask a picture for its size (`naturalWidth`); the group `server` checks that.
     "Window pixels" and "the window pictures" in this file and in comments written before 4.8.0 mean the
@@ -414,7 +416,7 @@ second plugin next to the installed one and lose his presets.
     background runs that give way or are stopped, `skipped`); without `rev` / `exact` in its answers the
     panel would take it for an older server and ask nothing. `env.recomputes()` are the requests a
     control asked for, `env.exacts()` the background ones.
-    `tests/try_defects.py` holds the 70 deliberate defects of 4.8.0 (14 `exact`, 15 `sharp`, 3 `http`, 38
+    `tests/try_defects.py` holds the 71 deliberate defects of 4.8.0 (14 `exact`, 16 `sharp`, 3 `http`, 38
     for the panel); a panel defect can now name several scenario texts (`panel("a", "b")`). The runner
     says CRASHED, not "caught", when a check run ends without a FAIL line (section 4).
 

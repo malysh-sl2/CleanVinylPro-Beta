@@ -1101,14 +1101,21 @@ async function main() {
     await env.open();
     await env.drag("gSlSpots", 90);
     await env.waitFor(() => env.exacts().length === 1, 3000);
-    await env.drag("gSlSpots", 70);                          // new values; the run in flight computes the former ones
-    await sleep(60);
+    await sleep(100);
+    // New values by a button: unlike a slider that is taken, a click does not stop the background run at once -
+    // the run in flight goes on computing the former values until the refresh, or Apply, arrives.
+    const medBefore = env.state("fracMed");
+    env.click("dlgBtnGear");
+    env.click("dlgFracMed");
+    await sleep(20);
+    expect(env.state("fracMed") === !medBefore && !env.exacts()[0].done, "the values changed and the run for the former ones is still on its way");
     env.click("dlgBtnApply");
     await env.waitFor(() => env.state("sessState.open") === false, 4000);
     let a = env.of("/session/apply");
     expect(a.length === 1 && a[0].body.followBackground === false, "Apply must not wait for a run that computes other values");
-    expect(a[0] && a[0].body.params.spots === 70, "Apply carries the current values");
-    expect(env.server.bgSeen.superseded === 1, "the background run gave way to Apply");
+    expect(a[0] && a[0].followed !== true, "...and the server did not wait for it");
+    expect(a[0] && a[0].body.params.fracMed === !medBefore && a[0].body.params.spots === 90, "Apply carries the current values");
+    expect(env.server.bgSeen.superseded === 1 && env.of("/session/stop-background").length === 0, "the background run gave way to Apply");
     await env.waitFor(() => env.state("isBusy") === false);
     await env.open();                                        // a new window: the picture is exact, nothing is running
     await env.settle(900);
