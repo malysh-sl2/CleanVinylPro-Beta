@@ -4317,9 +4317,16 @@ def _exact_cases():
     eng.edit_session_mask(sid, "invert")
     stroke(eng, sid, stroke_a, False)
     drawn = state(eng)
+    computed = []
+    plain_process = eng.process
+    eng.process = lambda *a, **k: (computed.append(1), plain_process(*a, **k))[1]
     ans = recompute(eng, sid, moved, background=True)
-    if ans.get("skipped") is not True or "comp_jpg_b64" in ans or ans.get("exact") is not False or state(eng) != drawn or not idle(eng):
-        bad.append("with the user's own mask on screen a background recompute for the same settings must do nothing")
+    eng.process = plain_process
+    # ("nothing" includes the frame: a run that computes it first and declines afterwards costs seconds each time)
+    if ans.get("skipped") is not True or "comp_jpg_b64" in ans or ans.get("exact") is not False or state(eng) != drawn \
+            or not idle(eng) or computed:
+        bad.append(f"with the user's own mask on screen a background recompute for the same settings must do nothing "
+                   f"(frames computed: {len(computed)})")
     layer_drawn = apply(eng, sid, moved)[0]  # (Apply computes the real frame then, and keeps the mask - as before)
     if eng._active_session["mask_detached"] is not True or eng._active_session["base_stale"] is not False:
         bad.append("Apply with the user's own mask must compute the real frame and keep that mask")
