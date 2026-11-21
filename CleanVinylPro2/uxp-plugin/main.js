@@ -1808,6 +1808,19 @@ const ZOOM_WHEEL_STEP = 1.14;
 const ZOOM_BUTTON_STEP = 1.25;
 const ZOOM_KEY_STEP = 1.4;   // Ctrl + "+" / Ctrl + "−"
 
+// Which zoom key of Photoshop is this (pressed with Ctrl)? "in": "+" / "=", "out": "−", "fit": "0"; "" for any
+// other key. The key next to Backspace and the numeric pad both count. Hosts differ in what they say about a
+// key, so its place on the keyboard (e.code), its character (e.key) and its number (e.keyCode) are all asked.
+function zoomKeyOf(e) {
+  const code = String(e.code || "");
+  const k = String(e.key || "").toLowerCase();
+  const n = Number(e.keyCode || e.which || 0);
+  if (code === "Equal" || code === "NumpadAdd" || k === "+" || k === "=" || k === "add" || n === 187 || n === 107 || n === 61) return "in";
+  if (code === "Minus" || code === "NumpadSubtract" || k === "-" || k === "_" || k === "−" || k === "subtract" || n === 189 || n === 109 || n === 173) return "out";
+  if (code === "Digit0" || code === "Numpad0" || k === "0" || n === 48 || n === 96) return "fit";
+  return "";
+}
+
 // Zoom by `factor`; the point of the photo that is (cx, cy) away from the middle of the viewport stays where it
 // is. The mouse wheel passes the pointer; the keys and the two buttons pass nothing - the middle of the view
 // stays, as with Ctrl + "+" in Photoshop.
@@ -2193,9 +2206,9 @@ function scheduleExactPreview(waitMs) {
 
 function fireExactPreview() {
   sessState.exactTimer = null;
-  // Not now: a slider is held, or another request for the frame is on its way or about to go. Each of them calls
-  // scheduleExactPreview() when it is done.
-  const busy = activeDragSliderId || sessState.recomputing || sessState.previewTimer;
+  // Not now: a slider is held, a stroke is being drawn, or another request for the frame is on its way or about
+  // to go. Each of them calls scheduleExactPreview() when it is done.
+  const busy = activeDragSliderId || sessState.isDrawing || sessState.recomputing || sessState.previewTimer;
   const onItsWay = exactJobs.size > 0 && sessState.exactSig === previewSettingsSignature();
   if (!exactPreviewWanted() || busy || onItsWay) {
     updatePreviewBadge();
@@ -3624,6 +3637,7 @@ function initEvents() {
         await sendMaskEditOp("stroke", pts);
       } else {
         clearStrokeDots();
+        scheduleExactPreview();  // (it was put off while the mouse button was down)
       }
     }
   });
@@ -3987,16 +4001,13 @@ function initEvents() {
         return;
       }
       // Ctrl + "+" and Ctrl + "−" zoom in and out around the middle of the view, Ctrl + 0 fits the photo into the
-      // window - the keys of Photoshop. The key next to Backspace ("=" / "+") and the numeric pad both count; the
-      // key is told by its place first (e.code), so the keyboard layout does not matter.
-      const zoomIn = e.code === "Equal" || e.code === "NumpadAdd" || k === "+" || k === "=";
-      const zoomOut = e.code === "Minus" || e.code === "NumpadSubtract" || k === "-" || k === "_" || k === "−";
-      const zoomFit = e.code === "Digit0" || e.code === "Numpad0" || k === "0";
-      if ((zoomIn || zoomOut || zoomFit) && sessState.pw) {
+      // window - the keys of Photoshop.
+      const zoomKey = zoomKeyOf(e);
+      if (zoomKey && sessState.pw) {
         e.preventDefault();
         if (e.stopPropagation) e.stopPropagation();
-        if (zoomFit) resetZoomFit();
-        else zoomBy(zoomIn ? ZOOM_KEY_STEP : 1 / ZOOM_KEY_STEP);
+        if (zoomKey === "fit") resetZoomFit();
+        else zoomBy(zoomKey === "in" ? ZOOM_KEY_STEP : 1 / ZOOM_KEY_STEP);
         return;
       }
     }

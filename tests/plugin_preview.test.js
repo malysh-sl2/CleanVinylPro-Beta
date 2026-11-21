@@ -94,6 +94,8 @@ function makeEnv(serverOpts = {}) {
     // The exact picture by itself (4.8.0) - the rules of engine.py: recompute_session(background=True)
     bgAware: true,         // false = a server before 4.8.0: "background" is ignored, no "rev" / "exact" in the answers
     bgDelay: 250,          // ms one background recompute takes
+    bgAnswerDelay: 0,      // ms its answer then spends on the way (a brush stroke made meanwhile is answered first)
+    previewSize: null,     // [w, h] of the preview pictures; null = as small as the test photo
     failBackground: 0,     // how many next background recomputes answer with an error
     ownMask: false,        // true = the mask is the user's own drawing ("invert + brush"): never replaced by itself
     progressPct: 50,       // what /progress answers
@@ -189,7 +191,8 @@ function makeEnv(serverOpts = {}) {
           server.exact = true;
           server.shown = sigOf(used);
           const ans = Object.assign({
-            ok: true, session_id: "sess-1", width: W, height: H, preview_w: W, preview_h: H,
+            ok: true, session_id: "sess-1", width: W, height: H,
+            preview_w: server.previewSize ? server.previewSize[0] : W, preview_h: server.previewSize ? server.previewSize[1] : H,
             auto_fractions: fractionsOf(used),
             orig_jpg_b64: "QQ==", comp_jpg_b64: pic("start-1"), overlay_jpg_b64: pic("start-1"), stats: {}
           }, pictureState());
@@ -261,6 +264,7 @@ function makeEnv(serverOpts = {}) {
           if (server.maskShares.length) ans.mask_share = server.maskShares.shift();
           if (smokeAnswer(p)) ans.smoke = smokeAnswer(p);
           if (server.historyAware) ans.history = { undo: server.edits.undo, redo: server.edits.redo };
+          if (background && server.bgAnswerDelay) await sleep(server.bgAnswerDelay);
           return reply(ans);
         }
         case "/session/mask-edit": {
@@ -285,6 +289,9 @@ function makeEnv(serverOpts = {}) {
           }
           return reply(ans);
         }
+        case "/session/close":
+          stopBackground();   // closing the window stops a background run
+          return reply({ ok: true });
         case "/session/dress-preview":
           return reply(Object.assign({ ok: true, inverted: false, comp_jpg_b64: pic("dress-" + server.rev), overlay_jpg_b64: pic("dress-" + server.rev) }, pictureState()));
         case "/backup/save": {
@@ -394,6 +401,8 @@ function makeEnv(serverOpts = {}) {
   });
   // the photo fills this rectangle of the window (a press inside it is a brush / eraser stroke)
   doc.getElementById("dlgStage").getBoundingClientRect = () => ({ left: 0, top: 0, right: 400, bottom: 600, width: 400, height: 600 });
+  // ...and this is the part of the window the photo is shown in (zoom and drag are counted from its middle)
+  doc.getElementById("dlgViewport").getBoundingClientRect = () => ({ left: 0, top: 0, right: 1000, bottom: 800, width: 1000, height: 800 });
 
   const errors = [];
   w.addEventListener("error", (e) => errors.push(String(e.error || e.message)));
@@ -551,6 +560,7 @@ async function main() {
     await env.settle(1200);
     expect(env.of("/session/start").length === 1, "one /session/start expected");
     expect(env.recomputes().length === 0, `no recompute expected after opening, got ${env.recomputes().length}`);
+    expect(env.exacts().length === 0, "...and no background recompute: the first picture is exact");
     expect(env.badge() === "", "the preview badge must be hidden: " + env.badge());
     expect(!env.progressCardVisible(), "the progress card must be hidden after the scan");
   });
@@ -687,22 +697,55 @@ async function main() {
     expect(env.badge() === "", "badge hidden: " + env.badge());
   });
 
-  await scenario("2 passes: sliders do not start anything by themselves", {}, async (env, expect) => {
+  await scenario("2 passes: there is no light way, so the exact picture is computed in the background - by itself", { bgDelay: 600 }, async (env, expect) => {
     await env.open();
     env.click("gPass2");
-    await env.settle(700);
-    expect(env.recomputes().length === 0, "choosing 2 passes must not start a full recompute by itself");
-    expect(env.badge().includes("2×"), "the badge must explain the 2-pass case: " + env.badge());
-    await env.drag("gSlSpots", 95);
-    await env.settle(900);
-    expect(env.recomputes().length === 0, "a slider must not start a full recompute with 2 passes");
-    env.click("dlgFracMed");                // these buttons always recomputed at once - they still do, in full
-    await env.settle(500);
-    expect(env.recomputes().length === 1 && env.recomputes()[0].body.quick === undefined, "a fraction button recomputes in full with 2 passes");
-    expect(env.badge() === "", "badge hidden after the full recompute: " + env.badge());
+    await sleep(80);
+    expect(env.exacts().length === 0, "the request waits a moment after the click");
+    expect(env.badge().includes("Перераховую"), "the badge must say that the preview is being recomputed: " + env.badge());
+    await env.waitFor(() => env.exacts().length === 1, 1500);
+    expect(env.exacts().length === 1 && env.recomputes().length === 0, `one background recompute and nothing else; got ${env.exacts().length} / ${env.recomputes().length}`);
+    const first = env.exacts()[0];
+    if (first) {
+      expect(first.body.params.cleanPasses === 2 && first.body.quick === undefined && first.body.preserve_edits === true, "2 passes, in full, the strokes kept");
+    }
+    expect(!env.progressCardVisible(), "no progress card: the window stays usable");
+    expect(env.pictureName() === "start-1", "the former picture stays until the new one is ready, got " + env.pictureName());
+    await env.waitFor(() => env.pictureName().startsWith("exact-"), 2000);
+    expect(env.pictureName().startsWith("exact-"), "the exact picture must appear by itself, got " + env.pictureName());
+    expect(env.badge() === "" && env.modeBadge() === "ПІСЛЯ · чисте фото", `nothing left to say: '${env.badge()}' / '${env.modeBadge()}'`);
+
+    await env.drag("gSlSpots", 95);          // a slider: the same - once, after the release
+    await sleep(200);
+    expect(env.exacts().length === 1, "nothing is sent right at the release");
+    await env.waitFor(() => env.exacts().length === 2, 1500);
+    await env.waitFor(() => env.exacts().length === 2 && env.exacts()[1].done, 2000);
+    await sleep(30);
+    expect(env.exacts().length === 2 && env.exacts()[1].body.params.spots === 95, "one more background recompute with the new value");
+    expect(env.recomputes().length === 0, "never a recompute that blocks the window");
+    expect(env.state("previewMatchesSettings()") === true && env.badge() === "", "the preview is up to date: " + env.badge());
+
+    env.click("dlgFracMed");                 // a fraction button: the same way
+    await env.waitFor(() => env.exacts().length === 3 && env.exacts()[2].done, 2500);
+    expect(env.exacts().length === 3 && env.recomputes().length === 0, "a fraction button with 2 passes: one background recompute");
     env.click("gPass1");
-    await env.settle(700);
-    expect(env.recomputes().length === 2 && env.recomputes()[1].body.quick === true, "back to 1 pass: light refresh");
+    await env.waitFor(() => env.recomputes().length === 1, 1500);
+    expect(env.recomputes().length === 1 && env.recomputes()[0].body.quick === true, "back to 1 pass: the light refresh is there again");
+    await env.waitFor(() => env.exacts().length === 4 && env.exacts()[3].done, 2500);
+    expect(env.exacts().length === 4, "...and its exact picture follows");
+  });
+
+  await scenario("2 passes with a server before 4.8.0: nothing starts by itself, the badge names the button", { bgAware: false }, async (env, expect) => {
+    await env.open();
+    env.click("gPass2");
+    await env.settle(900);
+    expect(env.of("/session/recompute").length === 0, "an older server must not be asked for a recompute that blocks the window");
+    expect(env.badge().includes("Перерахувати зараз") && env.badge().includes("restart_gpu_server.bat"), "the badge must name the button and the restart: " + env.badge());
+    env.click("dlgFracMed");                 // these buttons recomputed in full at once with such a server - they still do
+    await env.settle(500);
+    expect(env.of("/session/recompute").length === 1 && env.of("/session/recompute")[0].body.quick === undefined, "a fraction button recomputes in full");
+    expect(env.of("/session/recompute").every((r) => r.body.background === undefined), "'background' is never sent to a server that does not know it");
+    expect(env.badge() === "", "badge hidden after the full recompute: " + env.badge());
   });
 
   await scenario("an older server build: asked once, then never again after every slider", { quickAware: false }, async (env, expect) => {
@@ -813,6 +856,428 @@ async function main() {
     expect(!env.progressCardVisible(), "no progress card");
   });
 
+  // ---------------------------------------------------------------- the exact picture comes by itself (4.8.0)
+  // What a slider does, from the release on:  light refresh (quick picture)  ->  0.7 s of quiet  ->  the real frame
+  // is computed in the background  ->  the exact picture replaces the quick one. No button, no progress card.
+  const lightDone = (env, n = 1) => env.waitFor(() => env.recomputes().length >= n && env.recomputes()[n - 1].done, 3000);
+  const exactDone = (env, n = 1) => env.waitFor(() => env.exacts().length >= n && env.exacts()[n - 1].done, 4000);
+
+  await scenario("the exact picture comes by itself a moment after a light refresh: no button, no progress card", { bgDelay: 900 }, async (env, expect) => {
+    await env.open();
+    expect(env.modeBadge() === "ПІСЛЯ · чисте фото", "the first picture is exact: " + env.modeBadge());
+    env.click("dlgBtnGear");
+    await env.drag("gSlSpots", 90);
+    await lightDone(env);
+    await sleep(30);
+    expect(env.pictureName().startsWith("light-"), "the quick picture first, got " + env.pictureName());
+    expect(env.modeBadge().includes("швидкий перегляд") && env.modeBadge().includes("уточнюється"), "the corner label must say that the exact picture is coming: " + env.modeBadge());
+    expect(env.badge() === "", "nothing else to say: " + env.badge());
+    await sleep(350);
+    expect(env.exacts().length === 0, "the exact picture waits for a quiet moment (0.7 s)");
+    await env.waitFor(() => env.exacts().length === 1, 1500);
+    const x = env.exacts()[0];
+    expect(!!x, "the background recompute must be asked for by itself");
+    if (x) {
+      const waited = x.t - env.recomputes()[0].tDone;
+      expect(waited >= 600 && waited <= 1300, `it must start about 0.7 s after the quick picture, started after ${waited} ms`);
+      expect(x.body.background === true && x.body.quick === undefined, "it must be a background recompute of the real frame");
+      expect(typeof x.body.jobId === "string", "it carries a job id (for the percent)");
+      expect(x.body.preserve_edits === true, "the strokes are kept");
+      expect(x.body.params.spots === 90 && x.body.params.speedMode === "quality", "the values on the sliders, the full AI fill");
+    }
+    await sleep(500);                                        // the percent is asked a few times a second
+    expect(env.modeBadge().includes("уточнюється… 50 %"), "the corner label must show the percent: " + env.modeBadge());
+    expect(!env.progressCardVisible(), "no progress card: the window stays usable");
+    expect(env.el("dlgGearPopover").classList.contains("visible"), "the settings popover stays open");
+    await exactDone(env);
+    await sleep(30);
+    expect(env.pictureName().startsWith("exact-"), "the exact picture must be on screen, got " + env.pictureName());
+    expect(env.modeBadge() === "ПІСЛЯ · чисте фото", "the corner label: " + env.modeBadge());
+    expect(env.badge() === "" && env.state("previewMatchesSettings()") === true, "up to date, nothing to say: " + env.badge());
+    await env.settle(1500);
+    expect(env.exacts().length === 1 && env.recomputes().length === 1, `nothing more is asked for: ${env.recomputes().length} light, ${env.exacts().length} exact`);
+    expect(env.server.bgSeen.finished === 1 && env.server.bgSeen.superseded === 0, "the one run finished");
+  });
+
+  await scenario("a slider held, or moved again, puts the exact picture off: the light refresh always goes first", { bgDelay: 1500 }, async (env, expect) => {
+    await env.open();
+    await env.drag("gSlSpots", 90);
+    await lightDone(env);
+    await sleep(300);
+    env.press("gSlScuffs", 130);                             // a slider is taken before the exact request went
+    await sleep(900);
+    expect(env.exacts().length === 0, "nothing is computed while a slider is held");
+    env.release();                                           // released where it was: nothing changed
+    await env.waitFor(() => env.exacts().length === 1, 2000);
+    expect(env.exacts().length === 1 && env.recomputes().length === 1, "the exact picture is asked for after the release");
+    await sleep(300);                                        // the background run is on its way...
+    expect(!env.exacts()[0].done, "the background run must still be running");
+    await env.drag("gSlSpots", 80);                          // ...and the slider is moved again
+    await lightDone(env, 2);
+    await sleep(30);
+    expect(env.server.bgSeen.superseded === 1, "the background run must give way to the light refresh");
+    expect(env.exacts()[0].outcome === "superseded", "the first exact request ends without a picture");
+    expect(env.pictureName().startsWith("light-") && env.recomputes()[1].body.params.spots === 80, "the quick picture for the new value, got " + env.pictureName());
+    expect(env.modeBadge().includes("уточнюється"), "still a quick picture: " + env.modeBadge());
+    expect(env.exacts().length === 1, "no second exact request before the quiet moment");
+    await exactDone(env, 2);
+    await sleep(30);
+    expect(env.exacts().length === 2 && env.exacts()[1].body.params.spots === 80, "one more background run, with the new value");
+    expect(env.pictureName().startsWith("exact-") && env.modeBadge() === "ПІСЛЯ · чисте фото", `the exact picture at the end: ${env.pictureName()} / ${env.modeBadge()}`);
+    await env.settle(1200);
+    expect(env.exacts().length === 2 && env.recomputes().length === 2, "and nothing after it");
+  });
+
+  await scenario("the brush works while the exact picture is on its way; an older picture never replaces a newer one", { bgDelay: 600, bgAnswerDelay: 600 }, async (env, expect) => {
+    await env.open();
+    await env.drag("gSlSpots", 90);
+    await lightDone(env);
+    await env.waitFor(() => env.exacts().length === 1, 2000);
+    await sleep(150);
+    env.press("dlgViewport", 100);                           // a stroke while the frame is being computed
+    env.move(120);
+    env.release();
+    await env.waitFor(() => env.picture() === "edit-1", 400);
+    expect(env.picture() === "edit-1", "the stroke must be answered at once, not after the background run; on screen: " + env.pictureName());
+    expect(!env.exacts()[0].done, "(the background run is still on its way)");
+    expect(env.server.bgSeen.superseded === 0, "a stroke does not stop the background run");
+    await env.waitFor(() => env.server.bgSeen.finished === 1, 1500);   // the frame is ready, its answer is on the way
+    env.press("dlgViewport", 200);                           // one more stroke: it is answered before that answer arrives
+    env.move(220);
+    env.release();
+    await env.waitFor(() => env.picture() === "edit-2", 400);
+    expect(env.picture() === "edit-2" && !env.exacts()[0].done, "the second stroke is on screen before the answer of the background run");
+    await exactDone(env);
+    await sleep(40);
+    expect(env.picture() === "edit-2", "the older picture of the background run must not replace the stroke; on screen: " + env.pictureName());
+    expect(env.state("sessState.history.undo") === 2, "...nor its count of steps; got " + env.state("sessState.history.undo"));
+    expect(env.modeBadge() === "ПІСЛЯ · чисте фото", "the picture on screen is exact (the stroke was made on the real frame): " + env.modeBadge());
+    expect(env.state("previewMatchesSettings()") === true && env.badge() === "", "up to date: " + env.badge());
+    await env.settle(1500);
+    expect(env.exacts().length === 1 && env.recomputes().length === 1, "nothing more is asked for");
+  });
+
+  await scenario("a stroke on a quick picture: the exact one waits until the brush rests, then comes", { bgDelay: 300 }, async (env, expect) => {
+    await env.open();
+    await env.drag("gSlSpots", 90);
+    await lightDone(env);
+    await sleep(350);
+    env.press("dlgViewport", 100);                           // the mouse button goes down before the exact request went
+    env.move(120);
+    await sleep(800);
+    expect(env.exacts().length === 0, "nothing starts while a stroke is being drawn");
+    env.release();
+    await env.waitFor(() => env.picture() === "edit-1", 500);
+    expect(env.modeBadge().includes("уточнюється"), "the stroke is on a quick picture, its exact version is still due: " + env.modeBadge());
+    await sleep(350);
+    expect(env.exacts().length === 0, "a quiet moment after the stroke first");
+    await exactDone(env);
+    await sleep(30);
+    expect(env.exacts().length === 1 && env.pictureName().startsWith("exact-"), "then the exact picture comes, got " + env.pictureName());
+    expect(env.modeBadge() === "ПІСЛЯ · чисте фото", "the corner label: " + env.modeBadge());
+  });
+
+  await scenario("the mask is the user's own drawing: the server declines once, nothing is asked in a loop", {}, async (env, expect) => {
+    await env.open();
+    await env.drag("gSlSpots", 90);
+    await lightDone(env);
+    env.server.ownMask = true;                               // as after "inversion + brush"
+    await exactDone(env);
+    await sleep(40);
+    expect(env.exacts().length === 1 && env.exacts()[0].outcome === "skipped", "one request, declined");
+    expect(env.pictureName().startsWith("light-"), "the picture stays, got " + env.pictureName());
+    expect(env.modeBadge() === "ПІСЛЯ · швидкий перегляд", "a quick picture that stays for now: " + env.modeBadge());
+    await env.settle(2000);
+    expect(env.exacts().length === 1, `nothing is asked again by itself, got ${env.exacts().length} requests`);
+    env.press("dlgViewport", 100);                           // a stroke: one more try (the mask may be the automatic one again)
+    env.move(120);
+    env.release();
+    await exactDone(env, 2);
+    await env.settle(1500);
+    expect(env.exacts().length === 2 && env.exacts()[1].outcome === "skipped", `one more request after the stroke, not more; got ${env.exacts().length}`);
+    env.click("dlgBtnApply");                                // Apply computes the real frame in that case, as always
+    await env.waitFor(() => env.state("sessState.open") === false, 3000);
+    const a = env.of("/session/apply")[0];
+    expect(!!a && a.body.followBackground === false && a.body.params.spots === 90, "Apply carries the values and follows nothing");
+  });
+
+  await scenario("a failed exact recompute is said once and not retried in a loop; the next change tries again", { failBackground: 1 }, async (env, expect) => {
+    await env.open();
+    await env.drag("gSlSpots", 90);
+    await exactDone(env);
+    await sleep(40);
+    expect(env.exacts()[0].outcome === "failed", "the background recompute failed");
+    expect(env.badge().includes("Точний перегляд не вдалося") && env.badge().includes("test failure"), "the badge must say so: " + env.badge());
+    expect(env.badge().includes("Застосувати"), "...and that Apply still computes the frame: " + env.badge());
+    expect(env.modeBadge() === "ПІСЛЯ · швидкий перегляд", "the corner label does not promise what is not coming: " + env.modeBadge());
+    expect(env.el("footerStatus").className.includes("error") === false, "the panel footer is not turned red for it");
+    await env.settle(2200);
+    expect(env.exacts().length === 1, `no retry by itself, got ${env.exacts().length} requests`);
+    await env.drag("gSlSpots", 85);
+    await exactDone(env, 2);
+    await sleep(40);
+    expect(env.exacts().length === 2 && env.pictureName().startsWith("exact-"), "the next change tries again and gets the exact picture, got " + env.pictureName());
+    expect(env.badge() === "" && env.modeBadge() === "ПІСЛЯ · чисте фото", `nothing left to say: '${env.badge()}' / '${env.modeBadge()}'`);
+  });
+
+  await scenario("'Застосувати' while the exact picture for the same values is on its way waits for that run", { bgDelay: 1200, applyDelay: 100 }, async (env, expect) => {
+    await env.open();
+    await env.drag("gSlSpots", 90);
+    await env.waitFor(() => env.exacts().length === 1, 3000);
+    await sleep(200);
+    env.click("dlgBtnApply");
+    await sleep(150);
+    expect(env.progressCardVisible(), "Apply shows its progress card");
+    await env.waitFor(() => env.state("sessState.open") === false, 4000);
+    const a = env.of("/session/apply");
+    expect(a.length === 1 && a[0].body.followBackground === true, "Apply must ask to wait for the running background recompute");
+    expect(a[0] && a[0].followed === true, "...and the server waited for it");
+    expect(env.server.bgSeen.superseded === 0 && env.server.bgSeen.finished === 1, "the frame was computed once, not stopped and started again");
+    expect(a[0] && a[0].body.params.spots === 90, "Apply carries the values");
+    expect(env.exacts().length === 1 && env.recomputes().length === 1, "no other request");
+    expect(env.el("footerStatus").className.includes("error") === false, "no error expected: " + env.el("footerStatus").textContent);
+  });
+
+  await scenario("'Застосувати' follows nothing when the values changed since, or when nothing is on its way", { bgDelay: 1500, applyDelay: 100 }, async (env, expect) => {
+    await env.open();
+    await env.drag("gSlSpots", 90);
+    await env.waitFor(() => env.exacts().length === 1, 3000);
+    await env.drag("gSlSpots", 70);                          // new values; the run in flight computes the former ones
+    await sleep(60);
+    env.click("dlgBtnApply");
+    await env.waitFor(() => env.state("sessState.open") === false, 4000);
+    let a = env.of("/session/apply");
+    expect(a.length === 1 && a[0].body.followBackground === false, "Apply must not wait for a run that computes other values");
+    expect(a[0] && a[0].body.params.spots === 70, "Apply carries the current values");
+    expect(env.server.bgSeen.superseded === 1, "the background run gave way to Apply");
+    await env.waitFor(() => env.state("isBusy") === false);
+    await env.open();                                        // a new window: the picture is exact, nothing is running
+    await env.settle(900);
+    expect(env.exacts().length === 1, "a new window asks for nothing by itself");
+    env.click("dlgBtnApply");
+    await env.waitFor(() => env.state("sessState.open") === false, 4000);
+    a = env.of("/session/apply");
+    expect(a.length === 2 && a[1].body.followBackground === false, "nothing to follow");
+  });
+
+  await scenario("closing the window while the exact picture is on its way: nothing breaks, the next window starts clean", { bgDelay: 1500 }, async (env, expect) => {
+    await env.open();
+    await env.drag("gSlSpots", 90);
+    await env.waitFor(() => env.exacts().length === 1, 3000);
+    await sleep(200);
+    env.click("dlgBtnCancel");
+    await env.waitFor(() => env.state("isBusy") === false);
+    await env.waitFor(() => env.exacts()[0].done, 3000);
+    expect(env.exacts()[0].outcome === "superseded", "closing the window stops the background run");
+    expect(env.state("sessState.exactTimer") === null && env.state("sessState.exactPollTimer") === null, "no timer of the closed window is left");
+    await env.open();
+    expect(env.pictureName() === "start-1" && env.modeBadge() === "ПІСЛЯ · чисте фото", `a new window: its own first picture, exact: ${env.pictureName()} / ${env.modeBadge()}`);
+    env.press("dlgViewport", 100);                           // (the count of pictures starts again with the new window)
+    env.move(120);
+    env.release();
+    await env.waitFor(() => env.picture().startsWith("edit-"), 1000);
+    expect(env.picture().startsWith("edit-"), "a stroke in the new window is shown, got " + env.pictureName());
+    await env.settle(1200);
+    expect(env.exacts().length === 1 && env.recomputes().length === 1, "the new window asked for no recompute");
+  });
+
+  await scenario("a server before 4.8.0: no background requests at all, the window works as it did", { bgAware: false, recomputeDelay: 200 }, async (env, expect) => {
+    await env.open();
+    await env.drag("gSlSpots", 90);
+    await lightDone(env);
+    await env.settle(1800);
+    expect(env.of("/session/recompute").length === 1 && env.recomputes()[0].body.quick === true, "the light refresh, as before");
+    expect(env.of("/session/recompute").every((r) => r.body.background === undefined), "'background' must never be sent to a server that does not know it (it would recompute in full and make the window wait)");
+    expect(env.modeBadge() === "ПІСЛЯ · чисте фото" && env.badge() === "", `the labels of 4.7.0: '${env.modeBadge()}' / '${env.badge()}'`);
+    env.press("dlgViewport", 100);                           // strokes: their pictures carry no number, each one is shown
+    env.move(120);
+    env.release();
+    await env.waitFor(() => env.picture() === "edit-1", 1000);
+    expect(env.picture() === "edit-1" && env.view() === "result", "a stroke is shown on the photo");
+    env.click("dlgBtnGear");
+    env.click("gBtnRecompute");                              // the button gives the exact picture, with the progress card
+    await sleep(100);
+    expect(env.progressCardVisible(), "the progress card of the full recompute");
+    await env.settle(700);
+    expect(env.of("/session/recompute").length === 2 && env.of("/session/recompute")[1].body.quick === undefined, "one full recompute");
+    env.click("dlgBtnApply");
+    await env.waitFor(() => env.state("sessState.open") === false, 3000);
+    expect(env.of("/session/apply")[0].body.followBackground === false, "nothing to follow");
+  });
+
+  await scenario("'↻ Перерахувати зараз' still works: the full recompute goes first and leaves nothing to refine", { bgDelay: 1500, recomputeDelay: 300 }, async (env, expect) => {
+    await env.open();
+    await env.drag("gSlSpots", 90);
+    await env.waitFor(() => env.exacts().length === 1, 3000);
+    await sleep(150);
+    env.click("dlgBtnGear");
+    expect(env.el("gBtnRecompute").textContent.includes("Перерахувати зараз"), "the button says what it does: " + env.el("gBtnRecompute").textContent);
+    env.click("gBtnRecompute");
+    await sleep(120);
+    expect(env.progressCardVisible(), "the button shows the progress card");
+    await env.waitFor(() => env.recomputes().length === 2 && env.recomputes()[1].done, 3000);
+    await sleep(40);
+    expect(env.recomputes()[1].body.quick === undefined && env.recomputes()[1].body.background === undefined, "a full recompute that is waited for");
+    expect(env.server.bgSeen.superseded === 1, "the background run gave way to it");
+    expect(env.pictureName().startsWith("full-") && env.modeBadge() === "ПІСЛЯ · чисте фото", `the exact picture of the button: ${env.pictureName()} / ${env.modeBadge()}`);
+    expect(!env.progressCardVisible(), "the progress card is gone");
+    await env.settle(1500);
+    expect(env.exacts().length === 1, "no exact request after a full recompute: the picture is exact already");
+  });
+
+  await scenario("the clothing switch on a quick picture does not get in the way of the exact one", { bgDelay: 400 }, async (env, expect) => {
+    await env.open();
+    env.click("dlgBtnGear");
+    await env.drag("gSlSpots", 90);
+    await lightDone(env);
+    env.click("gBtnDress");                                  // answered at once, the frame is not recomputed for it
+    await env.waitFor(() => env.of("/session/dress-preview").length === 1 && env.of("/session/dress-preview")[0].done, 1000);
+    await sleep(30);
+    expect(env.pictureName().startsWith("dress-"), "the clothing picture is shown, got " + env.pictureName());
+    expect(env.modeBadge().includes("уточнюється"), "still a quick picture: " + env.modeBadge());
+    await exactDone(env);
+    await sleep(30);
+    expect(env.exacts().length === 1 && env.pictureName().startsWith("exact-") && env.modeBadge() === "ПІСЛЯ · чисте фото", `then the exact picture: ${env.pictureName()} / ${env.modeBadge()}`);
+    expect(env.recomputes().length === 1, "the clothing switch asked for no recompute");
+  });
+
+  // ---------------------------------------------------------------- zoom keys, dragging with the right button
+  await scenario("Ctrl + '+' and Ctrl + '−' zoom as in Photoshop, Ctrl + 0 fits the photo", { previewSize: [800, 1200] }, async (env, expect) => {
+    await env.open();
+    const fit = env.state("sessState.fitZoom");
+    const near = (a, b) => Math.abs(a - b) < 1e-6;
+    expect(near(env.zoom(), fit) && fit > 0.5 && fit < 0.7, "the photo is fitted into the window at the start: " + env.zoom());
+    let ev = env.key("Equal", "=", { ctrlKey: true });
+    expect(near(env.zoom(), fit * 1.4), "Ctrl + '=' (the '+' key) zooms in, got " + env.zoom() / fit);
+    expect(ev.defaultPrevented, "the key is taken by the window");
+    env.key("Equal", "+", { ctrlKey: true, shiftKey: true });
+    expect(near(env.zoom(), fit * 1.96), "Ctrl + Shift + '=' is the same key, got " + env.zoom() / fit);
+    env.key("NumpadAdd", "+", { ctrlKey: true });
+    expect(near(env.zoom(), fit * 2.744), "the '+' of the numeric pad zooms in, got " + env.zoom() / fit);
+    expect(env.el("dlgZoomLabel").textContent === "274%", "the label shows the zoom: " + env.el("dlgZoomLabel").textContent);
+    ev = env.key("Minus", "-", { ctrlKey: true });
+    expect(near(env.zoom(), fit * 1.96) && ev.defaultPrevented, "Ctrl + '−' zooms out, got " + env.zoom() / fit);
+    env.key("NumpadSubtract", "-", { ctrlKey: true });
+    expect(near(env.zoom(), fit * 1.4), "the '−' of the numeric pad zooms out, got " + env.zoom() / fit);
+    env.key("", "=", { metaKey: true });                     // a host that names the key only by its character; Cmd on a Mac
+    expect(near(env.zoom(), fit * 1.96), "the key is known by its character too, got " + env.zoom() / fit);
+    env.key("", "", { ctrlKey: true, keyCode: 189 });        // ...or only by its number
+    expect(near(env.zoom(), fit * 1.4), "the key is known by its number too, got " + env.zoom() / fit);
+
+    // the middle of the view stays where it is: what was dragged aside moves away from the middle in proportion
+    env.press("dlgViewport", 500, { button: 2, clientY: 400 });
+    env.move(540, { clientY: 370 });
+    env.release({ button: 2 });
+    expect(env.pan()[0] === 40 && env.pan()[1] === -30, "dragged by (40, -30): " + env.pan());
+    env.key("Equal", "=", { ctrlKey: true });
+    expect(near(env.pan()[0], 56) && near(env.pan()[1], -42), "zooming keeps the middle of the view: " + env.pan());
+    env.key("Digit0", "0", { ctrlKey: true });
+    expect(near(env.zoom(), fit) && env.pan()[0] === 0 && env.pan()[1] === 0, "Ctrl + 0 fits the photo into the window: " + env.zoom() + " / " + env.pan());
+    expect(env.el("dlgZoomLabel").textContent === "100%", "the label: " + env.el("dlgZoomLabel").textContent);
+
+    for (let i = 0; i < 30; i++) env.key("Equal", "=", { ctrlKey: true });
+    expect(near(env.zoom(), 6.0), "zooming in stops at the limit, got " + env.zoom());
+    for (let i = 0; i < 40; i++) env.key("Minus", "-", { ctrlKey: true });
+    expect(near(env.zoom(), 0.15), "zooming out stops at the limit, got " + env.zoom());
+    env.key("Numpad0", "0", { ctrlKey: true });
+
+    // not a zoom: the same keys without Ctrl, with Alt, or typed into a text field
+    env.key("Equal", "=");
+    env.key("Minus", "-");
+    env.key("Equal", "=", { ctrlKey: true, altKey: true });
+    const field = env.doc.createElement("input");
+    field.type = "text";
+    env.el("retouchModal").appendChild(field);
+    ev = env.key("Equal", "=", { ctrlKey: true }, field);
+    expect(near(env.zoom(), fit), "the keys alone, with Alt or inside a text field must not zoom: " + env.zoom() / fit);
+    expect(!ev.defaultPrevented, "a text field keeps its own keys");
+    field.remove();
+
+    // the two buttons and the wheel go on working
+    env.click("dlgZoomIn");
+    expect(near(env.zoom(), fit * 1.25), "the '+' button, got " + env.zoom() / fit);
+    env.click("dlgZoomOut");
+    expect(near(env.zoom(), fit), "the '−' button, got " + env.zoom() / fit);
+    env.el("dlgViewport").dispatchEvent(new env.w.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -100, clientX: 500, clientY: 400 }));
+    expect(near(env.zoom(), fit * 1.14), "the wheel, got " + env.zoom() / fit);
+    env.click("dlgZoomLabel");
+    expect(near(env.zoom(), fit), "a click on the label fits the photo");
+    expect(env.of("/session/recompute").length === 0 && env.edits().length === 0, "zooming and dragging ask the server for nothing");
+
+    env.click("dlgBtnCancel");                               // the window is closed: the keys are not ours any more
+    await env.waitFor(() => env.state("isBusy") === false);
+    ev = env.key("Equal", "=", { ctrlKey: true });
+    expect(!ev.defaultPrevented, "with the window closed the keys are left alone");
+  });
+
+  await scenario("the right mouse button drags the photo with any tool; no stroke, no menu", { previewSize: [800, 1200] }, async (env, expect) => {
+    await env.open();
+    const vp = env.el("dlgViewport");
+    for (const tool of ["eraser", "brush", "pan"]) {
+      env.state(`setActiveTool(${JSON.stringify(tool)})`);
+      env.key("Digit0", "0", { ctrlKey: true });
+      const down = env.press("dlgViewport", 300, { button: 2, clientY: 200 });
+      expect(env.state("sessState.isPanning") === true && env.state("sessState.isDrawing") === false, `${tool}: the right button starts a drag, not a stroke`);
+      expect(down.defaultPrevented, `${tool}: the press is taken by the window`);
+      expect(vp.style.cursor === "grabbing", `${tool}: the pointer shows a grabbing hand, got '${vp.style.cursor}'`);
+      env.move(340, { clientY: 260 });
+      expect(env.pan()[0] === 40 && env.pan()[1] === 60, `${tool}: the photo follows the pointer: ${env.pan()}`);
+      env.move(250, { clientY: 180 });
+      expect(env.pan()[0] === -50 && env.pan()[1] === -20, `${tool}: ...in every direction: ${env.pan()}`);
+      env.release({ button: 2 });
+      expect(env.state("sessState.isPanning") === false, `${tool}: the drag ends with the release`);
+      env.move(400, { clientY: 400 });
+      expect(env.pan()[0] === -50 && env.pan()[1] === -20, `${tool}: nothing moves after the release: ${env.pan()}`);
+      expect(env.state("sessState.tool") === tool, `${tool}: the tool is the one that was chosen, got ${env.state("sessState.tool")}`);
+    }
+    expect(env.view() === "result" && env.edits().length === 0, "no stroke was made and the view did not change");
+
+    // the menu of the right button must not open over the photo
+    const menu = env.mouse(vp, "contextmenu", 300, { button: 2 });
+    expect(menu.defaultPrevented, "the context menu is suppressed over the photo");
+
+    // a host that reports the menu at the press (before any move) must not end the drag...
+    env.state("setActiveTool('brush')");
+    env.key("Digit0", "0", { ctrlKey: true });
+    env.press("dlgViewport", 300, { button: 2, clientY: 200 });
+    env.mouse(vp, "contextmenu", 300, { button: 2 });
+    env.move(330, { clientY: 200 });
+    expect(env.state("sessState.isPanning") === true && env.pan()[0] === 30, "a menu event at the press does not end the drag: " + env.pan());
+    // ...and one that reports the release only this way ends it there
+    env.mouse(vp, "contextmenu", 330, { button: 2 });
+    expect(env.state("sessState.isPanning") === false, "a menu event after the move ends the drag");
+    env.move(400, { clientY: 200 });
+    expect(env.pan()[0] === 30, "nothing moves afterwards: " + env.pan());
+
+    // a host that reports the right button through pointer events only
+    env.key("Digit0", "0", { ctrlKey: true });
+    env.mouse(vp, "pointerdown", 300, { button: 2, clientY: 200 });
+    expect(env.state("sessState.isPanning") === true, "pointerdown with the right button starts the drag");
+    env.mouse(env.doc, "pointermove", 320, { clientY: 250 });
+    expect(env.pan()[0] === 20 && env.pan()[1] === 50, "the photo follows: " + env.pan());
+    env.mouse(env.doc, "pointerup", 320, { button: 2 });
+    expect(env.state("sessState.isPanning") === false, "pointerup ends it");
+
+    // the left button still draws, the middle button and Space + mouse still drag
+    env.key("Digit0", "0", { ctrlKey: true });
+    env.press("dlgViewport", 100);
+    expect(env.state("sessState.isDrawing") === true && env.state("sessState.isPanning") === false, "the left button draws");
+    env.move(120);
+    env.release();
+    await env.waitFor(() => env.edits().length === 1, 1000);
+    expect(env.edits().length === 1 && env.pan()[0] === 0, "one stroke, the photo did not move");
+    env.press("dlgViewport", 300, { button: 1 });
+    env.move(310);
+    env.release({ button: 1 });
+    expect(env.pan()[0] === 10, "the middle button drags: " + env.pan());
+    env.key("Space", " ");
+    env.press("dlgViewport", 300);
+    env.move(325);
+    env.release();
+    env.doc.body.dispatchEvent(new env.w.KeyboardEvent("keyup", { bubbles: true, code: "Space", key: " " }));
+    expect(env.pan()[0] === 35 && env.edits().length === 1, "Space + mouse drags and does not draw: " + env.pan());
+  });
+
   // ---------------------------------------------------------------- the three views of the photo
   await scenario("the window opens with the cleaned photo; 'До / Після' and 'Маска' switch the views", {}, async (env, expect) => {
     await env.open();
@@ -839,24 +1304,80 @@ async function main() {
     await env.close();                                       // the next opening starts with the cleaned photo again
   });
 
-  await scenario("a brush stroke shows the mask by itself; holding outside the photo lifts it", {}, async (env, expect) => {
+  await scenario("the brush and the eraser work on the cleaned photo: the mask never switches on by itself", { editDelays: [300] }, async (env, expect) => {
     await env.open();
+    const dots = () => env.el("dlgStrokeDots");
     expect(env.view() === "result", "cleaned photo first");
     env.press("dlgViewport", 100);                           // inside the photo, the eraser is the tool on start
-    expect(env.view() === "mask", "a stroke edits the mask, so the mask must appear; got " + env.view());
+    expect(env.view() === "result", "a stroke must not switch the mask on; got " + env.view());
     env.move(120);
+    env.move(140);
+    expect(env.shown("dlgStrokeDots") && dots().children.length >= 2, "the trace of the stroke must be seen over the photo while drawing");
     env.release();
-    await env.settle(200);
+    await sleep(120);                                        // the server is still busy with the stroke
+    expect(env.view() === "result" && dots().children.length >= 2, "the trace stays until the answer comes");
+    expect(env.pictureName() === "start-1", "nothing new on screen yet: " + env.pictureName());
+    await env.waitFor(() => env.picture() === "edit-1", 1500);
     const edits = env.of("/session/mask-edit");
     expect(edits.length === 1 && edits[0].body.op === "stroke" && edits[0].body.erase === true, "the eraser stroke must reach the server");
+    expect(env.picture() === "edit-1" && env.view() === "result", `the result of the stroke must be on screen, on the cleaned photo: ${env.pictureName()} / ${env.view()}`);
+    expect(dots().children.length === 0, "the trace goes away once the picture is there");
+    expect(env.modeBadge() === "ПІСЛЯ · чисте фото", "the corner label: " + env.modeBadge());
+    expect(env.recomputes().length === 0 && env.exacts().length === 0, "a stroke on an exact picture needs no recompute of any kind");
+
+    // picking a tool - by the button or by the key - does not switch the mask on either
+    env.click("dlgToolBrush");
+    expect(env.view() === "result" && env.state("sessState.tool") === "brush", "picking the brush keeps the photo, got " + env.view());
+    env.key("KeyE", "у");
+    expect(env.view() === "result" && env.state("sessState.tool") === "eraser", "the key E keeps the photo, got " + env.view());
+    env.key("KeyB", "b");
+    expect(env.view() === "result" && env.state("sessState.tool") === "brush", "the key B keeps the photo, got " + env.view());
+    env.press("dlgViewport", 200);
+    env.move(220);
+    env.release();
+    await env.waitFor(() => env.picture() === "edit-2", 1500);
+    expect(env.view() === "result" && env.picture() === "edit-2", "a brush stroke: the same, got " + env.view());
+    expect(env.edits()[1] && env.edits()[1].body.erase === false, "the brush stroke must reach the server as a brush stroke");
+
+    // the three actions on the whole mask keep the photo and say in words what they did
+    env.click("dlgToolInvert");
+    await env.waitFor(() => env.picture() === "edit-3", 1500);
+    expect(env.view() === "result", "the inversion keeps the photo, got " + env.view());
+    expect(env.hint().includes("інвертовано") && env.hint().includes("Маска"), "the inversion must be said in words: " + env.hint());
+    env.click("dlgToolBrush", { ctrlKey: true });
+    await env.waitFor(() => env.picture() === "edit-4", 1500);
+    expect(env.view() === "result" && env.edits()[3].body.op === "fill", "Ctrl + click on the brush: the whole layer, the photo stays");
+    expect(env.hint().includes("на всьому кадрі"), "...said in words: " + env.hint());
+    env.click("dlgToolEraser", { ctrlKey: true });
+    await env.waitFor(() => env.picture() === "edit-5", 1500);
+    expect(env.view() === "result" && env.edits()[4].body.op === "clear", "Ctrl + click on the eraser: the mask is cleared, the photo stays");
+    expect(env.hint().includes("стерто"), "...said in words: " + env.hint());
+
+    // the mask is shown when the user asks for it - and then it stays through the strokes
+    env.click("dlgBtnMask");
+    expect(env.view() === "mask", "'Маска' shows the mask");
+    env.press("dlgViewport", 100);
+    expect(env.view() === "mask" && env.shown("dlgStrokeDots"), "a stroke with the mask on stays on the mask");
+    env.move(120);
+    env.release();
+    await env.waitFor(() => env.picture() === "edit-6", 1500);
+    expect(env.view() === "mask", "...and after it too, got " + env.view());
     env.press("dlgViewport", 900);                           // outside the photo: a look at the clean result
     expect(env.view() === "result", "holding outside the photo must lift the mask, got " + env.view());
     env.release();
     expect(env.view() === "mask", "...and the mask is back after the release, got " + env.view());
     env.click("dlgBtnMask");
     expect(env.view() === "result", "'Маска' switches it off");
-    env.click("dlgToolBrush");
-    expect(env.view() === "mask" && env.state("sessState.tool") === "brush", "picking the brush shows the mask");
+
+    // on the original nothing a stroke does can be seen: the stroke brings the cleaned photo back
+    env.click("dlgBtnBeforeAfter");
+    expect(env.view() === "original", "'До / Після' shows the original");
+    expect(!env.shown("dlgStrokeDots"), "no trace over the original");
+    env.press("dlgViewport", 100);
+    expect(env.view() === "result", "a stroke over the original shows the cleaned photo, got " + env.view());
+    env.release();
+    await env.waitFor(() => env.picture() === "edit-7", 1500);
+    expect(env.view() === "result" && env.edits().length === 7, "seven edits, the photo on screen");
   });
 
   // ---------------------------------------------------------------- presets
