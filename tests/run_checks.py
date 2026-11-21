@@ -4659,25 +4659,30 @@ def check_line():
            if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
-def _hair_frame(w=1500, h=2000, zoom=1.0, wall=150.0, hair=26.0, skin=188.0, line=62.0, thick=2, seed=9, noise=1.2):
+def _hair_frame(w=1500, h=2000, zoom=1.0, wall=150.0, hair=26.0, skin=188.0, line=62.0, thick=2, seed=9, noise=1.2, spot=0.0, skip=()):
     """
     A head in profile against a plain wall, with thin things that stick out of it:
       "out"    three single hairs that grow out of the hairdo and lead away from it (two of them curved);
+      "short"  one more such hair, a tenth of the head long;
       "fringe" short hairs that lie along the outline of the hairdo - its soft edge;
+      "along"  a hair that leaves the hairdo and then runs along its outline;
       "lash"   a short dark line on the lit face (an eyelash in profile);
       "face"   a long line of the same kind that grows out of the lit face;
       "apart"  such a line that touches nobody;
       "cable"  such a line that starts at the hairdo and goes on to the border of the frame.
-    zoom: the size of the head (1 = about 300 px wide in a frame 1500 px wide).
+    zoom: the size of the head (1 = about 300 px wide in a frame 1500 px wide). spot: a spot of light on the wall
+    behind the head, so many levels at its middle. skip: the names that are not drawn (the same frame without them).
     Returns (frame, silhouette for the stand-in matting network, {name: the pixels drawn}, silhouette of the frame size).
     """
     rng = np.random.default_rng(seed)
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
-    lum = wall * (1.0 - 0.10 * ((xx / w - 0.5) * 2) ** 2 - 0.06 * ((yy / h - 0.4) * 2) ** 2)
-    img = np.repeat(lum[..., None], 3, axis=2) * np.float32([1.02, 1.0, 0.97])
     s = w / 1500.0 * zoom
     rx, ry = int(150 * s), int(190 * s)
     cx, cy = int(w * 0.50), int(max(h * 0.30, ry + 110 * s + 0.03 * h))
+    lum = wall * (1.0 - 0.10 * ((xx / w - 0.5) * 2) ** 2 - 0.06 * ((yy / h - 0.4) * 2) ** 2)
+    if spot:
+        lum = lum + spot * np.exp(-(((xx - cx) ** 2 + (yy - cy) ** 2) / (1.25 * ry) ** 2))
+    img = np.repeat(lum[..., None], 3, axis=2) * np.float32([1.02, 1.0, 0.97])
     sil = np.zeros((h, w), np.uint8)
     cv2.ellipse(sil, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
     body = np.array([[cx - int(120 * s), cy + int(150 * s)], [cx + int(120 * s), cy + int(150 * s)],
@@ -4694,6 +4699,8 @@ def _hair_frame(w=1500, h=2000, zoom=1.0, wall=150.0, hair=26.0, skin=188.0, lin
     marks = {}
 
     def draw(name, pts, width=None):
+        if name in skip:
+            return
         m = np.zeros((h, w), np.uint8)
         cv2.polylines(m, [np.round(np.array(pts, np.float32)).astype(np.int32)], False, 255,
                       max(1, int(round((thick if width is None else width) * zoom))), lineType=cv2.LINE_AA)
@@ -4711,6 +4718,9 @@ def _hair_frame(w=1500, h=2000, zoom=1.0, wall=150.0, hair=26.0, skin=188.0, lin
 
     for angle, far, bend in ((-14, 95, 0.0), (10, 75, 9.0), (40, 62, 7.0)):
         draw("out", ray(angle, -4 * s, far * s, bend))
+    draw("short", ray(25, -4 * s, 36 * s))
+    draw("along", ray(-60, -4 * s, 28 * s, n=5)
+         + [(cx + (rx + 28 * s) * np.sin(a), cy - (ry + 28 * s) * np.cos(a)) for a in np.deg2rad(np.linspace(-58.0, -28.0, 16))])
     for angle in (62, 70, 78, 86, 94, 102):   # along the outline, 5..11 px from it
         d = (5 + (angle % 7)) * s
         draw("fringe", [(cx + (rx + d) * np.sin(a), cy - (ry + d) * np.cos(a)) for a in np.deg2rad(np.linspace(angle - 4.0, angle + 4.0, 8))], width=1)
@@ -4718,7 +4728,7 @@ def _hair_frame(w=1500, h=2000, zoom=1.0, wall=150.0, hair=26.0, skin=188.0, lin
     draw("lash", [(ex + 3 * s, ey), (ex - 12 * s, ey - 5 * s)])
     fx, fy = cx - rx * np.cos(np.deg2rad(-20)), cy - ry * np.sin(np.deg2rad(-20))
     draw("face", [(fx + 3 * s, fy), (fx - 80 * s, fy + 14 * s)])
-    draw("apart", [(cx + rx + 150 * s, cy - ry - 40 * s), (cx + rx + 230 * s, cy - ry - 70 * s)])
+    draw("apart", ray(55, 60 * s, 125 * s, n=4))
     k0 = (cx + rx * np.sin(np.deg2rad(125)), cy - ry * np.cos(np.deg2rad(125)))
     draw("cable", [(k0[0] - 3 * s, k0[1]), (w - 1, k0[1] + 0.10 * (w - 1 - k0[0]))])
 
@@ -4744,22 +4754,28 @@ def check_hair():
     bad, notes = [], []
     p = dict(H.STD, spots=0, scuffs=0, seamOn=False, blur=0, cycCurve=0, smokeOn=False)
 
-    def judged(tag, frame, marks, sil_full, out, st, taken=0.30, stay=("fringe", "lash", "face", "apart", "cable")):
+    def judged(tag, frame, marks, sil_full, out, st, taken=0.30, stay=("fringe", "along", "lash", "face", "apart", "cable")):
         comp = _comp(frame, out)
         dist = cv2.distanceTransform((sil_full == 0).astype(np.uint8), cv2.DIST_L2, 5)
         head_w = float((sil_full[: int(np.nonzero(sil_full.any(axis=1))[0][0] + 0.08 * frame.shape[0])] > 0).sum(axis=1).max())
-        free = (marks["out"] > 0) & (dist > 0.12 * head_w)   # (the first pixels of a hair, in the fuzz of the outline, stay)
         kept = {}
         for name, m in marks.items():
-            m = free.astype(np.uint8) if name == "out" else m
+            if name not in stay:
+                # (the first pixels of a hair, in the fuzz of the outline, stay: a hair is judged from there on)
+                m = ((m > 0) & (dist > (0.06 if name == "short" else 0.12) * head_w)).astype(np.uint8)
+            if int(m.sum()) < 20:
+                bad.append(f"{tag}: '{name}' has {int(m.sum())} pixels to judge by")
+                kept[name] = float("nan")
+                continue
             kept[name] = _mark_depth(comp, m) / _mark_depth(frame, m)
         if not st.get("hair_px"):
             bad.append(f"{tag}: no hair was marked (hair_px {st.get('hair_px')})")
-        if kept["out"] > taken:
-            bad.append(f"{tag}: the hairs that stick out of the hairdo kept {100 * kept['out']:.0f}% of their contrast")
-        for name in stay:
-            if kept[name] < 0.90:
-                bad.append(f"{tag}: '{name}' must stay, {100 * kept[name]:.0f}% of it is left")
+        for name in marks:
+            if name in stay:
+                if not kept[name] >= 0.90:
+                    bad.append(f"{tag}: '{name}' must stay, {100 * kept[name]:.0f}% of it is left")
+            elif not kept[name] <= (taken if name == "out" else 0.45):
+                bad.append(f"{tag}: the hairs '{name}' kept {100 * kept[name]:.0f}% of their contrast")
         changed = np.abs(comp - frame.astype(np.float32)).max(axis=2)
         if float(changed[sil_full > 0].max()) > 0.0:
             bad.append(f"{tag}: the person was changed by {changed[sil_full > 0].max():.1f} levels")
@@ -4785,16 +4801,22 @@ def check_hair():
         kept = judged(f"{mode}, slider 100", frame, marks, sil_full, out, st)
         if mode == "fast":
             notes.append(f"hairs that stick out of the hairdo: {100 * kept['out']:.0f}% of their contrast left; the fuzz of the outline {100 * kept['fringe']:.0f}%, "
+                         f"a hair that turns to run along the outline {100 * kept['along']:.0f}%, "
                          f"an eyelash {100 * kept['lash']:.0f}%, a line out of the lit face {100 * kept['face']:.0f}%, a line that touches nobody {100 * kept['apart']:.0f}%, "
                          f"a cable that goes on to the frame border {100 * kept['cable']:.0f}%")
+            short100 = kept["short"]
+    # a hair of a tenth of the head goes at 100 (above) and stays at 30: the lower the slider, the longer a hair must be
+    out, st = _quiet(eng.process, frame, 8, dict(p, speedMode="fast", strayHair=30))
+    k30 = judged("slider 30", frame, marks, sil_full, out, st, stay=("short", "fringe", "along", "lash", "face", "apart", "cable"))
+    notes.append(f"a hair a tenth of the head long: {100 * short100:.0f}% left at 100, {100 * k30['short']:.0f}% at 30")
     # the slider: what a lower position takes, a higher one takes too
     px = [int(_quiet(eng.process, frame, 8, dict(p, speedMode="fast", strayHair=v))[1].get("hair_px") or 0) for v in (25, 50, 75, 100)]
     if sorted(px) != px or px[-1] == 0:
         bad.append(f"marked pixels at 25 / 50 / 75 / 100 of the slider: {px}")
     # Light hairs in front of a dark wall (a light line that grows out of the lit face is a hair there: only a
     # dark hair is asked what it grows out of); a close-up, with thicker hairs.
-    for tag, kw, taken, stay in (("light hairs on a dark wall", dict(wall=34.0, hair=92.0, line=150.0, seed=10), 0.35, ("fringe", "lash", "apart", "cable")),
-                                 ("close-up", dict(zoom=3.2, seed=11), 0.35, ("fringe", "lash", "face", "apart", "cable"))):
+    for tag, kw, taken, stay in (("light hairs on a dark wall", dict(wall=34.0, hair=92.0, line=150.0, seed=10), 0.35, ("fringe", "along", "lash", "apart", "cable")),
+                                 ("close-up", dict(zoom=3.2, seed=11), 0.35, ("fringe", "along", "lash", "face", "apart", "cable"))):
         f2, s2, m2, full2 = _hair_frame(**kw)
         o2, st2 = _quiet(H.make_engine(E, s2).process, f2, 8, dict(p, speedMode="fast", strayHair=100))
         k2 = judged(tag, f2, m2, full2, o2, st2, taken=taken, stay=stay)
