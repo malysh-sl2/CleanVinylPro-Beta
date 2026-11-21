@@ -10,8 +10,9 @@ No AI models, no GPU and no Photoshop needed.
 Part 1 - what was NOT meant to change still gives the pixels of the original program (folder CleanVinylPro,
 v3.2.1). These comparisons run in the "legacy regime": quality mode, smoke protection off, cyclorama 0, clothing
 off, stains 0, floor-joint pieces judged one by one - the places where this program works differently on
-purpose. (In the interactive window also: background blur 0. With the backdrop blurred the layer covers the whole
-backdrop; the window now shows that in two greens and repairs a brush stroke there - see `mask`.)
+purpose - and "toneEdge" off: the repair is blended under the protected band and hidden there by the layer, as
+it always was. (In the interactive window also: background blur 0. With the backdrop blurred the layer covers the
+whole backdrop; the window now shows that in two greens and repairs a brush stroke there - see `mask`.)
   convert   fast pixel conversions give the same numbers as the plain NumPy formulas (all 8/16-bit values)
   process   one-shot clean: current engine == v3.2.1 engine, pixel for pixel
   session   interactive window (open / sliders / brush / apply): current engine == v3.2.1
@@ -134,7 +135,8 @@ def _quiet(fn, *a, **k):
 def _legacy(p: dict) -> dict:
     """The parameters under which the engine must still give the pixels of v3.2.1 (see the header)."""
     return dict(p, speedMode="quality", smokeOn=False, cycCurve=0, dressSmooth=False, scuffs=0, seamJoin=False,
-                grainLocal=False, previewQuality=90, gearBody=False, shadowSpots=False, brushSoft=False, previewLong=1080)
+                grainLocal=False, previewQuality=90, gearBody=False, shadowSpots=False, brushSoft=False, previewLong=1080,
+                toneEdge=False, cornerHair=False, strayHair=0)
 
 
 def _legacy_window(p: dict) -> dict:

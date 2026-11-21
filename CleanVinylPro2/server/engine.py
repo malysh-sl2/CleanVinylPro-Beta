@@ -1893,7 +1893,7 @@ class CleanVinylEngine:
     #   a line that only runs along the outline; a line shorter than HAIR_MIN_LEN of the head (an eyelash in
     #   profile is about a twentieth); a dark line that grows out of something light (a dark hair grows out of
     #   dark hair - an eyelash on a lit face, a hair in front of a white sleeve do not); a tuft too dense to be
-    #   single hairs; gear, smoke, cast shadows.
+    #   single hairs; a line that goes on beyond the searched zone (a cable, a pole); gear, smoke, cast shadows.
     #   Every size is measured in head widths, and a close-up is searched on a reduced copy, so a hair is the same
     #   few pixels thick whatever the framing.
     # It cannot tell a hair from other thin things that stand clear of a head - a thin earring, a chain, the stem
@@ -2018,10 +2018,22 @@ class CleanVinylEngine:
         guard = 2 * max(1, int(round(self.HAIR_GUARD * long_side / 1024.0 * ws))) + 1
         solid = cv2.dilate((box_of(tight_1024) >= 77).astype(np.uint8),
                            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (guard, guard)))
+        def wide_only(small: np.ndarray, level: int) -> np.ndarray:
+            """
+            The map of the gear or of the cast shadows with its thin parts dropped. To those maps a strong hair
+            is itself a thin thing and a thin shadow: taken as they are, they would hide exactly the hairs that
+            show most. A stand, a softbox, the shadow of a head on the wall are wide. (A cable or a pole that
+            passes behind the head is told by its length: see "leaves the zone" below.)
+            """
+            flagged = (small > level).astype(np.uint8) * np.uint8(255)
+            if min(flagged.shape[:2]) < 9:
+                return flagged
+            return cv2.morphologyEx(flagged, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)))
+
         bad = (solid > 0) | (box_of(near_s * np.uint8(255), cv2.INTER_NEAREST) < 128)
-        bad |= box_of(stand_s) > 75
+        bad |= box_of(wide_only(stand_s, 75)) > 127
         bad |= box_of(smoke_s) > 65
-        bad |= box_of(shadow_s) > 65
+        bad |= box_of(wide_only(shadow_s, 65)) > 127
         pad = max(3, int(round(min(14, int(0.012 * min(h, w))) * ws)))
         for cut, at_edge in ((np.s_[:pad], y0 == 0), (np.s_[bh_ - pad:], y1 == h),
                              (np.s_[:, :pad], x0 == 0), (np.s_[:, bw_ - pad:], x1 == w)):
@@ -2042,6 +2054,8 @@ class CleanVinylEngine:
         stick_out = self.HAIR_STICK_OUT * head_w
         attach = fringe + max(3.0, self.HAIR_ATTACH * head_w)
         gap = 2 * max(1, int(round(self.HAIR_GAP * head_w / 2.0))) + 1
+        # a line that is still there where the searched zone ends goes on beyond it: a cable, a pole, a strap
+        leaves = self.HAIR_REACH * head_w - guard - max(4.0, self.HAIR_GAP * head_w)
         calm = ~bad & (box_of(fg_mask_u8) < 60)   # the backdrop of the box, outside the protected band
         bad |= dist <= fringe                     # (the fuzz of the outline: after `calm`, which lies outside it)
 
@@ -2143,7 +2157,8 @@ class CleanVinylEngine:
             np.minimum.at(lo_x, gid, px)
             np.maximum.at(hi_x, gid, px)
             extent = np.maximum(hi_y - lo_y, hi_x - lo_x).astype(np.float32) + 1.0
-            good = (d_min <= attach) & (d_max >= stick_out) & (extent >= min_len) & (extent <= 1.5 * head_w)
+            good = ((d_min <= attach) & (d_max >= stick_out) & (d_max < leaves)
+                    & (extent >= min_len) & (extent <= 1.5 * head_w))
             good[0] = False
             if op == cv2.MORPH_BLACKHAT:
                 # 3. a dark hair grows out of something dark. Where the hair meets the person, the person a little
@@ -2176,8 +2191,10 @@ class CleanVinylEngine:
                          "thr_light": thr_used[1] if len(thr_used) > 1 else None})
         if hairs == 0:
             return out
-        # the repair covers the hair with its soft edges; it never reaches into the guard strip
-        grow = max(5, int(round(0.012 * head_w)) | 1)
+        # The repair covers the hair with its soft edges, and is wide enough for the soft edge of the repair
+        # itself (a mark narrower than about 13 pixels of the frame is blended in at a part of its strength: the
+        # hair would only fade). It never reaches into the guard strip.
+        grow = max(int(np.ceil(13.0 * ws)) | 1, int(round(0.024 * head_w)) | 1)
         keep = cv2.dilate(keep, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (grow, grow)))
         keep[solid > 0] = 0
         if ws < 1.0:

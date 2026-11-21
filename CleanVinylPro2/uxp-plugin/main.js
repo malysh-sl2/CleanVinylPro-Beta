@@ -245,13 +245,14 @@ let exactJobs = new Set();
 // Custom Drag-Only Sliders
 const ALL_SLIDER_IDS = [
   "dlgSlBlend",
-  "gSlSpots", "gSlScuffs", "gSlBlur", "gSlCyc", "gSlFeather",
+  "gSlSpots", "gSlHair", "gSlScuffs", "gSlBlur", "gSlCyc", "gSlFeather",
   "gSlSeam", "gSlEdge", "gSlSmoke", "gSlGrain",
   "gSlDress", "gSlTurbo"
 ];
 const SLIDER_VAL_MAP = {
   dlgSlBlend: "dlgValBlend",
   gSlSpots: "gValSpots",
+  gSlHair: "gValHair",
   gSlScuffs: "gValScuffs",
   gSlBlur: "gValBlur",
   gSlCyc: "gValCyc",
@@ -267,6 +268,7 @@ const SLIDER_MAX_MAP = { gSlTurbo: 200 };
 const sliderState = {
   dlgSlBlend: 100,
   gSlSpots: 75,
+  gSlHair: 0,
   gSlScuffs: 65,
   gSlBlur: 0,
   gSlCyc: 0,
@@ -515,6 +517,8 @@ function startProgressPolling(jobId, target = "auto") {
 function readCurrentConfig() {
   return {
     spots: getSliderVal("gSlSpots"),
+    // Single hairs that stick out of the hairdo; 0 = the tool is off (and it is 0 in every built-in preset)
+    strayHair: getSliderVal("gSlHair"),
     scuffs: getSliderVal("gSlScuffs"),
     blur: getSliderVal("gSlBlur"),
     cycCurve: getSliderVal("gSlCyc"),
@@ -555,6 +559,7 @@ function normalizedPresetConfig(cfg) {
   const flag = (v, dflt) => (v !== undefined ? !!v : dflt);
   return {
     spots: clampSliderVal("gSlSpots", c.spots ?? 75),
+    strayHair: clampSliderVal("gSlHair", c.strayHair ?? 0),
     scuffs: clampSliderVal("gSlScuffs", c.scuffs ?? 65),
     blur: clampSliderVal("gSlBlur", c.blur ?? 0),
     cycCurve: clampSliderVal("gSlCyc", c.cycCurve ?? 0),
@@ -581,6 +586,7 @@ function normalizedPresetConfig(cfg) {
 function applyConfig(cfg) {
   const c = normalizedPresetConfig(cfg);
   setSliderVal("gSlSpots", c.spots);
+  setSliderVal("gSlHair", c.strayHair);
   setSliderVal("gSlScuffs", c.scuffs);
   setSliderVal("gSlBlur", c.blur);
   setSliderVal("gSlCyc", c.cycCurve);
@@ -696,6 +702,8 @@ function updateSliderVisuals() {
       badge.textContent = smokeEnabled ? v + "%" : "Вимк.";
     } else if (id === "gSlDress") {
       badge.textContent = dressSmoothEnabled ? v + "%" : "Вимк.";
+    } else if (id === "gSlHair") {
+      badge.textContent = v > 0 ? v + "%" : "Вимк.";
     } else {
       badge.textContent = v + "%";
     }
@@ -2118,7 +2126,8 @@ function previewSettingsSignature() {
   const c = readCurrentConfig();
   return JSON.stringify([
     c.spots, c.scuffs, c.blur, c.cycCurve, c.feather, !!c.seamOn, c.seam, c.edge, !!c.smokeOn, c.smoke, c.grain,
-    !!c.shadow, !!c.removeStands, c.master, !!c.fracFine, !!c.fracMed, !!c.fracLarge, c.cleanPasses, c.speedMode
+    !!c.shadow, !!c.removeStands, c.master, !!c.fracFine, !!c.fracMed, !!c.fracLarge, c.cleanPasses, c.speedMode,
+    c.strayHair
   ]);
 }
 
