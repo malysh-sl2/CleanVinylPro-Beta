@@ -814,6 +814,100 @@ class CleanVinylEngine:
         return fg_full, core_full
 
     # ------------------------------------------------------------------
+    # 1c. The outline of the person for the stages that change the tone of the backdrop
+    # ------------------------------------------------------------------
+    # The mask of _clean_fg_mask is a PROTECTION: the person with a margin (the "edge" slider), gaps closed. It says
+    # where nothing may be repaired. The stages that only shift the tone of the backdrop - the corner, the stains -
+    # used it too, and so left a band around the person at the old tone: next to a floor that got lighter or darker
+    # the band shows as a rim along the hem and around the shoes ("the halo does not go away, whatever the slider
+    # says" - the slider only made the band wider or narrower). A tone shift is no repair: it belongs to every
+    # pixel of the backdrop, right up to the person. Where the person ends is taken from the network's own matte
+    # (no margin) and then from the photo itself: inside a window of a few pixels the outline is put where the
+    # brightness of the photo changes (a guided filter - the matte is 1024 pixels wide, the photo five times that).
+    TONE_GATE_R = 1.5         # half-size of that window, in pixels of the 1024 matte
+    TONE_GATE_EPS = 1.0e-4    # an edge of the photo weaker than about its square root (of 0..1) is not followed
+    _TONE_GATE_LUT = np.clip(np.rint(255.0 * (1.0 - np.clip((np.arange(256, dtype=np.float32) / 255.0 - 0.30) / 0.40, 0.0, 1.0))), 0, 255).astype(np.uint8)
+
+    @staticmethod
+    def _tight_person_1024(fg_raw_1024: np.ndarray, core_only: bool = False) -> np.ndarray:
+        """
+        The person as the matting network drew it (1024 x 1024, 0..255): no margin and no closing of gaps. Only the
+        blobs that are no person are dropped, by the rule of _clean_fg_mask. core_only: the main figure alone
+        (what "remove stands" keeps).
+        """
+        m = fg_raw_1024.astype(np.float32) / 255.0
+        bin_m = (m > 0.40).astype(np.uint8)
+        n, lbl, st, _ = cv2.connectedComponentsWithStats(bin_m, 8)
+        keep = np.zeros(n, dtype=np.uint8)
+        best_idx, best_area = -1, 0
+        min_area = 0.002 * (1024 * 1024)
+        for i in range(1, n):
+            area = int(st[i, cv2.CC_STAT_AREA])
+            if area < min_area:
+                continue
+            x0, y0, bw, bh = int(st[i, cv2.CC_STAT_LEFT]), int(st[i, cv2.CC_STAT_TOP]), int(st[i, cv2.CC_STAT_WIDTH]), int(st[i, cv2.CC_STAT_HEIGHT])
+            if float(m[y0:y0 + bh, x0:x0 + bw][lbl[y0:y0 + bh, x0:x0 + bw] == i].max()) >= 0.72:
+                keep[i] = 1
+                if area > best_area:
+                    best_area, best_idx = area, i
+        if core_only:
+            keep[:] = 0
+            if best_idx > 0:
+                keep[best_idx] = 1
+        # (the soft edge of the matte reaches a little beyond the 0.40 outline of a blob)
+        kept = cv2.dilate(keep[lbl], cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+        return fg_raw_1024 * kept
+
+    @staticmethod
+    def _tight_person_rows(tight_1024: np.ndarray, w: int, h: int, y0: int, y1: int, x0: int = 0, x1: int | None = None) -> np.ndarray:
+        """Rows y0..y1 (columns x0..x1) of the tight matte at the size of a w x h frame, uint8."""
+        x1 = w if x1 is None else x1
+        mh, mw = tight_1024.shape[:2]
+        M = np.float32([[mw / w, 0, (x0 + 0.5) * mw / w - 0.5], [0, mh / h, (y0 + 0.5) * mh / h - 0.5]])
+        return cv2.warpAffine(tight_1024, M, (x1 - x0, y1 - y0), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+                              borderMode=cv2.BORDER_REPLICATE)
+
+    def _tone_gate(self, img_rgb_u8: np.ndarray, tight_1024: np.ndarray, eff_fg_u8: np.ndarray) -> np.ndarray:
+        """
+        How much of a tone shift every pixel takes: 255 = backdrop, 0 = the person (the size of the frame).
+        Outside the protected band of `eff_fg_u8` it is the former gate (the same ramp, 30% .. 70% of the mask).
+        Inside the band it is that ramp on the tight matte, with its edge moved to where the photo has its own
+        edge: within a small window the answer is a straight-line function of the brightness of the photo, the one
+        that fits the matte best. A backdrop pixel next to a dark hem is as light as the backdrop and gets the full
+        shift; the hem gets none; a hair in front of the wall gets what shows of the wall through it. Where the
+        photo has no edge (a white dress on a white wall) the answer is the matte, softened.
+        Never less than the former gate.
+        """
+        h, w = img_rgb_u8.shape[:2]
+        gate = cv2.LUT(eff_fg_u8, self._TONE_GATE_LUT)
+        rows = np.flatnonzero((gate < 255).any(axis=1))
+        if rows.size == 0:
+            return gate
+        cols = np.flatnonzero((gate < 255).any(axis=0))
+        r = max(2, int(round(self.TONE_GATE_R * max(h, w) / 1024.0)))
+        k = (2 * r + 1, 2 * r + 1)
+        m2 = 2 * r + 1
+        y0, y1 = max(0, int(rows[0]) - m2), min(h, int(rows[-1]) + m2 + 1)
+        x0, x1 = max(0, int(cols[0]) - m2), min(w, int(cols[-1]) + m2 + 1)
+        eps = float(self.TONE_GATE_EPS)
+        for ya in range(y0, y1, 768):
+            self._checkpoint()
+            yb = min(y1, ya + 768)
+            a0, b0 = max(y0, ya - m2), min(y1, yb + m2)
+            p = cv2.LUT(self._tight_person_rows(tight_1024, w, h, a0, b0, x0, x1), self._TONE_GATE_LUT).astype(np.float32) * (1.0 / 255.0)
+            g = cv2.cvtColor(np.ascontiguousarray(img_rgb_u8[a0:b0, x0:x1]), cv2.COLOR_RGB2GRAY).astype(np.float32) * (1.0 / 255.0)
+            m_g, m_p = cv2.blur(g, k), cv2.blur(p, k)
+            cov = cv2.blur(g * p, k) - m_g * m_p
+            var = cv2.blur(g * g, k) - m_g * m_g
+            a = cov / (np.maximum(var, 0.0) + eps)
+            b = m_p - a * m_g
+            q = cv2.blur(a, k) * g + cv2.blur(b, k)
+            q8 = np.clip(np.rint(q[ya - a0:yb - a0] * 255.0), 0, 255).astype(np.uint8)
+            view = gate[ya:yb, x0:x1]
+            np.maximum(view, q8, out=view)
+        return gate
+
+    # ------------------------------------------------------------------
     # 2. Protection & Stand Detection Maps (1024px)
     # ------------------------------------------------------------------
     GEAR_BODY_K = 31             # px of the 1024 copy: a stand leg, a pole or a cable is thinner than this
@@ -1182,6 +1276,9 @@ class CleanVinylEngine:
         skip_line: dict | None = None,
         step_ok_line: dict | None = None,
         info: dict | None = None,
+        corner_own: bool = False,
+        y_from: float = 0.45,
+        paths_out: list | None = None,
     ) -> np.ndarray:
         """
         Thin, long, nearly horizontal lines of the floor: the joint of two backdrop sheets, tape, a crease.
@@ -1207,6 +1304,13 @@ class CleanVinylEngine:
         info: a dict that receives what the search saw (join only): "pieces" - every thin piece with its place
             (shares of the frame), its numbers and why it was dropped, if it was; "groups" - the lines tried, with
             their length, their numbers and the verdict. For the self-checks and for looking into a frame.
+        The last three serve the corner tool, which looks for the thin line that runs along the corner
+        (_corner_hairline); without them the search is the former one:
+        corner_own: a piece inside the strip of `step_ok_line` must still be a line in its own profile (the step
+            of the tone is allowed there, a "piece" that lies on nothing is not).
+        y_from: the search starts at this share of the frame height (a corner can be higher than a floor joint).
+        paths_out: receives every accepted piece as {"xs", "rows"}: the columns and, for each, the row of the
+            frame the piece runs through (float32, pixels of the frame). join only.
         """
         h, w = img_rgb_u8.shape[:2]
         max_dim = 1400.0 if fast_mode else 2400.0
@@ -1256,7 +1360,7 @@ class CleanVinylEngine:
             best_thin = np.maximum(best_thin, cv2.warpAffine((thin_sig + thin_step) * valid, M_inv, (sw, sh)))
             best_wide = np.maximum(best_wide, cv2.warpAffine(wide_sig * valid, M_inv, (sw, sh)))
 
-        best_thin[:int(0.45 * sh), :] = 0.0
+        best_thin[:int(float(y_from) * sh), :] = 0.0
         best_thin[int(0.97 * sh):, :] = 0.0
         if skip_line is not None:
             xs_l = np.arange(sw, dtype=np.float32)
@@ -1317,9 +1421,9 @@ class CleanVinylEngine:
                         y_cor = float(step_ok_line["row"]) + float(step_ok_line["slope"]) * (xc_f - (w - 1) / 2.0)
                         in_corner = abs(yc_f - y_cor) <= float(step_ok_line.get("half", 0.012 * h))
                     why = None
-                    own = None if in_corner else self._seam_piece_check(Ls, not_person_s, piece)
+                    own = None if (in_corner and not corner_own) else self._seam_piece_check(Ls, not_person_s, piece)
                     if own is not None:
-                        if abs(own[1]) >= self.SEAM_LIGHT_EDGE:
+                        if abs(own[1]) >= self.SEAM_LIGHT_EDGE and not in_corner:
                             why = "edge of light"     # two differently lit areas meet there: not a joint
                         elif own[0] < self.SEAM_OWN_LINE * mean_thin:
                             why = "no line of its own"
@@ -1384,6 +1488,11 @@ class CleanVinylEngine:
         for pc in accepted:
             x0, y0, bw, bh = pc["box"]
             seam_s[y0:y0 + bh, x0:x0 + bw][pc["comp"]] = 255
+            if paths_out is not None and pc.get("path") is not None:
+                paths_out.append({
+                    "xs": ((np.arange(x0, x0 + bw, dtype=np.float32) + 0.5) / scale - 0.5).astype(np.float32),
+                    "rows": ((pc["path"] + 0.5) / scale - 0.5).astype(np.float32),
+                })
 
         # Bridge small horizontal gaps along confirmed seams near stands/dress edges
         if np.any(seam_s > 0):
@@ -1768,6 +1877,128 @@ class CleanVinylEngine:
             heal = np.maximum(spot_full_dil, fine_keep)
             heal[hard_bad_work] = 0
         return heal, grain_sigma
+
+    # ------------------------------------------------------------------
+    # 4b. Single hairs that stick out next to the person ("Поодинокі волоски")
+    # ------------------------------------------------------------------
+    # The dust search never looks inside the protected band around the person, and it is tuned for specks: of a
+    # hair that sticks out of the hairdo it takes the far end at best, and leaves the rest standing. This search is
+    # for those hairs alone: thin, long, darker or lighter than the backdrop behind them, close to the person - and
+    # it goes up to the person. What it marks is repaired like dust, also inside the protected band (process()).
+    # What keeps it from eating the hairdo: the person as the network drew it is never touched, nor a guard strip
+    # around that outline (the soft edge of the hairdo is the hairdo), nor anything too thick or too short to be
+    # one hair. It cannot tell a hair from other thin things that stand clear of the person - an eyelash in
+    # profile, a fringe, a thin earring: the slider is 0 unless the user moves it, and the eraser brings them back.
+    HAIR_REACH = 0.07         # of the long side: how far from the person a stray hair is looked for
+    HAIR_GUARD = 1.5          # px of the 1024 matte: this close to the outline of the person nothing is taken
+    HAIR_KERNEL = 0.0033      # of the long side: a hair, or a wisp of a few, is thinner than this
+    HAIR_MIN_LEN = 0.004      # of the long side: the shortest piece that is a hair at slider 100 (2.5x at slider 0)
+    HAIR_MAX_WIDTH = 0.0016   # of the long side: mean width (area / length) above which a piece is no hair
+    HAIR_CONTRAST = (5.2, 2.2)  # x noise: how much darker than the backdrop a hair must be at slider 0 .. 100
+
+    def _detect_stray_hairs(self, img_rgb_u8: np.ndarray, tight_1024: np.ndarray, fg_mask_u8: np.ndarray,
+                            stand_s: np.ndarray, smoke_s: np.ndarray, shadow_s: np.ndarray, strength: float,
+                            info: dict | None = None) -> np.ndarray:
+        """
+        The single hairs next to the person (see above), as a mask of the frame (uint8, 1 = repair).
+        tight_1024: the person without the margin (_tight_person_1024); fg_mask_u8: the protection mask (only the
+        noise of the backdrop is measured outside it); stand_s / smoke_s / shadow_s: the maps of the gear, of the
+        smoke and of the cast shadows (nothing is taken there: the thin dark line under a shoe is its shadow).
+        strength: the slider, 0..100 - how faint and how short a hair may be.
+        info: receives "pieces" (how many were taken), "noise", "thr_dark", "thr_light", "min_len".
+        """
+        h, w = img_rgb_u8.shape[:2]
+        out = np.zeros((h, w), dtype=np.uint8)
+        s = float(np.clip(strength / 100.0, 0.0, 1.0))
+        if s <= 0:
+            return out
+        long_side = float(max(h, w))
+        # the zone: close to the person (found on a small copy)
+        zs = min(1.0, 512.0 / long_side)
+        zw, zh = max(8, int(round(w * zs))), max(8, int(round(h * zs)))
+        person_s = (cv2.resize(tight_1024, (zw, zh), interpolation=cv2.INTER_AREA) >= 77).astype(np.uint8)
+        if not person_s.any():
+            return out
+        reach_s = max(2, int(round(self.HAIR_REACH * long_side * zs)))
+        near_s = cv2.dilate(person_s, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * reach_s + 1, 2 * reach_s + 1)))
+        ys, xs = np.nonzero(near_s)
+        y0, y1 = int(max(0, np.floor(ys.min() / zs))), int(min(h, np.ceil((ys.max() + 1) / zs)))
+        x0, x1 = int(max(0, np.floor(xs.min() / zs))), int(min(w, np.ceil((xs.max() + 1) / zs)))
+        bh_, bw_ = y1 - y0, x1 - x0
+        if bh_ < 16 or bw_ < 16:
+            return out
+
+        L = cv2.cvtColor(np.ascontiguousarray(img_rgb_u8[y0:y1, x0:x1]), cv2.COLOR_RGB2GRAY)
+        kb = max(7, int(round(self.HAIR_KERNEL * long_side)) | 1)
+        k_el = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kb, kb))
+        self._checkpoint()
+        dark = cv2.morphologyEx(L, cv2.MORPH_BLACKHAT, k_el)
+        self._checkpoint()
+        light = cv2.morphologyEx(L, cv2.MORPH_TOPHAT, k_el)
+        self._checkpoint()
+
+        # the noise of the backdrop inside the box
+        L_sub = L[::4, ::4].astype(np.float32)
+        hp = np.abs(L_sub - cv2.GaussianBlur(L_sub, (5, 5), 0))
+        bg_sub = fg_mask_u8[y0:y1:4, x0:x1:4] < 60
+        noise = max(0.85, float(np.median(hp[bg_sub])) * 1.4826) if np.any(bg_sub) else 2.0
+        c = self.HAIR_CONTRAST[0] + (self.HAIR_CONTRAST[1] - self.HAIR_CONTRAST[0]) * s
+        thr_dark = max(3.0, c * noise)
+        thr_light = max(4.0, 1.25 * c * noise)
+        min_len = self.HAIR_MIN_LEN * long_side * (1.0 + 1.5 * (1.0 - s))
+        max_w = max(3.0, self.HAIR_MAX_WIDTH * long_side)
+
+        # where nothing is taken: the person with the guard strip, away from the person, gear, smoke, cast shadows
+        guard = 2 * max(1, int(round(self.HAIR_GUARD * long_side / 1024.0))) + 1
+        person = (self._tight_person_rows(tight_1024, w, h, y0, y1, x0, x1) >= 77).astype(np.uint8)
+        solid = cv2.dilate(person, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (guard, guard))) > 0
+
+        def box_of(small: np.ndarray, interp=cv2.INTER_LINEAR) -> np.ndarray:
+            """The part of a small map of the whole frame that covers the box, at the size of the box."""
+            sh_, sw_ = small.shape[:2]
+            M = np.float32([[sw_ / w, 0, (x0 + 0.5) * sw_ / w - 0.5], [0, sh_ / h, (y0 + 0.5) * sh_ / h - 0.5]])
+            return cv2.warpAffine(small, M, (bw_, bh_), flags=interp | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE)
+
+        bad = solid | (box_of(near_s * np.uint8(255), cv2.INTER_NEAREST) < 128)
+        bad |= box_of(stand_s) > 75
+        bad |= box_of(smoke_s) > 65
+        bad |= box_of(shadow_s) > 65
+        pad = max(4, min(14, int(0.012 * min(h, w))))
+        if y0 < pad:
+            bad[:pad - y0] = True
+        if y1 > h - pad:
+            bad[bh_ - (y1 - (h - pad)):] = True
+        if x0 < pad:
+            bad[:, :pad - x0] = True
+        if x1 > w - pad:
+            bad[:, bw_ - (x1 - (w - pad)):] = True
+
+        keep = np.zeros((bh_, bw_), dtype=np.uint8)
+        pieces = 0
+        for resp, thr in ((dark, thr_dark), (light, thr_light)):
+            self._checkpoint()
+            cand = ((resp > thr) & ~bad).astype(np.uint8)
+            n, lbl, st, _ = cv2.connectedComponentsWithStats(cand, connectivity=8)
+            if n <= 1:
+                continue
+            area = st[1:, cv2.CC_STAT_AREA].astype(np.float32)
+            length = np.maximum(st[1:, cv2.CC_STAT_WIDTH], st[1:, cv2.CC_STAT_HEIGHT]).astype(np.float32)
+            # long enough, and thin: a curl covers less of its box than a straight hair, so the width is judged
+            # with some room; a blob (dust, a fold, the tip of a shoe) is far wider than that
+            ok = (length >= min_len) & (area <= 1.6 * max_w * length)
+            lut = np.zeros(n, dtype=np.uint8)
+            lut[1:] = ok.astype(np.uint8)
+            pieces += int(ok.sum())
+            np.maximum(keep, lut[lbl], out=keep)
+        if info is not None:
+            info.update({"pieces": pieces, "noise": noise, "thr_dark": thr_dark, "thr_light": thr_light, "min_len": min_len})
+        if pieces == 0:
+            return out
+        grow = max(5, int(round(0.0016 * long_side)) | 1)
+        keep = cv2.dilate(keep, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (grow, grow)))
+        keep[solid] = 0
+        out[y0:y1, x0:x1] = keep
+        return out
 
     # ------------------------------------------------------------------
     # 5. Tile LaMa Inpainting (GPU / CPU) + Hybrid Fast Inpaint
@@ -2431,7 +2662,7 @@ class CleanVinylEngine:
         return seam_mask
 
     def _corner_line_of_frame(self, img_rgb_u8: np.ndarray, eff_fg_u8: np.ndarray, stand_protect_s: np.ndarray,
-                              smoke_s: np.ndarray) -> dict | None:
+                              smoke_s: np.ndarray, hair: bool = False) -> dict | None:
         """
         The wall-floor corner of the untouched frame, in pixels of the frame: {"row": row of the line at the centre
         column, "slope": rows per column, "half": half-height of the strip the line lies in, "step": brightness step
@@ -2439,6 +2670,8 @@ class CleanVinylEngine:
         Found once, on the frame as it was shot and always on the same small copy, so the answer depends neither on
         the speed mode nor on what the repair did to the floor. The corner tool removes this line
         (_apply_cyclorama_curve) and the seam search leaves its strip alone.
+        hair: also look for the thin line that runs along the corner (see _corner_hairline). The dict then has
+        "hair": its pieces, and "zone": the half-height of the zone they were looked for in (wider than "half").
         """
         h, w = img_rgb_u8.shape[:2]
         sc = min(1.0, 768.0 / max(h, w))
@@ -2453,8 +2686,132 @@ class CleanVinylEngine:
         line = self._find_corner_line(L, valid)
         if line is None or line["score"] < self.CORNER_MIN_SCORE:
             return None
-        return {"row": (line["row"] + 0.5) / sc - 0.5, "slope": float(line["slope"]), "half": 0.012 * h + 2.0 / sc,
-                "step": float(line["step"])}
+        out = {"row": (line["row"] + 0.5) / sc - 0.5, "slope": float(line["slope"]), "half": 0.012 * h + 2.0 / sc,
+               "step": float(line["step"])}
+        if hair:
+            out["zone"] = max(out["half"], self.CORNER_HAIR_ZONE * h + 6.0)
+            out["hair"] = self._corner_hairline(img_rgb_u8, eff_fg_u8, stand_protect_s, smoke_s, out)
+        return out
+
+    # The thin line along the corner. Where two sheets of the backdrop meet - at the foot of the wall, or on the
+    # floor where the front sheet begins - the tone steps AND a thin dark line runs along the step: the gap between
+    # the sheets. The corner tool turns the step into a slope. That is a slow change of tone; the thin line is not,
+    # so it stayed in the photo at about half of its depth ("the vinyl seam is left"), and nothing else could take
+    # it: the seam search leaves the strip of the corner alone, because a repaired strip along a step smears the
+    # step. So the corner tool takes the line itself: the seam search looks at the untouched frame once more, this
+    # time for the corner strip only, and what it finds there is subtracted after the step has been bent
+    # (_remove_corner_hairline) - the grain stays, no new pixels are invented.
+    CORNER_OVER = 0.004           # of 0..1: how much lighter than its own slope a visible backdrop pixel may stay
+    CORNER_HAIR_ZONE = 0.02       # of the frame height: the line is looked for this far from the found corner
+    CORNER_HAIR_SEARCH = 140.0    # the seam search at its most sensitive (a line is expected here)
+    CORNER_HAIR_CAP = 0.045       # of 0..1: a line deeper than this is no hairline; only this much is taken from it
+    CORNER_HAIR_REACH = 0.0030    # of the frame height: rows looked at on each side of the line
+    CORNER_HAIR_HALF = 0.0012     # of the frame height: the line itself lies within this many rows of its path
+    CORNER_HAIR_ALONG = 0.012     # of the frame width: the profile of the line is averaged along this much of it
+    CORNER_HAIR_BEYOND = 0.05     # of the frame width: a piece is followed this far beyond its ends
+
+    def _corner_hairline(self, img_rgb_u8: np.ndarray, eff_fg_u8: np.ndarray, stand_protect_s: np.ndarray,
+                         smoke_s: np.ndarray, line: dict) -> list:
+        """
+        The pieces of a thin line inside the zone of the corner `line` (see above): a list of {"xs", "rows"} -
+        columns of the frame and the row the line runs through at each (float32). Empty when there is none.
+        A piece counts by the rules of the seam search (long enough together with the others of its line, thin,
+        a line in its own profile); only the step of the tone is allowed here, as it is a corner.
+        """
+        h, w = img_rgb_u8.shape[:2]
+        found: list = []
+        half = float(line.get("zone", line["half"]))
+        self._detect_vinyl_seam_mask(
+            img_rgb_u8, eff_fg_u8, stand_protect_s, smoke_s, self.CORNER_HAIR_SEARCH, 70.0, fast_mode=False,
+            join=True, skip_line=None, step_ok_line=dict(line, half=half), corner_own=True, y_from=0.20,
+            paths_out=found,
+        )
+        pieces = []
+        for pc in found:
+            y_line = float(line["row"]) + float(line["slope"]) * (pc["xs"] - (w - 1) / 2.0)
+            if pc["xs"].size >= 8 and float(np.median(np.abs(pc["rows"] - y_line))) <= half:
+                pieces.append(pc)
+        return pieces
+
+    @staticmethod
+    def _scale_corner_line(line: dict | None, scale: float) -> dict | None:
+        """The corner of the real frame in pixels of its reduced copy (`scale` < 1)."""
+        if line is None or scale == 1.0:
+            return line
+        out = dict(line, row=(line["row"] + 0.5) * scale - 0.5, half=line["half"] * scale)
+        if "zone" in line:
+            out["zone"] = line["zone"] * scale
+        if line.get("hair"):
+            out["hair"] = [{"xs": (pc["xs"] + 0.5) * scale - 0.5, "rows": (pc["rows"] + 0.5) * scale - 0.5}
+                           for pc in line["hair"]]
+        return out
+
+    def _remove_corner_hairline(self, img_f32: np.ndarray, pieces: list, gate_u8: np.ndarray) -> np.ndarray | None:
+        """
+        Takes the thin line of the corner out of `img_f32` (float RGB 0..1, edited in place) along `pieces`
+        (_corner_hairline). gate_u8: 255 = backdrop, 0 = the person (the size of the frame).
+        For every piece the band around its path is laid straight. The line shows in the profile ACROSS that band,
+        averaged ALONG it: the grain averages out, the line stays. The tone the band would have without the line
+        is the straight line between its two shoulders; what the profile has beyond that, inside the few rows
+        around the path, is the line - and that is subtracted from every pixel. Nothing is painted: the grain of
+        each pixel stays its own, and where no line is, nothing is found to subtract.
+        A piece is followed a little beyond its ends (the search stops short of the person and of the frame
+        border). Only the backdrop is read and only the backdrop is changed.
+        Returns the changed zone as a layer alpha (h x w float32, 0..1), or None when nothing was changed.
+        """
+        h, w = img_f32.shape[:2]
+        R = max(6, int(round(self.CORNER_HAIR_REACH * h)))
+        hw = max(2, min(R - 3, int(round(self.CORNER_HAIR_HALF * h))))
+        k_along = max(9, int(round(self.CORNER_HAIR_ALONG * w)) | 1)
+        ext = int(round(self.CORNER_HAIR_BEYOND * w))
+        d = np.arange(-R, R + 1, dtype=np.float32)
+        d_far = (R + hw + 1) / 2.0  # the middle of a shoulder, in rows from the path
+        t = ((d + d_far) / (2.0 * d_far))[:, None, None]
+        taper = np.clip((hw + 1.0 - np.abs(d)) / 2.0, 0.0, 1.0)[:, None, None]
+        alpha = None
+        for pc in pieces:
+            xs_p, rows_p = pc["xs"].astype(np.float64), pc["rows"].astype(np.float64)
+            if xs_p.size < 8:
+                continue
+            self._checkpoint()
+            xa, xb = int(max(0, np.floor(xs_p[0]) - ext)), int(min(w, np.ceil(xs_p[-1]) + ext + 1))
+            if xb - xa < 16:
+                continue
+            cols = np.arange(xa, xb, dtype=np.float64)
+            path = np.interp(cols, xs_p, rows_p)
+            tilt = float(np.polyfit(xs_p, rows_p, 1)[0])  # beyond its ends the piece goes on in its own direction
+            left, right = cols < xs_p[0], cols > xs_p[-1]
+            path[left] = rows_p[0] + tilt * (cols[left] - xs_p[0])
+            path[right] = rows_p[-1] + tilt * (cols[right] - xs_p[-1])
+            ya, yb = int(max(0, np.floor(path.min()) - R - 2)), int(min(h, np.ceil(path.max()) + R + 3))
+            if yb - ya < 2 * R + 1:
+                continue
+            path_l = (path - ya).astype(np.float32)
+            n = xb - xa
+            map_x = np.tile(np.arange(n, dtype=np.float32), (2 * R + 1, 1))
+            map_y = path_l[None, :] + d[:, None]
+            src = img_f32[ya:yb, xa:xb]
+            gate = gate_u8[ya:yb, xa:xb]
+            band = cv2.remap(src, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+            seen = (cv2.remap(gate, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0) > 250).astype(np.float32)
+            prof, den = self._box_norm_x(band, seen, k_along)
+            up, dn = prof[:R - hw].mean(axis=0), prof[R + hw + 1:].mean(axis=0)
+            line_part = np.clip(prof - (up[None] + (dn - up)[None] * t), -self.CORNER_HAIR_CAP, self.CORNER_HAIR_CAP) * taper
+            # (where the backdrop along the line is mostly hidden, the profile is a guess from a few pixels)
+            line_part *= np.clip((den.min(axis=0) - 0.25) / 0.35, 0.0, 1.0)[None, :, None]
+            # back from the straightened band to the frame: out(y, x) = line_part(y - path[x] + R, x)
+            back_x = np.tile(np.arange(n, dtype=np.float32), (yb - ya, 1))
+            back_y = np.arange(yb - ya, dtype=np.float32)[:, None] - path_l[None, :] + R
+            back = cv2.remap(line_part, back_x, back_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+            g = gate.astype(np.float32) * (1.0 / 255.0)
+            back *= g[..., None]
+            src -= back
+            np.clip(src, 0.0, 1.0, out=src)
+            if alpha is None:
+                alpha = np.zeros((h, w), dtype=np.float32)
+            view = alpha[ya:yb, xa:xb]
+            np.maximum(view, np.clip(np.max(np.abs(back), axis=2) / 0.002, 0.0, 1.0), out=view)
+        return alpha
 
     # ------------------------------------------------------------------
     # 5b-3. Stains, smears and shoe marks: the backdrop is evened, the light and the shadows stay
@@ -2569,7 +2926,7 @@ class CleanVinylEngine:
         return out.astype(np.float32), np.where(inside, conf * norm * share, 0.0).astype(np.float32)
 
     def _smooth_backdrop_stains(self, small_rgb: np.ndarray, fg_s: np.ndarray, st_s: np.ndarray, sm_s: np.ndarray,
-                                strength: float):
+                                strength: float, fg_gate: bool = True):
         """
         Stains, smears and shoe marks of the backdrop ("Сліди взуття та розводи").
         small_rgb: the frame at the working size (float32 RGB 0..1); fg_s / st_s / sm_s: person, gear and smoke maps of
@@ -2589,6 +2946,9 @@ class CleanVinylEngine:
         (about a fifth of the depth for a soft shadow of 8% of the frame height); contact and large shadows stay.
         The correction is computed at this working size and added to the full frame, so the fine grain of the
         vinyl is not touched. Returns (RGB correction, layer alpha), both at the working size.
+        fg_gate=False: the correction and the alpha are NOT faded out towards the person here. The caller does
+        that on the full frame, where the outline of the person is known to the pixel (_tone_gate); at this
+        working size the fade is a band of several pixels of the frame that keeps the old tone.
         """
         sh, sw = fg_s.shape
         s = float(np.clip(strength, 0.0, 2.0))
@@ -2636,18 +2996,27 @@ class CleanVinylEngine:
         lab_new = lab + corr
         np.clip(lab_new[..., 0], 0.0, 100.0, out=lab_new[..., 0])
         rgb_new = np.clip(cv2.cvtColor(lab_new.astype(np.float32), cv2.COLOR_LAB2RGB), 0.0, 1.0)
-        gate = (
-            (1.0 - np.clip((fg_s - 0.15) / 0.55, 0.0, 1.0))
-            * (1.0 - np.clip((st_s - 0.15) / 0.65, 0.0, 1.0))
-            * (1.0 - np.clip(sm_s * 1.6, 0.0, 1.0))
-            * min(1.0, s / 0.35)
-        )
+        if fg_gate:
+            gate = (
+                (1.0 - np.clip((fg_s - 0.15) / 0.55, 0.0, 1.0))
+                * (1.0 - np.clip((st_s - 0.15) / 0.65, 0.0, 1.0))
+                * (1.0 - np.clip(sm_s * 1.6, 0.0, 1.0))
+                * min(1.0, s / 0.35)
+            )
+        else:
+            gate = (
+                (1.0 - np.clip((st_s - 0.15) / 0.65, 0.0, 1.0))
+                * (1.0 - np.clip(sm_s * 1.6, 0.0, 1.0))
+                * min(1.0, s / 0.35)
+            )
         diff_s = ((rgb_new - small_rgb) * gate[..., None]).astype(np.float32)
         # Layer alpha: the zones where the backdrop was really evened. It is judged over a wide neighbourhood, so it
         # rises and falls slowly: a threshold on every single pixel would switch the correction on and off along
         # thin contours, and those contours would be new lines in the photo.
         active = cv2.GaussianBlur(np.max(np.abs(diff_s), axis=2), (0, 0), 0.02 * long_side)
-        alpha_s = np.clip((active - 0.0003) / 0.0009, 0.0, 1.0) * (1.0 - np.clip((fg_s - 0.15) / 0.66, 0.0, 1.0))
+        alpha_s = np.clip((active - 0.0003) / 0.0009, 0.0, 1.0)
+        if fg_gate:
+            alpha_s = alpha_s * (1.0 - np.clip((fg_s - 0.15) / 0.66, 0.0, 1.0))
         return diff_s, alpha_s.astype(np.float32)
 
     def _apply_cyclorama_curve(
@@ -2661,6 +3030,8 @@ class CleanVinylEngine:
         feather_str: float,
         fast_mode: bool = False,
         line: dict | None = None,
+        tone_gate: np.ndarray | None = None,
+        level_seen: bool = False,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         Turns the wall-to-floor corner (`кут`) into a seamless cyclorama gradient.
@@ -2675,6 +3046,10 @@ class CleanVinylEngine:
         so the line is looked for once, on the untouched frame; without it the line is looked for here.
         `shadow_s` and `feather_str` are accepted for compatibility with the old call and are not used: the old
         version skipped every shadowed area, which is exactly where the line stayed visible.
+        `tone_gate`: where the backdrop is, to the pixel (_tone_gate; the size of the frame). With it the slope
+        reaches the person itself; without it the protected band of `eff_fg_u8` is left at the old tone, as before.
+        When `line` carries "hair" (_corner_hairline), the thin line along the corner is taken out as well.
+        `level_seen`: see CORNER_OVER below.
         Returns (image, layer alpha of the changed zone).
         """
         h, w = cleaned_f32.shape[:2]
@@ -2880,6 +3255,15 @@ class CleanVinylEngine:
         seen = self._blur_rows(conf, sv)
         full = (np.clip((seen - 0.55) / 0.35, 0.0, 1.0) * conf)[..., None]
         corr_s = c_loc * full + c_exp * (1.0 - full)
+        if level_seen:
+            # Next to the person the column is seen on one side of the line only, and the answer is the expected
+            # one: what the wider surroundings need, scaled by the light here. Where a pool of light reaches a
+            # little further across the line than the surroundings do, that answer lifts the still-lit strip
+            # beyond the line as if it were already dark - a lighter streak along the line, right next to the
+            # hem. A piece of backdrop that is in plain view is never left lighter than the slope built from what
+            # is seen here (a darker one is: that is a shadow, and it keeps its depth).
+            over = np.maximum(0.0, corr_s - ((cove_s - lf_s) * W_s + self.CORNER_OVER))
+            corr_s = corr_s - over * conf[..., None]
 
         # Nothing needs a bigger change than a few times the brightness step of the corner itself.
         gray_st = cv2.cvtColor(lf_s, cv2.COLOR_RGB2GRAY)
@@ -2940,8 +3324,11 @@ class CleanVinylEngine:
         # ---------- E. apply to the background only ----------
         self._checkpoint()
         # right up to the silhouette: the correction is a soft tone shift of a few levels, it cannot hurt hair or hems
-        gate_lut = 1.0 - np.clip((np.arange(256, dtype=np.float32) / 255.0 - 0.30) / 0.40, 0.0, 1.0)
-        gate = cv2.LUT(np.ascontiguousarray(eff_fg_u8[ra:rb]), gate_lut)
+        if tone_gate is not None:
+            gate = tone_gate[ra:rb].astype(np.float32) * (1.0 / 255.0)
+        else:
+            gate_lut = 1.0 - np.clip((np.arange(256, dtype=np.float32) / 255.0 - 0.30) / 0.40, 0.0, 1.0)
+            gate = cv2.LUT(np.ascontiguousarray(eff_fg_u8[ra:rb]), gate_lut)
         # Stands and cables are NOT left out here: the correction is a slow change of tone, it cannot damage them,
         # while a zone around every stand that keeps the old tone shows as a sleeve once the backdrop next to it
         # has moved. (They take no part in the estimate above; a dark stand receives less - see below.)
@@ -2958,6 +3345,13 @@ class CleanVinylEngine:
         np.clip(band, 0.0, 1.0, out=band)
         cyc_alpha = np.zeros((h, w), dtype=np.float32)
         cyc_alpha[ra:rb] = np.clip(cv2.warpAffine(alpha_s, M_up, (w, rb - ra), **up), 0.0, 1.0) * gate
+        # ---------- F. the thin line that ran along the step ----------
+        if line is not None and line.get("hair"):
+            self._checkpoint()
+            who = tone_gate if tone_gate is not None else cv2.LUT(eff_fg_u8, self._TONE_GATE_LUT)
+            hair_alpha = self._remove_corner_hairline(cleaned_f32, line["hair"], who)
+            if hair_alpha is not None:
+                np.maximum(cyc_alpha, hair_alpha, out=cyc_alpha)
         return cleaned_f32, cyc_alpha
 
     # ------------------------------------------------------------------
@@ -3515,6 +3909,14 @@ class CleanVinylEngine:
             gear_body = bool(params.get("gearBody", True))
             # "shadowSpots": a dirty spot inside a cast shadow is found too (see SHADOW_SPOT_*)
             shadow_spots = bool(params.get("shadowSpots", True))
+            # "toneEdge": the tone stages reach the person itself (_tone_gate), and the repair stops at the
+            # protected band instead of being hidden there by the layer alpha. Off = the former way: the band of
+            # the "edge" slider keeps the old tone.
+            tone_edge = bool(params.get("toneEdge", True))
+            # "cornerHair": the corner tool also takes out the thin line that runs along the corner (_corner_hairline)
+            corner_hair = bool(params.get("cornerHair", True))
+            # "strayHair": single hairs that stick out next to the person (_detect_stray_hairs); 0 = not looked for
+            hair_eff = float(np.clip(float(params.get("strayHair", 0)), 0.0, 100.0))
 
             frac_fine = bool(params.get("fracFine", True))
             frac_med = bool(params.get("fracMed", True))
@@ -3533,7 +3935,7 @@ class CleanVinylEngine:
             if custom_heal_mask is not None:
                 needs_lama_work = bool(np.any(custom_heal_mask > 16))
             else:
-                needs_lama_work = has_any_frac and ((spots_eff > 0) or (seam_on and seam_eff > 0) or remove_stands)
+                needs_lama_work = (has_any_frac and ((spots_eff > 0) or (seam_on and seam_eff > 0) or remove_stands)) or hair_eff > 0
 
             need_bg_maps = (scuffs_eff > 0) or (blur_str > 0) or (cyc_str > 0) or (dress_strength > 0) or (custom_heal_mask is None)
 
@@ -3577,23 +3979,28 @@ class CleanVinylEngine:
             corner_skip = bool(cyc_str > 0 and seam_wanted)
             corner_whole = bool(seam_wanted and seam_join)
             corner_wanted = bool(cyc_str > 0 or corner_whole)
+            hair_line = bool(corner_hair and cyc_str > 0)  # the thin line along the corner is looked for
+            need_tight = bool((tone_edge or hair_eff > 0) and custom_fg_mask is None)
             # What gets found does not depend on the speed mode any more (both use the thorough search); the speed mode
             # only chooses HOW the found defects are repaired, so it enters the cache at the "heal" stage.
             k_detect = (
                 k_maps, remove_stands, seam_on, (seam_eff if seam_on else 0.0),
                 spots_eff, frac_fine, frac_med, frac_large, (seam_join if seam_on else True), corner_skip, grain_local,
-                shadow_spots,
+                shadow_spots, hair_line, hair_eff,
             )
             # The two searches inside "detect" are also remembered one by one: moving the dust slider does not look
             # for the seam again, and the other way round.
-            k_seam = (k_maps, remove_stands, seam_eff, seam_join, corner_skip)
-            k_corner = (k_maps, remove_stands)  # the wall-floor corner of the untouched frame
+            k_seam = (k_maps, remove_stands, seam_eff, seam_join, corner_skip, hair_line)
+            k_corner = (k_maps, remove_stands, hair_line)  # the wall-floor corner of the untouched frame
             k_spots = (k_maps, remove_stands, spots_eff, frac_fine, frac_med, frac_large, grain_local, shadow_spots)
-            k_heal = (k_detect, fast_mode, grain_keep)
+            k_hair = (k_maps, remove_stands, hair_eff)
+            k_tight = (remove_stands,)       # the person without the margin (_tight_person_1024)
+            k_tgate = (k_fg, remove_stands)  # the outline of the person for the tone stages (_tone_gate)
+            k_heal = (k_detect, fast_mode, grain_keep, tone_edge)
             # Order of the tone stages: corner -> stains -> blur. The corner goes first: once the wall-floor step is a
             # smooth slope, the stain stage sees no edge there and evens the backdrop across it.
             k_cyc = (k_heal, cyc_str)
-            k_scuffs = (k_cyc, scuffs_eff)
+            k_scuffs = (k_cyc, scuffs_eff, tone_edge)
             k_blur = (k_scuffs, blur_str, (boost if blur_str > 0 else 0.0), (feather_str if blur_str > 0 else 0.0))
 
             def corner_of_this_run(line, fg_u8):
@@ -3609,8 +4016,10 @@ class CleanVinylEngine:
             if analysis_only and sc is not None:
                 r_fg, r_maps, r_det, r_cor = sc.get("fg"), sc.get("maps"), sc.get("detect"), sc.get("corner")
                 cor_ok = not corner_wanted or (r_cor is not None and r_cor[0] == k_corner)
+                r_tight = sc.get("tight")
+                tight_ok = not need_tight or (r_tight is not None and r_tight[0] == k_tight)
                 if (r_fg is not None and r_fg[0] == k_fg and r_maps is not None and r_maps[0] == k_maps
-                        and r_det is not None and r_det[0] == k_detect and cor_ok):
+                        and r_det is not None and r_det[0] == k_detect and cor_ok and tight_ok):
                     # everything was found already for these settings: no pixel has to be read
                     return {
                         "fg_mask_u8": r_fg[1][0], "core_mask_u8": r_fg[1][1],
@@ -3620,6 +4029,8 @@ class CleanVinylEngine:
                         "grain_sigma": float(r_det[1][3]), "reused_stages": ["fg", "maps", "detect"],
                         "corner_line": (corner_of_this_run(r_cor[1][0], r_fg[1][1] if remove_stands else r_fg[1][0])
                                         if cyc_str > 0 else None),
+                        "near_mask": r_det[1][4], "hair_px": int(r_det[1][5]),
+                        "tight_1024": r_tight[1][0] if need_tight else None,
                     }
 
             hit_heal = _sc_get("heal", k_heal) if not analysis_only else None
@@ -3644,6 +4055,10 @@ class CleanVinylEngine:
             smoke_info = None  # what was seen of smoke (see _compute_protection_maps_small); None = not looked for
             corner_line = None  # the wall-floor corner (_corner_line_of_frame); None = not looked for or not there
             corner_frame = None  # the same before the selection rule (the line as the frame has it)
+            tight_1024 = None   # the person without the margin (_tight_person_1024); None = not known
+            near_mask = None    # the part of the heal mask that is repaired inside the protected band (stray hairs)
+            hair_px = 0
+            tone_gate = None    # the outline of the person for the tone stages (_tone_gate); None = the former way
             dress_src_1024 = None
             dress_tex_1024 = None
             if dress_strength > 0:
@@ -3672,8 +4087,10 @@ class CleanVinylEngine:
                     corner_line = analysis.get("corner_line")
                     if corner_line is not None and render_scale != 1.0:
                         # found on the real frame; this frame is its reduced copy
-                        corner_line = dict(corner_line, row=(corner_line["row"] + 0.5) * render_scale - 0.5,
-                                           half=corner_line["half"] * render_scale)
+                        corner_line = self._scale_corner_line(corner_line, render_scale)
+                    tight_1024 = analysis.get("tight_1024") if need_tight else None
+                    near_mask = analysis.get("near_mask")
+                    hair_px = int(analysis.get("hair_px", 0))
                     eff_stand_protect = np.zeros_like(stand_protect_s) if remove_stands else stand_protect_s
                     eff_fg_for_spots = core_mask_u8 if remove_stands else fg_mask_u8
                     heal_mask = analysis["heal_mask"]
@@ -3696,6 +4113,16 @@ class CleanVinylEngine:
                                 _prog(35, "Уточнення контуру моделі...")
                                 fg_mask_u8, core_mask_u8 = self._clean_fg_mask(fg_raw_1024, w, h, edge_prot)
                                 _sc_put("fg", k_fg, (fg_mask_u8, core_mask_u8))
+                            if need_tight and fg_raw_1024 is not None:
+                                # (kept in the cache by hand: it is no stage of its own in "reused_stages")
+                                rec = sc.get("tight") if sc is not None else None
+                                if rec is not None and rec[0] == k_tight:
+                                    (tight_1024,) = rec[1]
+                                else:
+                                    tight_1024 = self._tight_person_1024(fg_raw_1024, core_only=remove_stands)
+                                    tight_1024.setflags(write=False)
+                                    if sc is not None:
+                                        sc["tight"] = (k_tight, (tight_1024,))
 
                         rec = _sc_get("maps", k_maps)
                         if rec is not None:
@@ -3716,7 +4143,8 @@ class CleanVinylEngine:
                             if rec is not None:
                                 (corner_frame,) = rec
                             else:
-                                corner_frame = self._corner_line_of_frame(img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_s)
+                                corner_frame = self._corner_line_of_frame(
+                                    img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_s, hair=hair_line)
                                 _sc_put("corner", k_corner, (corner_frame,))
                             if cyc_str > 0:
                                 corner_line = corner_of_this_run(corner_frame, eff_fg_for_spots)
@@ -3725,7 +4153,7 @@ class CleanVinylEngine:
 
                     rec = _sc_get("detect", k_detect)
                     if rec is not None:
-                        heal_mask, seam_px, spot_px, grain_sigma = rec
+                        heal_mask, seam_px, spot_px, grain_sigma, near_mask, hair_px = rec
                         do_inpaint = bool(np.any(heal_mask > 0)) if hit_heal is None else False
                     else:
                         if custom_heal_mask is not None:
@@ -3745,9 +4173,14 @@ class CleanVinylEngine:
                                 if rec_part is not None:
                                     (seam_mask,) = rec_part
                                 else:
+                                    skip_line = corner_line if corner_skip else None
+                                    if skip_line is not None and skip_line.get("hair"):
+                                        # the thin line found along the corner belongs to the corner tool, with
+                                        # the whole zone it was found in
+                                        skip_line = dict(skip_line, half=skip_line.get("zone", skip_line["half"]))
                                     seam_mask = self._detect_vinyl_seam_mask(
                                         img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_s, seam_eff, edge_prot, fast_mode=False,
-                                        join=seam_join, skip_line=(corner_line if corner_skip else None),
+                                        join=seam_join, skip_line=skip_line,
                                         step_ok_line=(corner_frame if corner_line is None else None),
                                     )
                                     if corner_whole and corner_frame is not None and corner_line is None:
@@ -3777,7 +4210,19 @@ class CleanVinylEngine:
                                     )
                                     _sc_put("spots", k_spots, (spot_mask, grain_sigma))
 
+                            self._checkpoint()
+                            if hair_eff > 0 and tight_1024 is not None:
+                                rec_part = _sc_get("hair", k_hair)
+                                if rec_part is not None:
+                                    (near_mask,) = rec_part
+                                else:
+                                    near_mask = self._detect_stray_hairs(
+                                        img_rgb_u8, tight_1024, eff_fg_for_spots, eff_stand_protect, smoke_s, shadow_s, hair_eff)
+                                    _sc_put("hair", k_hair, (near_mask,))
+
                             heal_mask = np.maximum(seam_mask, spot_mask)
+                            if near_mask is not None:
+                                heal_mask = np.maximum(heal_mask, near_mask)
                             if remove_stands and has_any_frac:
                                 stand_rm_full = (cv2.resize(stand_remove_s, (w, h), interpolation=cv2.INTER_LINEAR) > 80).astype(np.uint8)
                                 stand_rm_full[core_mask_u8 > 120] = 0
@@ -3788,6 +4233,8 @@ class CleanVinylEngine:
                             sel_bin = (selection_alpha > 1).astype(np.uint8)
                             sel_pad = cv2.dilate(sel_bin, np.ones((65, 65), np.uint8))
                             heal_mask = heal_mask * sel_pad
+                            if near_mask is not None:
+                                near_mask = near_mask * sel_pad
 
                             sel_area = int(sel_bin.sum())
                             if custom_heal_mask is None and sel_area > 0 and sel_area < int(0.25 * h * w):
@@ -3800,9 +4247,13 @@ class CleanVinylEngine:
                         do_inpaint = needs_lama_work and bool(np.any(heal_mask > 0))
                         if not do_inpaint:
                             heal_mask[:] = 0
+                            near_mask = None
                         seam_px, spot_px = int(seam_mask.sum()), int(spot_mask.sum())
+                        hair_px = int(near_mask.sum()) if near_mask is not None else 0
+                        if hair_px == 0:
+                            near_mask = None
                         del seam_mask, spot_mask
-                        _sc_put("detect", k_detect, (heal_mask, seam_px, spot_px, grain_sigma))
+                        _sc_put("detect", k_detect, (heal_mask, seam_px, spot_px, grain_sigma, near_mask, hair_px))
 
                 if analysis_only:
                     return {
@@ -3812,6 +4263,7 @@ class CleanVinylEngine:
                         "heal_mask": heal_mask, "seam_px": seam_px, "spot_px": spot_px,
                         "grain_sigma": float(grain_sigma), "reused_stages": reused_stages,
                         "corner_line": corner_line,
+                        "near_mask": near_mask, "hair_px": hair_px, "tight_1024": tight_1024,
                     }
 
                 small_specks_healed = 0
@@ -3854,6 +4306,16 @@ class CleanVinylEngine:
             # ------------------------------------------------------------------
             # 7. Fast High-Pass Grain Transfer + Float32 Lab Scuffs + Blur + Dress Smooth
             # ------------------------------------------------------------------
+            if (tone_edge and tight_1024 is not None and custom_fg_mask is None
+                    and ((cyc_str > 0 and corner_line is not None) or scuffs_eff > 0 or near_mask is not None)):
+                rec = sc.get("tgate") if sc is not None else None
+                if rec is not None and rec[0] == k_tgate:
+                    (tone_gate,) = rec[1]
+                else:
+                    tone_gate = self._tone_gate(img_rgb_u8, tight_1024, eff_fg_for_spots)
+                    tone_gate.setflags(write=False)
+                    if sc is not None:
+                        sc["tgate"] = (k_tgate, (tone_gate,))
             del img_rgb_u8
             cleaned_f32 = orig_rgb_f32  # reuse in-place to avoid extra 265MB allocation on 22MP
             final_alpha = np.zeros((h, w), dtype=np.float32)
@@ -3874,6 +4336,26 @@ class CleanVinylEngine:
                     # exactly 0, so the old full-frame blend added 0 there. The noise fields keep the old layout
                     # (same generator, same draw order), therefore every pixel gets the same grain as before.
                     heal_cells, heal_bbox = self._heal_cells(heal_alpha)
+                    heal_gated = bool(tone_edge and custom_heal_mask is None)
+                    if heal_gated:
+                        # "toneEdge". The repair used to be blended into the frame under the protected band too and
+                        # was only hidden there by the layer alpha. Now that the tone stages make the layer visible
+                        # right up to the person, the frame itself must be untouched wherever the protection says so.
+                        # The one exception are the single hairs (near_mask): they are repaired inside the band, on
+                        # whatever the outline of the person (tone_gate) calls backdrop.
+                        lift = None
+                        if near_mask is not None and tone_gate is not None:
+                            lift = cv2.GaussianBlur(near_mask.astype(np.float32), (k_ha, k_ha), 0)
+                        for cy0, cy1, cx0, cx1 in heal_cells:
+                            allow = 1.0 - np.clip((eff_fg_for_spots[cy0:cy1, cx0:cx1].astype(np.float32) - 40.0) / 170.0, 0.0, 1.0)
+                            if lift is not None:
+                                np.maximum(
+                                    allow,
+                                    np.minimum(1.0, 2.0 * lift[cy0:cy1, cx0:cx1]) * (tone_gate[cy0:cy1, cx0:cx1].astype(np.float32) * (1.0 / 255.0)),
+                                    out=allow,
+                                )
+                            heal_alpha[cy0:cy1, cx0:cx1] *= allow
+                        del lift
                     if heal_bbox is not None:
                         y0h, y1h, x0h, x1h = heal_bbox
                         rng = np.random.default_rng(42)
@@ -3920,7 +4402,7 @@ class CleanVinylEngine:
                     # Layer alpha of the healed zones (final_alpha is still all zeros here, so max(0, a) == a)
                     for cy0, cy1, cx0, cx1 in heal_cells:
                         a_blk = heal_alpha[cy0:cy1, cx0:cx1]
-                        if custom_heal_mask is None:
+                        if custom_heal_mask is None and not heal_gated:
                             protect_h = np.clip((eff_fg_for_spots[cy0:cy1, cx0:cx1].astype(np.float32) - 40.0) / 170.0, 0.0, 1.0)
                             a_blk = a_blk * (1.0 - protect_h)
                         final_alpha[cy0:cy1, cx0:cx1] = a_blk
@@ -3945,7 +4427,7 @@ class CleanVinylEngine:
                 # the quick preview draws in the fast geometry whatever the speed mode of the session is.
                 seed_size = tuple(int(v) for v in proxy_seed["size"])
                 proxy_seed["heal"] = {
-                    "key": (k_detect, True, grain_keep),
+                    "key": (k_detect, True, grain_keep, tone_edge),
                     "rgb": cv2.resize(cleaned_f32, seed_size, interpolation=cv2.INTER_AREA),
                     "alpha": cv2.resize(final_alpha, seed_size, interpolation=cv2.INTER_AREA),
                     "tiles_run": tiles_run,
@@ -3965,6 +4447,8 @@ class CleanVinylEngine:
                     feather_str,
                     fast_mode=fast_mode,
                     line=corner_line,
+                    tone_gate=tone_gate,
+                    level_seen=corner_hair,
                 )
                 np.maximum(final_alpha, cyc_alpha, out=final_alpha)
                 del cyc_alpha
@@ -3982,17 +4466,25 @@ class CleanVinylEngine:
                 fg_half = cv2.resize(eff_fg_for_spots, (sw, sh), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
                 st_half = cv2.resize(eff_stand_protect, (sw, sh), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
                 sm_half = cv2.resize(smoke_s, (sw, sh), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
-                scuff_rec = self._smooth_backdrop_stains(small_f32, fg_half, st_half, sm_half, scuffs_eff / 100.0)
+                scuff_rec = self._smooth_backdrop_stains(small_f32, fg_half, st_half, sm_half, scuffs_eff / 100.0,
+                                                         fg_gate=(tone_gate is None))
                 del small_f32, fg_half, st_half, sm_half
                 _sc_put("scuffs", k_scuffs, scuff_rec)
             if scuff_rec is not None:
                 self._checkpoint()
                 diff_s, scuff_s = scuff_rec
                 diff_full = cv2.resize(diff_s, (w, h), interpolation=cv2.INTER_LINEAR)
+                scuff_alpha = cv2.resize(scuff_s, (w, h), interpolation=cv2.INTER_LINEAR)
+                if tone_gate is not None:
+                    # the correction was computed without its fade towards the person: it ends at the outline
+                    for ys_g in range(0, h, 1024):
+                        g_rows = tone_gate[ys_g:ys_g + 1024].astype(np.float32) * (1.0 / 255.0)
+                        diff_full[ys_g:ys_g + 1024] *= g_rows[..., None]
+                        scuff_alpha[ys_g:ys_g + 1024] *= g_rows
+                    del g_rows
                 cleaned_f32 += diff_full
                 del diff_full
                 np.clip(cleaned_f32, 0.0, 1.0, out=cleaned_f32)
-                scuff_alpha = cv2.resize(scuff_s, (w, h), interpolation=cv2.INTER_LINEAR)
                 np.maximum(final_alpha, scuff_alpha, out=final_alpha)
                 del scuff_alpha
 
@@ -4151,6 +4643,7 @@ class CleanVinylEngine:
                 "speed_mode": speed_mode,
                 "seam_px": seam_px,
                 "spot_px": spot_px,
+                "hair_px": hair_px,
                 "dress_smooth": dress_smooth_on,
                 "changed_px": changed_px,
                 "reused_stages": reused_stages,
@@ -4162,6 +4655,8 @@ class CleanVinylEngine:
             if cyc_str > 0:
                 # where the wall-floor corner was found (share of the frame height), None = this frame has none
                 stats["corner_row"] = None if corner_line is None else round(float((corner_line["row"] + 0.5) / max(h, 1)), 4)
+                # how many pieces of a thin line were found along the corner and taken out with it
+                stats["corner_hair"] = 0 if corner_line is None else len(corner_line.get("hair") or ())
             return out_rgba, stats
         finally:
             self._end_job()
@@ -5221,6 +5716,8 @@ class CleanVinylEngine:
             bool(p.get("smokeOn", True)), fl("smoke", 80), fl("grain", 90),
             CleanVinylEngine._smoke_auto(p), bool(p.get("seamJoin", True)), bool(p.get("grainLocal", True)),
             bool(p.get("gearBody", True)), bool(p.get("shadowSpots", True)),
+            bool(p.get("toneEdge", True)), bool(p.get("cornerHair", True)),
+            float(np.clip(fl("strayHair", 0), 0.0, 100.0)),
             bool(p.get("shadow", True)), bool(p.get("removeStands", False)),
             max(100.0, fl("master", 100)),
             "fast" if str(p.get("speedMode", "quality")).lower() == "fast" else "quality",
@@ -5298,6 +5795,8 @@ class CleanVinylEngine:
         small["fg_mask_u8"] = reduced("fg", found["fg_mask_u8"])
         small["core_mask_u8"] = reduced("core", found["core_mask_u8"])
         small["heal_mask"] = reduced("heal", found["heal_mask"], binary=True)
+        if found.get("near_mask") is not None:
+            small["near_mask"] = reduced("near", found["near_mask"], binary=True)
         draw_params = dict(clean_params)
         draw_params["speedMode"] = "fast"  # the copy is always drawn the fast way; the real mode is used for the real frame
         cleaned_small, stats = self.process(
