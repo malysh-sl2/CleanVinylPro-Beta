@@ -83,6 +83,16 @@ written here and in the repository.
   zoomed far in. The window was showing a 1080 px copy of a 5760 px frame. 4.8.0 answers this as well: the
   window gets pictures of twice the size.
 
+- His message of 2026-11-21 after trying 4.8.0: the frame `0Q5A3417 копия.jpg` as shot (a woman in a long
+  black dress with a train, full length, dark backdrop) and a screenshot of the big window with two blue
+  ellipses - around the pointed shoe at the left hem, and on the floor to the right of the dress above its
+  train. **Its wording is not preserved here**; the agent worked from this list of three points: (1) a
+  «шов» is left on the floor; (2) a halo - a band around the person, seen along the hem and the shoe, that
+  no slider removes; (3) the single hairs that stick out around the hairdo should be removed. No option
+  card was shown. Which hairs he meant in (3) was not confirmed; the reply asks him. 4.9.0 answers this
+  message. He did not write «зливай». Ellipses on a screenshot are his way to point (as the red ones on a
+  result): the screenshot was laid over the frame (1 px of it = 2.985 px of the frame) and every circled
+  place was measured in the frame, in the result of 4.8.0 and in the result of the new code.
 ## 2. What is in the repository
 
 | Path | What it is | Rule |
@@ -424,8 +434,95 @@ second plugin next to the installed one and lose his presets.
     for the panel); a panel defect can now name several scenario texts (`panel("a", "b")`). The runner
     says CRASHED, not "caught", when a check run ends without a FAIL line (section 4).
 
+- **4.9.0** — answers his report on 4.8.0 (frame `0Q5A3417`): the tone stages reach the person itself, so no
+  rim of the old tone is left along a hem or around a shoe; the thin line of a vinyl joint goes with the
+  corner; a new tool takes the single hairs that stick out of the hairdo (off until its slider is moved).
+  The window, the brush and the server are unchanged from 4.8.0.
+  - **Why the rim (his "halo") was there.** The mask of `_clean_fg_mask` is a PROTECTION: the person with
+    a margin (the slider «Захист моделі та країв», `edge`), gaps closed. It says where nothing may be
+    repaired. The stages that only shift the tone of the backdrop - the corner (`_apply_cyclorama_curve`)
+    and the stains (`_smooth_backdrop_stains`) - were gated by it too, so a band around the person kept
+    the tone of the shot. Next to a floor that got lighter or darker the band shows as a rim, and the
+    slider only made it wider or narrower. On 3417 the floor above the train was lifted by 14-17 levels,
+    the 10 px right at the dress by nothing.
+  - **`_tone_gate`** (`TONE_GATE_*`): how much of a tone shift a pixel takes (255 = backdrop). Outside
+    the protected band it is the former gate. Inside the band it is the matte WITHOUT the margin
+    (`_tight_person_1024`: the raw matte, only the blobs that are no person dropped), with its edge moved
+    to where the photo has an edge: a guided filter of the matte by the brightness of the photo, window
+    `TONE_GATE_R` (1.5 px of the 1024 matte). Zero wherever the network is sure of the person
+    (`TONE_GATE_SURE`, 224 of 255): a bare leg as light as the floor behind it has no edge to go by, and
+    the fit alone let a part of the shift onto it (`cyc` said "the person was changed"). Never less than
+    the former gate. Both tone stages take it as `tone_gate`; the stage cache keeps it as "tgate".
+  - With `toneEdge` a repair (dust, seam, hairs) is no longer blended into the frame under the protected
+    band and merely hidden there by the layer alpha (`heal_gated` in `process`): now that the layer shows
+    right up to the person, the frame itself must be untouched wherever the protection says so.
+  - Request parameter `toneEdge` (default on; off = the former way, which the comparisons with v3.2.1
+    ask for). It is not in the panel.
+  - **Why the "seam" stayed.** On 3417 the front sheet of vinyl begins at 0.77 of the height. The joint is
+    a thin dark line, 1-2.3 levels deep, with the edge of the lit floor along it - so the corner finder
+    takes it for the wall-floor corner. The cove turns a step into a slope; a thin line is no step, and
+    about a third of it stayed lying on the slope. The seam search leaves the strip of the corner to the
+    corner tool. Tried, and no cure: the corner tool at 0; forcing the exact line; the seam repair plus
+    the cove; the exact line with the fit off (a bright patch next to the dress).
+  - **The thin line of the corner** (`cornerHair`, default on, works only with `cycCurve` > 0, not in the
+    panel). `_corner_line_of_frame(..., hair=True)` also gives `zone` (`CORNER_HAIR_ZONE`, 2 % of the
+    height: the line need not lie in the middle of the step) and `hair`, the pieces of a thin line found
+    inside that zone by `_corner_hairline` - the seam search once more on the untouched frame, at its
+    most sensitive, the step allowed (`corner_own=True`). After the cove, part F of
+    `_apply_cyclorama_curve` (`_remove_corner_hairline`) lays the band of each piece straight, averages
+    the profile ACROSS the line ALONG it (the grain averages out, the line stays) and subtracts what the
+    profile has beyond the straight line between its two shoulders, at most `CORNER_HAIR_CAP`. Nothing is
+    painted: every pixel keeps its grain. The seam search then leaves the whole zone alone (one line, one
+    tool). `stats["corner_hair"]` is the number of pieces.
+  - `level_seen` / `CORNER_OVER` (on together with `cornerHair`): a piece of backdrop in plain view is not
+    left lighter than its own slope. On 3417 the pool of light reaches below the joint next to the hem,
+    where the train hides the floor further down; the cove lifted that strip as if it were as dark as
+    the open floor, which left a lighter streak right at the dress.
+  - **Single hairs** (`strayHair` 0..100, 0 = off; the slider «Волоски довкола зачіски», `gSlHair`, its
+    badge reads «Вимк.» at 0; no built-in preset carries the key, and a preset without it means 0).
+    `_detect_stray_hairs`, block "4b" of `engine.py`: read its comment first. Every size is in head widths
+    (`_head_of_person`); a close-up is searched on a copy with the head at most `HAIR_HEAD_REF` px wide.
+    The zone: up to `HAIR_REACH` (0.6) head widths from the person, from the top of the head down
+    `HAIR_ZONE_DOWN` (1.8). Black-hat and top-hat responses are averaged along 8 directions
+    (`_line_kernels`) and thinned to centre lines. Then:
+    1. pieces: strong enough, no tuft (`HAIR_TUFT`), leading away from the person (`HAIR_AWAY`; and
+       `HAIR_OUTWARD` of the piece, weighed by strength, points across the outline rather than along it);
+    2. a hair = the pieces within `HAIR_GAP`: it begins at the outline (`HAIR_ATTACH`), sticks out
+       (`HAIR_STICK_OUT`), is long enough (`HAIR_MIN_LEN`: 0.16 → 0.07 head widths over the slider) and
+       reaches neither the end of the zone (`leaves`) nor the border of the frame (`at_border`);
+    3. a dark hair grows out of something dark (`HAIR_ROOT`; a light hair is not asked);
+    4. the line does not go on beyond its far end (`goes_on`, `HAIR_TAIL`, `HAIR_GOES_ON`): the piece of a
+       cable between the head and a knot of hairs ends in the open like a hair.
+    Never searched: the person with a guard strip (`HAIR_GUARD`, `_person_solid`), the fuzz beyond it
+    (`HAIR_FRINGE`), the bodies of gear (`wide_only`), smoke. Every slider step below the one asked for is
+    searched too (`HAIR_STEPS`), so a higher position never takes less. A mark is grown to about 13 px.
+  - The marks join the heal mask (`near_mask`; cache key `k_hair`, stage "hair"). With hairs to repair,
+    the inpainting is shown the photo right up to the person with the guard strip (`hair_solid`), not the
+    protected band painted over with a wide average of the backdrop. The repair itself obeys the
+    protected band like every repair, so the first pixels of a removed hair, next to the hairdo, stay.
+    (For a while the mark was blended at full strength inside the band; that gained a stub a few pixels
+    shorter, no check could tell the two apart, and it was taken out.)
+  - Traps met on the way - do not undo them: the cast-shadow map calls the wall next to a light hair a
+    shadow, so it is not asked; the gear map flags a strong hair as a thin thing, so only its bodies
+    count; a mark narrower than about 13 px only fades the hair; a lower threshold joins a hair with its
+    neighbours into a "tuft", hence `HAIR_STEPS`; next to a strong line the kernels that cross it leave
+    faint centre pixels that point across it, hence the weighing in rule 1; `stats["hair_px"]` in every
+    answer broke the comparison with v3.2.1, so it is there only when the tool is on.
+  - Panel: `gSlHair` is one of `ALL_SLIDER_IDS`; `readCurrentConfig` sends it as `strayHair`,
+    `normalizedPresetConfig` keeps it within 0..100 (0 when a preset has no such key), `applyConfig`
+    puts it on the slider, `previewSettingsSignature` holds it. The tooltips of «Циклорама» and «Захист
+    моделі та країв» say what changed; one new rotating tip. `presets_defaults.json` is unchanged.
+  - Checks: the new groups `edge`, `line` and `hair`; `_legacy()` sets `toneEdge=False`,
+    `cornerHair=False`, `strayHair=0`; five new cases of the settings test and the scenario «the hair
+    slider…» of the window test. `tests/try_defects.py` holds the 35 deliberate defects of 4.9.0 (29 in
+    the engine, 6 in the panel).
 ## 3. Current state — update this at the end of every session
 
+> **4.9.0 IS IN PROGRESS and this section is not rewritten yet** (it still describes the state after
+> 4.8.0). The code, the checks, the manual and `README.md` are at 4.9.0 (the entry «4.9.0» of section 2 says
+> what was built); `CleanVinylPro2.ccx` and `CleanVinylPro2.zip` are still those of 4.8.0, so the group
+> `plugin` fails until `tools/build_ccx.py` and `tools/build_zip.py` are run; no release `cvp2-v4.9.0`
+> exists; the owner has got no reply to his report on 4.8.0. Delete this note when the section is rewritten.
 _Last updated: 2026-11-21, by the agent of the first session, after releasing 4.8.0._
 
 - **Released:** 4.8.0, tag `cvp2-v4.8.0`, as a pre-release. Direct download:

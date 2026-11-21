@@ -62,7 +62,7 @@ from engine import CleanVinylEngine, DEFAULT_IDLE_UNLOAD_SEC
 
 APP_ID = "cleanvinylpro2"  # tells this program apart from the original Clean Vinyl Pro (port 18745)
 APP_PORT = 18746
-APP_VERSION = "4.8.0"
+APP_VERSION = "4.9.0"
 # Settings written by plugin builds older than this schema still carry the former 30 s idle-unload default
 SETTINGS_SCHEMA_IDLE_120 = 5
 LEGACY_IDLE_UNLOAD_SEC = 30.0
