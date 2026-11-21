@@ -1879,124 +1879,309 @@ class CleanVinylEngine:
         return heal, grain_sigma
 
     # ------------------------------------------------------------------
-    # 4b. Single hairs that stick out next to the person ("Поодинокі волоски")
+    # 4b. Single hairs that stick out of the hairdo ("Поодинокі волоски")
     # ------------------------------------------------------------------
-    # The dust search never looks inside the protected band around the person, and it is tuned for specks: of a
-    # hair that sticks out of the hairdo it takes the far end at best, and leaves the rest standing. This search is
-    # for those hairs alone: thin, long, darker or lighter than the backdrop behind them, close to the person - and
-    # it goes up to the person. What it marks is repaired like dust, also inside the protected band (process()).
-    # What keeps it from eating the hairdo: the person as the network drew it is never touched, nor a guard strip
-    # around that outline (the soft edge of the hairdo is the hairdo), nor anything too thick or too short to be
-    # one hair. It cannot tell a hair from other thin things that stand clear of the person - an eyelash in
-    # profile, a fringe, a thin earring: the slider is 0 unless the user moves it, and the eraser brings them back.
-    HAIR_REACH = 0.07         # of the long side: how far from the person a stray hair is looked for
-    HAIR_GUARD = 1.5          # px of the 1024 matte: this close to the outline of the person nothing is taken
-    HAIR_KERNEL = 0.0033      # of the long side: a hair, or a wisp of a few, is thinner than this
-    HAIR_MIN_LEN = 0.004      # of the long side: the shortest piece that is a hair at slider 100 (2.5x at slider 0)
-    HAIR_MAX_WIDTH = 0.0016   # of the long side: mean width (area / length) above which a piece is no hair
-    HAIR_CONTRAST = (5.2, 2.2)  # x noise: how much darker than the backdrop a hair must be at slider 0 .. 100
+    # The dust search never looks inside the protected band around the person, and it is tuned for specks. A hair
+    # that stands away from the hairdo begins inside that band, and what the dust search takes of it is the far end
+    # at best. This search is for those hairs alone, and what it marks is repaired like dust - also inside the
+    # protected band (process()).
+    #   What a stray hair is here: a thin line, darker or lighter than the backdrop behind it, that starts at the
+    #   outline of the person and leads away from it, in the upper part of the figure (from the top of the head
+    #   down HAIR_ZONE_DOWN head widths: hair is not looked for at the hem or at the shoes).
+    #   What is never touched: the person as the network drew it, with a guard strip around that outline and the
+    #   fuzz right beyond it - the soft edge of the hairdo is the hairdo, and a hair is taken from there outwards;
+    #   a line that only runs along the outline; a line shorter than HAIR_MIN_LEN of the head (an eyelash in
+    #   profile is about a twentieth); a dark line that grows out of something light (a dark hair grows out of
+    #   dark hair - an eyelash on a lit face, a hair in front of a white sleeve do not); a tuft too dense to be
+    #   single hairs; gear, smoke, cast shadows.
+    #   Every size is measured in head widths, and a close-up is searched on a reduced copy, so a hair is the same
+    #   few pixels thick whatever the framing.
+    # It cannot tell a hair from other thin things that stand clear of a head - a thin earring, a chain, the stem
+    # of a flower in the hair. The slider is 0 unless the user moves it, and the eraser brings a thing back.
+    HAIR_HEAD_REF = 640.0        # px: the head is this wide at most on the copy that is searched
+    HAIR_ZONE_DOWN = 1.8         # head widths below the top of the person: down to here hair is looked for
+    HAIR_REACH = 0.5             # head widths: how far from the person
+    HAIR_GUARD = 1.5             # px of the 1024 matte: this close to the outline of the person nothing is taken
+    HAIR_KERNEL = 0.03           # head widths: a single hair is thinner than this
+    HAIR_LINE = 0.024            # head widths: the response is averaged along this length, in 8 directions
+    HAIR_MIN_LEN = (0.16, 0.07)  # head widths: the shortest hair at slider 0 .. 100
+    HAIR_TUFT = 5.0              # centre-line pixels per pixel of length above which a piece is a tuft, not hairs
+    HAIR_FRINGE = 0.02           # head widths beyond the guard strip: the fuzz of the outline, never searched
+    HAIR_STICK_OUT = 0.07        # head widths: its far end is at least this far from the guard strip
+    HAIR_ATTACH = 0.03           # head widths: its near end is at most this far from the fuzz of the outline
+    HAIR_AWAY = 0.25             # of its length: a piece gets at least this much further from the person
+    HAIR_OUTWARD = 0.45          # ...and this share of it points away from the outline rather than along it
+    HAIR_GAP = 0.03              # head widths: pieces closer than this are one hair (a faint stretch, a crossing)
+    HAIR_FLOOR = (3.5, 2.0)      # brightness levels above the usual response of the backdrop, slider 0 .. 100
+    HAIR_SIGMA = (6.0, 3.0)      # ...and so many times the spread of that response, slider 0 .. 100
+    HAIR_WEAK = 0.55             # a hair is followed on while its response is this share of what starts one
+    HAIR_MEAN = 0.80             # ...and over the whole piece the response is this share on average
+    HAIR_LIGHT = 1.3             # a light hair on a dark backdrop must be this much stronger than a dark one
+    HAIR_ROOT = 0.02             # head widths inside the outline: there the person is compared with the hair
+
+    def _person_solid(self, tight_1024: np.ndarray, w: int, h: int) -> np.ndarray:
+        """The person as the network drew it, with the guard strip of the hair search: bool, the size of the frame."""
+        guard = 2 * max(1, int(round(self.HAIR_GUARD * max(h, w) / 1024.0))) + 1
+        person = (self._tight_person_rows(tight_1024, w, h, 0, h) >= 77).astype(np.uint8)
+        return cv2.dilate(person, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (guard, guard))).view(np.bool_)
+
+    def _head_of_person(self, tight_1024: np.ndarray, w: int, h: int):
+        """
+        (top row, head width) of the people of the frame, in frame pixels; None when there is no person.
+        Measured the way _scene_info does it: the widest unbroken stretch of the silhouette just under its top.
+        """
+        g = float(self.SCENE_GRID)
+        sc = g / float(max(w, h, 1))
+        gw, gh = max(8, int(round(w * sc))), max(8, int(round(h * sc)))
+        person = self._scene_person_mask(cv2.resize(tight_1024, (gw, gh), interpolation=cv2.INTER_AREA))
+        rows = np.flatnonzero(person.any(axis=1))
+        if rows.size == 0:
+            return None
+        top, vis = int(rows[0]), float(int(rows[-1]) + 1 - int(rows[0]))
+        band_a = top + int(round(vis * 0.03))
+        band_b = min(gh, max(band_a + 1, top + int(round(vis * 0.12))))
+        run = max(self._longest_run(person[y]) for y in range(band_a, band_b))
+        # a head is never a twelfth of the figure or less, and a silhouette that is all head (a close-up) is
+        # still measured by its width
+        head = float(np.clip(run, vis / 12.0, max(vis / 12.0, 0.9 * gw)))
+        return top / sc, max(40.0, head / sc)
+
+    # for each of the 8 directions of _line_kernels, the neighbour that lies across the line:
+    # 0 = up / down, 1 = towards the lower left, 2 = left / right, 3 = towards the lower right
+    _LINE_ACROSS = np.array([0, 0, 1, 2, 2, 2, 3, 0], dtype=np.uint8)
+
+    @staticmethod
+    def _line_kernels(length: int) -> list:
+        """Eight line segments of `length` pixels through the centre (0, 22.5, ... 157.5 degrees), each summing to 16."""
+        r = max(2, length // 2)
+        out = []
+        for i in range(8):
+            ang = np.pi * i / 8.0
+            k = np.zeros((2 * r + 1, 2 * r + 1), dtype=np.uint8)
+            dx, dy = np.cos(ang) * r, np.sin(ang) * r
+            cv2.line(k, (int(round(r - dx)), int(round(r - dy))), (int(round(r + dx)), int(round(r + dy))), 1, 1)
+            out.append(k.astype(np.float32) * (16.0 / float(k.sum())))
+        return out
 
     def _detect_stray_hairs(self, img_rgb_u8: np.ndarray, tight_1024: np.ndarray, fg_mask_u8: np.ndarray,
                             stand_s: np.ndarray, smoke_s: np.ndarray, shadow_s: np.ndarray, strength: float,
                             info: dict | None = None) -> np.ndarray:
         """
-        The single hairs next to the person (see above), as a mask of the frame (uint8, 1 = repair).
-        tight_1024: the person without the margin (_tight_person_1024); fg_mask_u8: the protection mask (only the
-        noise of the backdrop is measured outside it); stand_s / smoke_s / shadow_s: the maps of the gear, of the
-        smoke and of the cast shadows (nothing is taken there: the thin dark line under a shoe is its shadow).
+        The single hairs that stick out of the hairdo (see above), as a mask of the frame (uint8, 1 = repair).
+        tight_1024: the person without the margin (_tight_person_1024); fg_mask_u8: the protection mask (the
+        usual response of the backdrop is measured outside it); stand_s / smoke_s / shadow_s: the maps of the
+        gear, of the smoke and of the cast shadows (nothing is taken there).
         strength: the slider, 0..100 - how faint and how short a hair may be.
-        info: receives "pieces" (how many were taken), "noise", "thr_dark", "thr_light", "min_len".
+        info: receives "hairs", "head_px", "scale", "thr_dark", "thr_light", "min_len".
         """
         h, w = img_rgb_u8.shape[:2]
         out = np.zeros((h, w), dtype=np.uint8)
         s = float(np.clip(strength / 100.0, 0.0, 1.0))
         if s <= 0:
             return out
+        head = self._head_of_person(tight_1024, w, h)
+        if head is None:
+            return out
+        top_px, head_px = head
+        ws = min(1.0, self.HAIR_HEAD_REF / head_px)   # scale of the copy that is searched
+        head_w = head_px * ws                          # the head on that copy
+
+        # the box: around the person, from above the head down to HAIR_ZONE_DOWN head widths (found on a small copy)
         long_side = float(max(h, w))
-        # the zone: close to the person (found on a small copy)
         zs = min(1.0, 512.0 / long_side)
         zw, zh = max(8, int(round(w * zs))), max(8, int(round(h * zs)))
         person_s = (cv2.resize(tight_1024, (zw, zh), interpolation=cv2.INTER_AREA) >= 77).astype(np.uint8)
-        if not person_s.any():
-            return out
-        reach_s = max(2, int(round(self.HAIR_REACH * long_side * zs)))
+        reach_s = max(2, int(round(self.HAIR_REACH * head_px * zs)))
         near_s = cv2.dilate(person_s, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * reach_s + 1, 2 * reach_s + 1)))
+        near_s[int(np.ceil((top_px + self.HAIR_ZONE_DOWN * head_px) * zs)):] = 0
+        if not near_s.any():
+            return out
         ys, xs = np.nonzero(near_s)
         y0, y1 = int(max(0, np.floor(ys.min() / zs))), int(min(h, np.ceil((ys.max() + 1) / zs)))
         x0, x1 = int(max(0, np.floor(xs.min() / zs))), int(min(w, np.ceil((xs.max() + 1) / zs)))
-        bh_, bw_ = y1 - y0, x1 - x0
-        if bh_ < 16 or bw_ < 16:
+        bw_, bh_ = int(round((x1 - x0) * ws)), int(round((y1 - y0) * ws))
+        if bh_ < 24 or bw_ < 24:
             return out
 
         L = cv2.cvtColor(np.ascontiguousarray(img_rgb_u8[y0:y1, x0:x1]), cv2.COLOR_RGB2GRAY)
-        kb = max(7, int(round(self.HAIR_KERNEL * long_side)) | 1)
-        k_el = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kb, kb))
-        self._checkpoint()
-        dark = cv2.morphologyEx(L, cv2.MORPH_BLACKHAT, k_el)
-        self._checkpoint()
-        light = cv2.morphologyEx(L, cv2.MORPH_TOPHAT, k_el)
-        self._checkpoint()
+        if ws < 1.0:
+            L = cv2.resize(L, (bw_, bh_), interpolation=cv2.INTER_AREA)
 
-        # the noise of the backdrop inside the box
-        L_sub = L[::4, ::4].astype(np.float32)
-        hp = np.abs(L_sub - cv2.GaussianBlur(L_sub, (5, 5), 0))
-        bg_sub = fg_mask_u8[y0:y1:4, x0:x1:4] < 60
-        noise = max(0.85, float(np.median(hp[bg_sub])) * 1.4826) if np.any(bg_sub) else 2.0
-        c = self.HAIR_CONTRAST[0] + (self.HAIR_CONTRAST[1] - self.HAIR_CONTRAST[0]) * s
-        thr_dark = max(3.0, c * noise)
-        thr_light = max(4.0, 1.25 * c * noise)
-        min_len = self.HAIR_MIN_LEN * long_side * (1.0 + 1.5 * (1.0 - s))
-        max_w = max(3.0, self.HAIR_MAX_WIDTH * long_side)
+        def box_of(src: np.ndarray, interp=cv2.INTER_LINEAR) -> np.ndarray:
+            """A map of the whole frame (any size), cut to the box and brought to the size of the searched copy."""
+            sh_, sw_ = src.shape[:2]
+            fx, fy = sw_ / float(w), sh_ / float(h)
+            M = np.float32([[fx / ws, 0, (x0 + 0.5 / ws) * fx - 0.5], [0, fy / ws, (y0 + 0.5 / ws) * fy - 0.5]])
+            return cv2.warpAffine(src, M, (bw_, bh_), flags=interp | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE)
 
-        # where nothing is taken: the person with the guard strip, away from the person, gear, smoke, cast shadows
-        guard = 2 * max(1, int(round(self.HAIR_GUARD * long_side / 1024.0))) + 1
-        person = (self._tight_person_rows(tight_1024, w, h, y0, y1, x0, x1) >= 77).astype(np.uint8)
-        solid = cv2.dilate(person, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (guard, guard))) > 0
-
-        def box_of(small: np.ndarray, interp=cv2.INTER_LINEAR) -> np.ndarray:
-            """The part of a small map of the whole frame that covers the box, at the size of the box."""
-            sh_, sw_ = small.shape[:2]
-            M = np.float32([[sw_ / w, 0, (x0 + 0.5) * sw_ / w - 0.5], [0, sh_ / h, (y0 + 0.5) * sh_ / h - 0.5]])
-            return cv2.warpAffine(small, M, (bw_, bh_), flags=interp | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE)
-
-        bad = solid | (box_of(near_s * np.uint8(255), cv2.INTER_NEAREST) < 128)
+        # where nothing is taken: the person with the guard strip, far from the person, gear, smoke, cast shadows
+        guard = 2 * max(1, int(round(self.HAIR_GUARD * long_side / 1024.0 * ws))) + 1
+        solid = cv2.dilate((box_of(tight_1024) >= 77).astype(np.uint8),
+                           cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (guard, guard)))
+        bad = (solid > 0) | (box_of(near_s * np.uint8(255), cv2.INTER_NEAREST) < 128)
         bad |= box_of(stand_s) > 75
         bad |= box_of(smoke_s) > 65
         bad |= box_of(shadow_s) > 65
-        pad = max(4, min(14, int(0.012 * min(h, w))))
-        if y0 < pad:
-            bad[:pad - y0] = True
-        if y1 > h - pad:
-            bad[bh_ - (y1 - (h - pad)):] = True
-        if x0 < pad:
-            bad[:, :pad - x0] = True
-        if x1 > w - pad:
-            bad[:, bw_ - (x1 - (w - pad)):] = True
+        pad = max(3, int(round(min(14, int(0.012 * min(h, w))) * ws)))
+        for cut, at_edge in ((np.s_[:pad], y0 == 0), (np.s_[bh_ - pad:], y1 == h),
+                             (np.s_[:, :pad], x0 == 0), (np.s_[:, bw_ - pad:], x1 == w)):
+            if at_edge:
+                bad[cut] = True
+        self._checkpoint()
+        dist = cv2.distanceTransform((solid == 0).astype(np.uint8), cv2.DIST_L2, 3)
+
+        kb = max(7, int(round(self.HAIR_KERNEL * head_w)) | 1)
+        k_el = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kb, kb))
+        kernels = self._line_kernels(max(7, int(round(self.HAIR_LINE * head_w)) | 1))
+        floor = self.HAIR_FLOOR[0] + (self.HAIR_FLOOR[1] - self.HAIR_FLOOR[0]) * s
+        sigmas = self.HAIR_SIGMA[0] + (self.HAIR_SIGMA[1] - self.HAIR_SIGMA[0]) * s
+        min_len = (self.HAIR_MIN_LEN[0] + (self.HAIR_MIN_LEN[1] - self.HAIR_MIN_LEN[0]) * s) * head_w
+        piece_min = max(6.0, 0.2 * min_len)
+        fringe = max(2.0, self.HAIR_FRINGE * head_w)
+        root_in = max(3.0, self.HAIR_ROOT * head_w)
+        stick_out = self.HAIR_STICK_OUT * head_w
+        attach = fringe + max(3.0, self.HAIR_ATTACH * head_w)
+        gap = 2 * max(1, int(round(self.HAIR_GAP * head_w / 2.0))) + 1
+        calm = ~bad & (box_of(fg_mask_u8) < 60)   # the backdrop of the box, outside the protected band
+        bad |= dist <= fringe                     # (the fuzz of the outline: after `calm`, which lies outside it)
 
         keep = np.zeros((bh_, bw_), dtype=np.uint8)
-        pieces = 0
-        for resp, thr in ((dark, thr_dark), (light, thr_light)):
+        hairs = 0
+        thr_used = []
+        for op, gain in ((cv2.MORPH_BLACKHAT, 1.0), (cv2.MORPH_TOPHAT, self.HAIR_LIGHT)):
             self._checkpoint()
-            cand = ((resp > thr) & ~bad).astype(np.uint8)
-            n, lbl, st, _ = cv2.connectedComponentsWithStats(cand, connectivity=8)
-            if n <= 1:
+            resp = cv2.morphologyEx(L, op, k_el)
+            # how strongly a thin line passes through each pixel, and in which of the 8 directions
+            line, way = None, None
+            for i, k in enumerate(kernels):
+                r_k = cv2.filter2D(resp, cv2.CV_16S, k)
+                if line is None:
+                    line, way = r_k, np.zeros(r_k.shape, dtype=np.uint8)
+                else:
+                    way[r_k > line] = i
+                    np.maximum(line, r_k, out=line)
+            del resp, r_k
+            self._checkpoint()
+            # the usual response of the backdrop (its grain, 16ths of a level), and what stands out of it
+            vals = line[::3, ::3][calm[::3, ::3]]
+            if vals.size < 64:
+                vals = line[::3, ::3][~bad[::3, ::3]]
+            if vals.size < 64:
+                thr_used.append(None)
                 continue
-            area = st[1:, cv2.CC_STAT_AREA].astype(np.float32)
-            length = np.maximum(st[1:, cv2.CC_STAT_WIDTH], st[1:, cv2.CC_STAT_HEIGHT]).astype(np.float32)
-            # long enough, and thin: a curl covers less of its box than a straight hair, so the width is judged
-            # with some room; a blob (dust, a fold, the tip of a shoe) is far wider than that
-            ok = (length >= min_len) & (area <= 1.6 * max_w * length)
-            lut = np.zeros(n, dtype=np.uint8)
-            lut[1:] = ok.astype(np.uint8)
-            pieces += int(ok.sum())
-            np.maximum(keep, lut[lbl], out=keep)
+            med = float(np.median(vals))
+            mad = float(np.median(np.abs(vals.astype(np.float32) - med))) * 1.4826
+            rise = gain * max(16.0 * floor, sigmas * mad)
+            thr = med + rise
+            thr_used.append(round(thr / 16.0, 2))
+            # the centre lines: a pixel stays when the response is highest there across the direction of the line
+            # (a hair is then one pixel wide however thick or soft it is, and two hairs side by side are two lines)
+            padded = cv2.copyMakeBorder(line, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+            across = self._LINE_ACROSS[way]
+            ridge = np.zeros(line.shape, dtype=bool)
+            for c, (dx, dy) in enumerate(((0, 1), (-1, 1), (1, 0), (1, 1))):
+                ridge |= ((across == c)
+                          & (line >= padded[1 + dy:bh_ + 1 + dy, 1 + dx:bw_ + 1 + dx])
+                          & (line > padded[1 - dy:bh_ + 1 - dy, 1 - dx:bw_ + 1 - dx]))
+            del padded, across
+            ridge &= (line > med + self.HAIR_WEAK * rise) & ~bad
+            cy, cx = np.nonzero(ridge)
+            if cy.size == 0:
+                continue
+            # does the line point away from the person there, or run along the outline? (the direction of the
+            # line against the direction in which the distance to the person grows)
+            gx = dist[cy, np.minimum(cx + 1, bw_ - 1)] - dist[cy, np.maximum(cx - 1, 0)]
+            gy = dist[np.minimum(cy + 1, bh_ - 1), cx] - dist[np.maximum(cy - 1, 0), cx]
+            ang = way[cy, cx].astype(np.float32) * np.float32(np.pi / 8.0)
+            outward = np.abs(np.cos(ang) * gx + np.sin(ang) * gy) >= 0.5 * np.sqrt(gx * gx + gy * gy)
+            del gx, gy, ang, way
+            # 1. pieces (centre lines that touch). Each has a stretch that is strong enough to start a hair (the
+            #    rest is that hair followed on while it is fainter, but a piece that is faint nearly all the way
+            #    is a mark on the wall); is not tiny; is no tuft; and leads away from the person (the fuzz of a
+            #    hairdo runs along its outline).
+            n, lbl, st, _ = cv2.connectedComponentsWithStats(cv2.dilate(ridge.view(np.uint8), np.ones((3, 3), np.uint8)), connectivity=8)
+            cid = lbl[cy, cx]
+            cd = dist[cy, cx]
+            cv_ = line[cy, cx]
+            peak = np.zeros(n, dtype=np.int16)
+            np.maximum.at(peak, cid, cv_)
+            total = np.bincount(cid, weights=cv_, minlength=n).astype(np.float32)
+            del line
+            c_min = np.full(n, np.inf, dtype=np.float32)
+            c_max = np.zeros(n, dtype=np.float32)
+            np.minimum.at(c_min, cid, cd)
+            np.maximum.at(c_max, cid, cd)
+            count = np.bincount(cid, minlength=n).astype(np.float32)
+            outw = np.bincount(cid, weights=outward, minlength=n).astype(np.float32)
+            length = np.maximum(st[:, cv2.CC_STAT_WIDTH], st[:, cv2.CC_STAT_HEIGHT]).astype(np.float32) - 2.0
+            ok = ((peak > thr) & (total >= (med + self.HAIR_MEAN * rise) * count)
+                  & (length >= piece_min) & (count <= self.HAIR_TUFT * length)
+                  & ((c_max - c_min) >= self.HAIR_AWAY * length) & (outw >= self.HAIR_OUTWARD * count))
+            ok[0] = False
+            sel = ok[cid]
+            py, px, d, pv = cy[sel], cx[sel], cd[sel], cv_[sel]
+            del cy, cx, cid, cd, cv_, sel, ridge, outward
+            if py.size == 0:
+                continue
+            pieces = np.zeros((bh_, bw_), dtype=np.uint8)
+            pieces[py, px] = 1
+            # 2. hairs: pieces that lie close to each other are one hair; it must begin at the person, lead away
+            #    from it and be long enough - and not be larger than a hair can be
+            joined = cv2.dilate(pieces, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (gap, gap)))
+            n_g, lbl_g = cv2.connectedComponents(joined, connectivity=8)
+            gid = lbl_g[py, px]
+            d_min = np.full(n_g, np.inf, dtype=np.float32)
+            d_max = np.zeros(n_g, dtype=np.float32)
+            np.minimum.at(d_min, gid, d)
+            np.maximum.at(d_max, gid, d)
+            lo_y = np.full(n_g, bh_, dtype=np.int32)
+            hi_y = np.zeros(n_g, dtype=np.int32)
+            lo_x = np.full(n_g, bw_, dtype=np.int32)
+            hi_x = np.zeros(n_g, dtype=np.int32)
+            np.minimum.at(lo_y, gid, py)
+            np.maximum.at(hi_y, gid, py)
+            np.minimum.at(lo_x, gid, px)
+            np.maximum.at(hi_x, gid, px)
+            extent = np.maximum(hi_y - lo_y, hi_x - lo_x).astype(np.float32) + 1.0
+            good = (d_min <= attach) & (d_max >= stick_out) & (extent >= min_len) & (extent <= 1.5 * head_w)
+            good[0] = False
+            if op == cv2.MORPH_BLACKHAT:
+                # 3. a dark hair grows out of something dark. Where the hair meets the person, the person a little
+                #    inside the outline must not be lighter than the hair by more than half of what the hair is
+                #    darker than the backdrop. (A light hair in front of a dark backdrop is not asked: its root is
+                #    as often in the shade as in the light.)
+                for g_i in np.flatnonzero(good):
+                    of_g = np.flatnonzero(gid == g_i)
+                    r_i = of_g[int(np.argmin(d[of_g]))]
+                    ry, rx = int(py[r_i]), int(px[r_i])
+                    gx = float(dist[ry, min(rx + 1, bw_ - 1)] - dist[ry, max(rx - 1, 0)])
+                    gy = float(dist[min(ry + 1, bh_ - 1), rx] - dist[max(ry - 1, 0), rx])
+                    g_n = float(np.hypot(gx, gy))
+                    if g_n < 1e-3:
+                        continue
+                    step = float(d[r_i]) + 0.5 * guard + root_in
+                    iy, ix = int(round(ry - gy / g_n * step)), int(round(rx - gx / g_n * step))
+                    if not (0 <= iy < bh_ and 0 <= ix < bw_):
+                        continue
+                    inside = float(np.median(L[max(0, iy - 2):iy + 3, max(0, ix - 2):ix + 3]))
+                    tone = float(np.median(L[py[of_g], px[of_g]]))
+                    depth = float(np.mean(pv[of_g])) / 16.0
+                    if inside > tone + 0.5 * depth:
+                        good[g_i] = False
+            hairs += int(good.sum())
+            np.maximum(keep, good[lbl_g].astype(np.uint8) * pieces, out=keep)
         if info is not None:
-            info.update({"pieces": pieces, "noise": noise, "thr_dark": thr_dark, "thr_light": thr_light, "min_len": min_len})
-        if pieces == 0:
+            info.update({"hairs": hairs, "head_px": float(head_px), "scale": float(ws), "min_len": float(min_len / ws),
+                         "thr_dark": thr_used[0] if thr_used else None,
+                         "thr_light": thr_used[1] if len(thr_used) > 1 else None})
+        if hairs == 0:
             return out
-        grow = max(5, int(round(0.0016 * long_side)) | 1)
+        # the repair covers the hair with its soft edges; it never reaches into the guard strip
+        grow = max(5, int(round(0.012 * head_w)) | 1)
         keep = cv2.dilate(keep, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (grow, grow)))
-        keep[solid] = 0
+        keep[solid > 0] = 0
+        if ws < 1.0:
+            keep = cv2.resize(keep, (x1 - x0, y1 - y0), interpolation=cv2.INTER_NEAREST)
         out[y0:y1, x0:x1] = keep
         return out
 
@@ -4281,18 +4466,33 @@ class CleanVinylEngine:
                         s_sc = min(1.0, 640.0 / max(h, w))
                         sw_s, sh_s_dim = max(16, int(round(w * s_sc))), max(16, int(round(h * s_sc)))
                         src_s = cv2.resize(img_rgb_u8, (sw_s, sh_s_dim), interpolation=cv2.INTER_AREA).astype(np.float32)
-                        fg_bad_s = cv2.resize(eff_fg_for_spots, (sw_s, sh_s_dim), interpolation=cv2.INTER_AREA) > 22
+                        # Single hairs are repaired INSIDE the protected band. The band painted over with a wide
+                        # average of the backdrop is good enough to keep the colours of the person out of a repair
+                        # that ends before the band, and far too rough to repair in: the tone of that average is
+                        # not the tone of the wall right behind the head. With hairs to repair, only the person as
+                        # the network drew it is painted over, and next to the outline with what lies right there.
+                        solid_full = self._person_solid(tight_1024, w, h) if (near_mask is not None and tight_1024 is not None) else None
+                        if solid_full is not None:
+                            fg_bad_s = cv2.resize(solid_full.view(np.uint8) * np.uint8(255), (sw_s, sh_s_dim), interpolation=cv2.INTER_AREA) > 22
+                        else:
+                            fg_bad_s = cv2.resize(eff_fg_for_spots, (sw_s, sh_s_dim), interpolation=cv2.INTER_AREA) > 22
                         hm_s = cv2.resize(heal_mask, (sw_s, sh_s_dim), interpolation=cv2.INTER_NEAREST) > 0
                         bg_valid = (~fg_bad_s) & (~hm_s)
                         if np.any(bg_valid) and np.any(fg_bad_s):
                             w_bg = bg_valid.astype(np.float32)
                             den_bg = cv2.GaussianBlur(w_bg, (0, 0), sigmaX=12.0, sigmaY=12.0) + 1e-4
                             fill_s = cv2.GaussianBlur(src_s * w_bg[:, :, None], (0, 0), sigmaX=12.0, sigmaY=12.0) / den_bg[:, :, None]
-                            fg_blend = cv2.GaussianBlur(fg_bad_s.astype(np.float32), (5, 5), 0)[:, :, None]
+                            if solid_full is not None:
+                                den_l = cv2.GaussianBlur(w_bg, (0, 0), sigmaX=2.5, sigmaY=2.5)
+                                fill_l = cv2.GaussianBlur(src_s * w_bg[:, :, None], (0, 0), sigmaX=2.5, sigmaY=2.5) / (den_l[:, :, None] + 1e-4)
+                                near_l = np.clip(den_l / 0.25, 0.0, 1.0)[:, :, None]
+                                fill_s = fill_l * near_l + fill_s * (1.0 - near_l)
+                                del den_l, fill_l, near_l
                             fill_full = cv2.resize(np.clip(fill_s, 0, 255).astype(np.uint8), (w, h), interpolation=cv2.INTER_LINEAR)
-                            fg_m_full = (eff_fg_for_spots > 22)
+                            fg_m_full = solid_full if solid_full is not None else (eff_fg_for_spots > 22)
                             heal_src_u8 = img_rgb_u8.copy()
                             heal_src_u8[fg_m_full] = fill_full[fg_m_full]
+                        del solid_full
                     if fast_mode:
                         lama_f32, tiles_run, small_specks_healed = self._run_fast_inpaint(
                             heal_src_u8, heal_mask, progress_cb=progress_cb, size_scale=render_scale
@@ -4307,7 +4507,7 @@ class CleanVinylEngine:
             # 7. Fast High-Pass Grain Transfer + Float32 Lab Scuffs + Blur + Dress Smooth
             # ------------------------------------------------------------------
             if (tone_edge and tight_1024 is not None and custom_fg_mask is None
-                    and ((cyc_str > 0 and corner_line is not None) or scuffs_eff > 0 or near_mask is not None)):
+                    and ((cyc_str > 0 and corner_line is not None) or scuffs_eff > 0)):
                 rec = sc.get("tgate") if sc is not None else None
                 if rec is not None and rec[0] == k_tgate:
                     (tone_gate,) = rec[1]
@@ -4341,19 +4541,15 @@ class CleanVinylEngine:
                         # "toneEdge". The repair used to be blended into the frame under the protected band too and
                         # was only hidden there by the layer alpha. Now that the tone stages make the layer visible
                         # right up to the person, the frame itself must be untouched wherever the protection says so.
-                        # The one exception are the single hairs (near_mask): they are repaired inside the band, on
-                        # whatever the outline of the person (tone_gate) calls backdrop.
+                        # The one exception are the single hairs (near_mask): they are repaired inside the band,
+                        # wherever they were marked - the mark never reaches the person (_detect_stray_hairs).
                         lift = None
-                        if near_mask is not None and tone_gate is not None:
+                        if near_mask is not None:
                             lift = cv2.GaussianBlur(near_mask.astype(np.float32), (k_ha, k_ha), 0)
                         for cy0, cy1, cx0, cx1 in heal_cells:
                             allow = 1.0 - np.clip((eff_fg_for_spots[cy0:cy1, cx0:cx1].astype(np.float32) - 40.0) / 170.0, 0.0, 1.0)
                             if lift is not None:
-                                np.maximum(
-                                    allow,
-                                    np.minimum(1.0, 2.0 * lift[cy0:cy1, cx0:cx1]) * (tone_gate[cy0:cy1, cx0:cx1].astype(np.float32) * (1.0 / 255.0)),
-                                    out=allow,
-                                )
+                                np.maximum(allow, np.minimum(1.0, 2.0 * lift[cy0:cy1, cx0:cx1]), out=allow)
                             heal_alpha[cy0:cy1, cx0:cx1] *= allow
                         del lift
                     if heal_bbox is not None:
