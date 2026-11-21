@@ -4036,6 +4036,7 @@ def _exact_cases():
         """A progress callback that holds the run at its first progress point from `pct` on, until open()."""
         def __init__(self, pct=79):
             self.pct, self.reached, self.go, self.used = pct, threading.Event(), threading.Event(), False
+            self.gave_up = False
 
         def __call__(self, pct, txt):
             if not self.used and pct >= self.pct:
@@ -4043,7 +4044,13 @@ def _exact_cases():
                 self.reached.set()
                 # (the check opens the gate within seconds. The limit matters only when the engine is broken and
                 #  the request that should have been answered meanwhile waits for this very run.)
-                self.go.wait(45)
+                if not self.go.wait(45):
+                    self.gave_up = True
+
+        def holding(self):
+            """True while the run stands at the gate: what was answered before this turned False was answered
+            'meanwhile'. (A request that had to wait until the gate gave up was not.)"""
+            return self.reached.is_set() and not self.go.is_set() and not self.gave_up
 
         def open(self):
             self.go.set()
@@ -4166,7 +4173,7 @@ def _exact_cases():
     gate, th, box = held_run(eng, sid)
     s1 = stroke(eng, sid, stroke_a, False)
     s2 = stroke(eng, sid, stroke_b, True, 30.0)
-    answered_meanwhile = th.is_alive() and not gate.go.is_set()
+    answered_meanwhile = th.is_alive() and gate.holding()
     gate.open()
     th.join(120)
     ans = box.get("ans") or {}
@@ -4185,9 +4192,12 @@ def _exact_cases():
     eng, sid = opened()
     gate, th, box = held_run(eng, sid)  # (it starts with the clothing switch off)
     worn = eng.dress_preview_session(sid, True, 90.0)
+    worn_meanwhile = th.is_alive() and gate.holding()
     gate.open()
     th.join(120)
     ans = box.get("ans") or {}
+    if not worn_meanwhile:
+        bad.append("the clothing switch must be answered while a background recompute is still computing")
     if pictures(ref_dressed) == pictures(ref):
         bad.append("the clothing switch changes nothing on the frame of this check: the check is blind")
     elif pictures(ans) != pictures(ref_dressed) or not worn.get("comp_jpg_b64") or worn.get("exact") is not False or not idle(eng):
@@ -4317,9 +4327,12 @@ def _exact_cases():
     gate, th, box = held_run(eng, sid)
     eng.edit_session_mask(sid, "invert")
     stroke(eng, sid, stroke_a, False)
+    drawn_meanwhile = th.is_alive() and gate.holding()
     gate.open()
     th.join(120)
     ans = box.get("ans") or {}
+    if not drawn_meanwhile:
+        bad.append("the inversion and a stroke must be answered while a background recompute is still computing")
     if ans.get("skipped") is not True or state(eng) != drawn or not idle(eng):
         bad.append("a mask drawn by hand while a background recompute was computing must not be replaced by its result")
     elif not np.array_equal(apply(eng, sid, moved)[0], layer_drawn):

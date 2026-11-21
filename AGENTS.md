@@ -409,6 +409,10 @@ second plugin next to the installed one and lose his presets.
     What did NOT gain: the cleaned backdrop is still the working-size proxy, enlarged. The next step, if
     he asks for more: load the visible part of the frame at full resolution when the view is zoomed in
     (the real frame is in the session once the exact picture is there). Not built.
+    A risk that could not be looked at: the window opens at 1020 x 740 every time, and a 2160 px picture is
+    then drawn into a box of a third of its size. If Photoshop scales it down without care (bilinear, no
+    smaller copies), fine detail may look grainy there. He is asked to say so; the remedy would be a
+    second, smaller picture for small boxes, or a size chosen from the size of the window.
   - Checks: the new groups `exact` and `sharp`; `http` sends `background` / `followBackground` /
     `stop-background` through the HTTP layer; `server` checks the name, the layer names, the icon and
     that the panel never reads the size of a picture; `mask` and `dark` read the larger pictures. The
