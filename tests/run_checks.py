@@ -3658,8 +3658,9 @@ def check_exact():
     bad, n_places, tried = _quiet(_exact_cases)
     report("exact", not bad,
            f"a background recompute gives the frame of a full one ({n_places} safe places); it gave way at {tried} of them with the "
-           "session untouched and the next run correct; strokes are answered and kept meanwhile; new values, Apply, closing "
-           "and another photo stop it; Apply waits for the frame it needs (computed once); the user's own mask is never replaced"
+           "session untouched and the next run correct; strokes are answered and kept meanwhile, the clothing switch too; new "
+           "values, Apply, closing and another photo stop it; Apply waits for the frame it needs (computed once); the user's "
+           "own mask is never replaced"
            if not bad else "wrong:\n   " + "\n   ".join(bad))
 
 
@@ -3856,6 +3857,26 @@ def _exact_cases():
     if pictures(ans) != pictures(ref_drawn) or state(eng) != ref_drawn_state or ans.get("exact") is not True \
             or ans.get("history") != {"undo": 2, "redo": 0} or not idle(eng):
         bad.append("strokes made during a background run: the result must be that of 'the strokes, then a full recompute'")
+
+    # ---- 3b. the clothing switch used while the run computes: the exact pictures are drawn with the clothing as
+    #          the window asked for it last, not as it was when the run started
+    eng, sid = opened()
+    ref_dressed = recompute(eng, sid, dict(moved, dressSmooth=True, dressStrength=90))
+    eng, sid = opened()
+    gate, th, box = held_run(eng, sid)  # (it starts with the clothing switch off)
+    worn = eng.dress_preview_session(sid, True, 90.0)
+    gate.open()
+    th.join(120)
+    ans = box.get("ans") or {}
+    if pictures(ref_dressed) == pictures(ref):
+        bad.append("the clothing switch changes nothing on the frame of this check: the check is blind")
+    elif pictures(ans) != pictures(ref_dressed) or not worn.get("comp_jpg_b64") or worn.get("exact") is not False or not idle(eng):
+        bad.append("the clothing switch used during a background run: the exact pictures must show the clothing as the window asked last")
+    # ...and a run that starts after the switch was used draws with what its own request says
+    ans = recompute(eng, sid, dict(moved_again, dressSmooth=False), background=True)
+    off_again = recompute(eng, sid, dict(moved_again, dressSmooth=False))
+    if pictures(ans) != pictures(off_again):
+        bad.append("a background run must draw the clothing as its own request says when nothing was said after it")
 
     # ---- 4. new slider values go first: the run gives way, the session is as if it had never started
     eng, sid = opened()

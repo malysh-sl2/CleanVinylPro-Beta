@@ -1476,6 +1476,12 @@ html, body {
   color: #ffe6b3;
 }
 
+/* the cleaned photo on screen is a quick preview; its exact version is on its way (or was put off) */
+.r4m-mode-badge.refining {
+  border-color: #e0a63c;
+  color: #ffe6b3;
+}
+
 /* State of the preview after the sliders were changed (light refresh, no progress card) */
 .r4m-preview-badge {
   display: none;

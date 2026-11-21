@@ -1757,7 +1757,8 @@ function updateModeBadge() {
     badge.className = "r4m-mode-badge visible mask";
   } else {
     badge.textContent = kind === "exact" ? "ПІСЛЯ · чисте фото" : "ПІСЛЯ · швидкий перегляд" + refining;
-    badge.className = "r4m-mode-badge visible clean";
+    // (green: this is what the layer will be; amber: a quick preview)
+    badge.className = kind === "exact" ? "r4m-mode-badge visible clean" : "r4m-mode-badge visible refining";
   }
 }
 

@@ -17,9 +17,11 @@ touched by these.
 They need Node.js and the jsdom package (tests/README.md).
 
 Do NOT edit the program files, build the package or run the checks yourself while this is going: the script
-changes the files in place. It restores them when it ends, also after Ctrl+C. If it is killed outright, the
-last defect stays in the file: `git diff` shows it, `git checkout -- <file>` removes it (mind your own
-uncommitted work in that file - the script refuses to start when the list no longer fits the files).
+changes the files in place. It restores them when it ends, also after Ctrl+C or a plain `kill` (SIGINT and
+SIGTERM are both taken as "stop and put the file back", also when the script runs as a background job, where a
+shell switches SIGINT off). Only `kill -9` leaves the last defect in the file: `git diff` shows it, `git checkout
+-- <file>` removes it (mind your own uncommitted work in that file - the script refuses to start when the list no
+longer fits the files).
 
 The list holds the defects for what was new in the last version. Replace it when the next version adds rules:
 old entries stop fitting as the code moves on, and the script says so ("out of date") instead of guessing.
@@ -28,6 +30,7 @@ does not belong in the list.
 """
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -56,11 +59,17 @@ DEFECTS = [
      "                    computed = self._recompute_full(sess, clean_params, progress)\n",
      "                    with self._session_lock:\n                        computed = self._recompute_full(sess, clean_params, progress)\n"),
     ("exact: strokes are dropped when the background run puts its frame in place", "exact", ENGINE,
-     "                    return self._recompute_commit(sess, p, computed, True, t0)\n",
-     "                    return self._recompute_commit(sess, p, computed, False, t0)\n"),
+     "                    return self._recompute_commit(sess, p, computed, True, t0, dress=sess.get(\"dress_live\"))\n",
+     "                    return self._recompute_commit(sess, p, computed, False, t0, dress=sess.get(\"dress_live\"))\n"),
+    ("exact: the exact pictures forget the clothing switch that was used meanwhile", "exact", ENGINE,
+     "                    return self._recompute_commit(sess, p, computed, True, t0, dress=sess.get(\"dress_live\"))\n",
+     "                    return self._recompute_commit(sess, p, computed, True, t0)\n"),
+    ("exact: the clothing switch is not remembered for the exact pictures", "exact", ENGINE,
+     "                sess = self._session_or_raise(session_id)\n                sess[\"dress_live\"] = (bool(dress_smooth), float(dress_strength))\n                previews = self._render_session_previews(",
+     "                sess = self._session_or_raise(session_id)\n                previews = self._render_session_previews("),
     ("exact: the user's own mask is replaced by a background run", "exact", ENGINE,
-     "                    if refine_only and sess.get(\"mask_detached\"):\n                        return {\"ok\": True, \"session_id\": session_id, \"skipped\": True, **self._picture_state(sess)}\n\n                def give_way():\n",
-     "                    if False:\n                        return {\"ok\": True, \"session_id\": session_id, \"skipped\": True, **self._picture_state(sess)}\n\n                def give_way():\n"),
+     "                    if refine_only and sess.get(\"mask_detached\"):\n                        return {\"ok\": True, \"session_id\": session_id, \"skipped\": True, **self._picture_state(sess)}\n                    # (this request is the newest word",
+     "                    if False:\n                        return {\"ok\": True, \"session_id\": session_id, \"skipped\": True, **self._picture_state(sess)}\n                    # (this request is the newest word"),
     ("exact: ...also a mask that was drawn while the run was computing", "exact", ENGINE,
      "                    if refine_only and sess.get(\"mask_detached\"):\n                        # the mask became the user's own drawing while the frame was being computed\n",
      "                    if False:\n                        # the mask became the user's own drawing while the frame was being computed\n"),
@@ -198,7 +207,13 @@ def _run_panel_tests(plugin_dir, texts):
     return code, out
 
 
+def _stop(signum, frame):
+    raise KeyboardInterrupt
+
+
 def main() -> int:
+    for sig in (signal.SIGINT, signal.SIGTERM):  # stop = put the file back first (the `finally` blocks below)
+        signal.signal(sig, _stop)
     words = [a for a in sys.argv[1:] if not a.startswith("-")]
     chosen = [d for d in DEFECTS if not words or any(wd in _label(d[1]) or wd in d[0] for wd in words)]
     if "--list" in sys.argv:

@@ -5446,6 +5446,7 @@ class CleanVinylEngine:
 
                 dress_on = bool(p.get("dressSmooth", False))
                 dress_str = float(p.get("dressStrength", 45))
+                sess["dress_live"] = (dress_on, dress_str)  # the clothing state the window last named
                 previews = self._render_session_previews(sess, dress_on, dress_str, need_comp=True, need_mask=False)
                 orig_jpg_b64 = self._encode_b64_jpg(orig_small_bgr, quality=sess["preview_q"])
 
@@ -5525,8 +5526,13 @@ class CleanVinylEngine:
         return {"quick": False, "cleaned_rgba": cleaned_rgba, "core": out_cache["core_mask_u8"], "seed": seed,
                 "small": small, "stats": stats}
 
-    def _recompute_commit(self, sess: dict, p: dict, computed: dict, preserve_edits: bool, t0: float) -> dict:
-        """Puts a computed frame (_recompute_quick / _recompute_full) into the session and renders the answer."""
+    def _recompute_commit(self, sess: dict, p: dict, computed: dict, preserve_edits: bool, t0: float,
+                          dress: tuple | None = None) -> dict:
+        """
+        Puts a computed frame (_recompute_quick / _recompute_full) into the session and renders the answer.
+        dress: (on, strength) to draw the pictures with instead of what `p` says. A background run passes the
+        state the window named last: the clothing switch may have been used while the frame was being computed.
+        """
         took_quick = bool(computed["quick"])
         if not took_quick:
             self._seed_session_proxy(sess.get("proxy"), computed["seed"])
@@ -5548,8 +5554,12 @@ class CleanVinylEngine:
             sess["history"] = {"undo": [], "redo": []}  # the edits were dropped on purpose
         sess["clean_paint_small_bgr"] = self._paint_preview_from_base(sess)
 
-        dress_on = bool(p.get("dressSmooth", False))
-        dress_str = float(p.get("dressStrength", 45))
+        if dress is not None:
+            dress_on, dress_str = bool(dress[0]), float(dress[1])
+        else:
+            dress_on = bool(p.get("dressSmooth", False))
+            dress_str = float(p.get("dressStrength", 45))
+        sess["dress_live"] = (dress_on, dress_str)
         previews = self._render_session_previews(sess, dress_on, dress_str, need_comp=True, need_mask=False)
         stats = computed["stats"]
         stats["elapsed_ms"] = int((time.perf_counter() - t0) * 1000)
@@ -5633,6 +5643,9 @@ class CleanVinylEngine:
                     refine_only = self._clean_signature(p) == self._clean_signature(sess["params"])
                     if refine_only and sess.get("mask_detached"):
                         return {"ok": True, "session_id": session_id, "skipped": True, **self._picture_state(sess)}
+                    # (this request is the newest word on the clothing switch - until a mask edit or the switch
+                    #  itself says otherwise while the frame is being computed)
+                    sess["dress_live"] = (bool(p.get("dressSmooth", False)), float(p.get("dressStrength", 45)))
 
                 def give_way():
                     if self._compute_waiters > 0 or self._active_session is not sess:
@@ -5659,7 +5672,7 @@ class CleanVinylEngine:
                     if refine_only and sess.get("mask_detached"):
                         # the mask became the user's own drawing while the frame was being computed
                         return {"ok": True, "session_id": session_id, "skipped": True, **self._picture_state(sess)}
-                    return self._recompute_commit(sess, p, computed, True, t0)
+                    return self._recompute_commit(sess, p, computed, True, t0, dress=sess.get("dress_live"))
         finally:
             self._end_job()
 
@@ -5801,6 +5814,7 @@ class CleanVinylEngine:
                                 0, 255,
                             ).astype(np.uint8)
 
+                sess["dress_live"] = (bool(dress_smooth), float(dress_strength))
                 previews = self._render_session_previews(sess, dress_smooth, dress_strength, need_comp=True, need_mask=False)
                 out = {"ok": True, "inverted": bool(sess.get("inverted", False)), **previews,
                        "history": self._edit_history_counts(sess), **self._picture_state(sess, changed=True)}
@@ -5816,6 +5830,7 @@ class CleanVinylEngine:
         try:
             with self._session_lock:
                 sess = self._session_or_raise(session_id)
+                sess["dress_live"] = (bool(dress_smooth), float(dress_strength))
                 previews = self._render_session_previews(sess, dress_smooth, dress_strength, need_comp=True, need_mask=False)
                 return {"ok": True, **previews, **self._picture_state(sess)}
         finally:

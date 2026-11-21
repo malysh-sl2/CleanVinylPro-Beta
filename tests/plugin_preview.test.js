@@ -877,6 +877,7 @@ async function main() {
     await sleep(30);
     expect(env.pictureName().startsWith("light-"), "the quick picture first, got " + env.pictureName());
     expect(env.modeBadge().includes("швидкий перегляд") && env.modeBadge().includes("уточнюється"), "the corner label must say that the exact picture is coming: " + env.modeBadge());
+    expect(env.el("dlgModeBadge").classList.contains("refining") && !env.el("dlgModeBadge").classList.contains("clean"), "...in the colour of 'not final yet'");
     expect(env.badge() === "", "nothing else to say: " + env.badge());
     await sleep(350);
     expect(env.exacts().length === 0, "the exact picture waits for a quiet moment (0.7 s)");
@@ -899,6 +900,7 @@ async function main() {
     await sleep(30);
     expect(env.pictureName().startsWith("exact-"), "the exact picture must be on screen, got " + env.pictureName());
     expect(env.modeBadge() === "ПІСЛЯ · чисте фото", "the corner label: " + env.modeBadge());
+    expect(env.el("dlgModeBadge").classList.contains("clean") && !env.el("dlgModeBadge").classList.contains("refining"), "...in the colour of the final picture");
     expect(env.badge() === "" && env.state("previewMatchesSettings()") === true, "up to date, nothing to say: " + env.badge());
     await env.settle(1500);
     expect(env.exacts().length === 1 && env.recomputes().length === 1, `nothing more is asked for: ${env.recomputes().length} light, ${env.exacts().length} exact`);
@@ -1187,15 +1189,22 @@ async function main() {
     expect(near(env.zoom(), 0.15), "zooming out stops at the limit, got " + env.zoom());
     env.key("Numpad0", "0", { ctrlKey: true });
 
-    // not a zoom: the same keys without Ctrl, with Alt, or typed into a text field
-    env.key("Equal", "=");
-    env.key("Minus", "-");
+    // not a zoom: the same keys without Ctrl, with Alt, or typed into a text field (each tried by itself: a
+    // zoom in followed by a zoom out would look like nothing)
+    ev = env.key("Equal", "=");
+    expect(near(env.zoom(), fit) && !ev.defaultPrevented, "'=' without Ctrl must not zoom: " + env.zoom() / fit);
+    ev = env.key("Minus", "-");
+    expect(near(env.zoom(), fit) && !ev.defaultPrevented, "'-' without Ctrl must not zoom: " + env.zoom() / fit);
+    env.key("NumpadAdd", "+");
+    env.key("Digit0", "0");
+    expect(near(env.zoom(), fit), "the numeric pad without Ctrl must not zoom: " + env.zoom() / fit);
     env.key("Equal", "=", { ctrlKey: true, altKey: true });
+    expect(near(env.zoom(), fit), "Ctrl + Alt + '=' must not zoom: " + env.zoom() / fit);
     const field = env.doc.createElement("input");
     field.type = "text";
     env.el("retouchModal").appendChild(field);
     ev = env.key("Equal", "=", { ctrlKey: true }, field);
-    expect(near(env.zoom(), fit), "the keys alone, with Alt or inside a text field must not zoom: " + env.zoom() / fit);
+    expect(near(env.zoom(), fit), "the keys typed into a text field must not zoom: " + env.zoom() / fit);
     expect(!ev.defaultPrevented, "a text field keeps its own keys");
     field.remove();
 

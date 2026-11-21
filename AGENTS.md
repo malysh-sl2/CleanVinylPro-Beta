@@ -68,12 +68,21 @@ written here and in the repository.
   one. He was asked three questions with option cards and chose: mode - quality only; fractions - leave
   them as they are and explain them; brush - soft, plus a switch for a hard edge. 4.7.0 answers this
   message. He did not write «зливай».
+- His message of 2026-11-21 after trying 4.7.0 (three screenshots lay in the upload folder; the one that was
+  opened belongs to an older report). **Its wording is not preserved here**; the agent worked from this
+  list of five points: (1) after a brush stroke he has to press the full-recompute button to see the real
+  result - the recompute should happen by itself; (2) after a stroke the window should show the result, not
+  the green mask; (3) zoom with Ctrl + «+» / Ctrl + «−» as in Photoshop, and drag the photo with the right
+  mouse button; (4) the plugin has no icon in Creative Cloud; (5) the «2» should go from the name. He also
+  said that the old program is removed from his PC and that 4.7.0 works. He was asked two questions with
+  option cards and chose: after a stroke - the cleaned photo stays on screen (not the mask); the name -
+  yes, remove the 2. 4.8.0 answers this message. He did not write «зливай».
 
 ## 2. What is in the repository
 
 | Path | What it is | Rule |
 |---|---|---|
-| `CleanVinylPro2/` | the program under development, «Чистий Вініл Pro 2» | all product work goes here |
+| `CleanVinylPro2/` | the program under development, «Чистий Вініл Pro» (shown as «Чистий Вініл Pro 2» up to 4.7.0; the folder keeps its name) | all product work goes here |
 | `tests/baseline_v321/` | six files of the ORIGINAL program, v3.2.1, byte for byte: `engine.py`, `server.py`, `setup_launcher.py`, `manifest.json`, `install_windows.bat`, `pyvenv.cfg` | **Never modify.** They are the reference the checks compare with. |
 | `CleanVinylPro2.zip` | the download for the owner: the folder `CleanVinylPro2`, zipped | never edit by hand; rebuild with `tools/build_zip.py` |
 | `tests/` | self-checks that need no GPU, no models and no Photoshop; `tests/README.md` (Ukrainian) describes them | keep them passing |
@@ -82,16 +91,16 @@ written here and in the repository.
 
 The original program (folder `CleanVinylPro/`, 7,812 files, 666 MB with a committed Windows `.venv`) was removed
 from the repository in 4.3.0 because the owner asked for it. It is still in the history (first commit
-`daae6ed`), and it is still installed on his PC in `D:\CleanVinylPro` - the new program must keep running next
-to it (table below). Removing the folder did not make the GitHub repository smaller; only rewriting the history
-would, and he has not been asked about that.
+`daae6ed`). Removing the folder did not make the GitHub repository smaller; only rewriting the history would,
+and he has not been asked about that.
 
-With 4.7.0 he asked how to remove the original program from his PC and got numbered steps (manual, section 6,
-«ЯК ВИДАЛИТИ СТАРУ ПРОГРАМУ»; also in the release notes). Whether he has done it is not known. The new program
-needs nothing from that folder: the libraries were copied (`adopt` in `setup_env.py`), the server reads the
-models only from `MODELS_DIR` or from its own folder (`resolve_models_dir`), Python is the system one. The
-original has no trigger of its own: its task `CleanVinylProServer` runs only when its plugin calls
-`cleanvinyl://`; its `remove_autostart.bat` deletes the Startup file, the task and that protocol key.
+With 4.7.0 he asked how to remove the original program from his PC and got numbered steps (manual, section 6;
+also in the release notes of 4.7.0). **He has removed it** (said with his message of 2026-11-21), and 4.7.0
+went on working. So on his PC there is one program now, and with 4.8.0 the «2» left its name (below). The
+program needs nothing from the old folder: the libraries were copied (`adopt` in `setup_env.py`), the server
+reads the models only from `MODELS_DIR` or from its own folder (`resolve_models_dir`), Python is the system
+one. What the two programs REGISTER still differs (table below), so on another PC they can still stand side
+by side - they would only carry the same name in Photoshop.
 
 ### The product
 
@@ -108,17 +117,24 @@ portraits: dust, scuffs, the seam, the wall-floor corner, and optionally clothin
 - Models: `bria-rmbg-2.0.onnx` (at least 500 MB) and `lama_fp32.onnx` (at least 180 MB). They are not in the
   repository and not in the ZIP.
 
-Both programs must be able to run side by side, so nothing is shared with the original:
+Nothing that is registered is shared with the original, so both can run side by side:
 
 | | original | CleanVinylPro2 |
 |---|---|---|
+| name shown in Photoshop | «Чистий Вініл Pro» | «Чистий Вініл Pro» since 4.8.0 (he asked for it); «Чистий Вініл Pro 2» up to 4.7.0 |
 | server port | 18745 | 18746 |
 | plugin id | `com.cleanvinylpro.photoshop` | `com.cleanvinylpro2.photoshop` |
 | panel id | `cleanVinylProPanel` | `cleanVinylPro2Panel` |
 | URL scheme | `cleanvinyl://` | `cleanvinyl2://` |
 | scheduled task | `CleanVinylProServer` | `CleanVinylPro2Server` |
 | data folder | `%APPDATA%\CleanVinylPro` | `%APPDATA%\CleanVinylPro2` |
-| layer names | «Чистий вініл (AI)», «Чистий вініл (Виділення)» | «Чистий вініл 2 (AI)», «Чистий вініл 2 (Виділення)», «Фон 5:7 (AI)» |
+| layer names | «Чистий вініл (AI)», «Чистий вініл (Виділення)» | the same two since 4.8.0, and «Фон 5:7 (AI)»; up to 4.7.0 «Чистий вініл 2 (AI)», «Чистий вініл 2 (Виділення)» - still recognised (`PLUGIN_LAYER_NAMES` in `main.js`) |
+
+Kept with the 2 on purpose, because nobody sees them in Photoshop and an update must land on the installed
+copy: the folder `CleanVinylPro2`, `CleanVinylPro2.ccx`, `CleanVinylPro2.zip`, the plugin id and panel id, the
+port, the scheme `cleanvinyl2`, the scheduled task, `%APPDATA%\CleanVinylPro2`, `APP_ID` (`cleanvinylpro2`),
+the backup file names and the release tags `cvp2-v…`. Do not rename any of them: a new plugin id would add a
+second plugin next to the installed one and lose his presets.
 
 ### What each version added
 
@@ -294,6 +310,73 @@ Both programs must be able to run side by side, so nothing is shared with the or
     deliberate defects of 4.7.0 (18 for the engine and the server, 11 for the panel) and can put a defect
     of the panel into a copy of the plugin folder (`panel("<text in the scenario names>")`,
     `CV_PLUGIN_DIR`).
+- **4.8.0** — the big window: the exact picture comes by itself, the brush works on the cleaned photo,
+  zoom keys, dragging with the right button; the name without the 2; an opaque plugin icon. The cleaning
+  itself and the brush are unchanged from 4.7.0.
+  - **The exact picture by itself.** Up to 4.7.0 a slider gave a light (quick) preview, and the real frame
+    was computed only by the button «↻ Точний перегляд» or by Apply. Now the panel asks for it by itself:
+    `scheduleExactPreview` → after `EXACT_DELAY_MS` (700 ms) in which nothing is touched →
+    `runExactPreview` posts `/session/recompute` with `background: true`, without the progress card. The
+    corner label (`updateModeBadge`, `previewKind`) says «ПІСЛЯ · швидкий перегляд · уточнюється… N %»
+    until the exact picture is there, then «ПІСЛЯ · чисте фото». State: `sessState.exactShown`,
+    `exactTimer`, `exactSig`, `exactJob`, `exactHold`, `exactError`, `bgUnsupported`, and `exactJobs` (a
+    Set that belongs to one window).
+  - Engine: `recompute_session(..., background=True)`. `_recompute_full` computes the frame WITHOUT the
+    session lock; `_session_lock` is held only while the request is read and while the result is put in
+    place (`_recompute_commit`), so mask edits and the clothing switch are answered meanwhile and what was
+    drawn stays in the result. `_compute_lock` (always through `_compute_turn`) says who may compute a
+    frame. **Lock order: `_compute_lock` before `_session_lock`.**
+  - Giving way: `self._checkpoint()` stands at 27 places of the pipeline where nothing shared is
+    half-written. In the thread of a background run it raises `JobSuperseded` as soon as another request
+    waits for the frame (`_compute_waiters > 0`: a recompute of any kind, Apply, a new photo) or the
+    session is no longer the active one (the window was closed). The answer is
+    `{ok, session_id, superseded: true}`; the session is untouched and the finished stages stay in the
+    stage cache, so the run that follows is shorter. `JobSuperseded` is a `BaseException` on purpose: the
+    pipeline has `except Exception` fallbacks that must let it through.
+  - `{ok, skipped: true}`: the settings are the ones the preview shows and the mask is the user's own
+    drawing (`mask_detached`, after "invert + brush") - a recompute would put the automatic mask back, and
+    that must not happen by itself. Apply computes the real frame in that case, as before.
+  - Every answer of the window carries `rev` (grows with each recompute and each mask edit) and `exact`
+    (`_picture_state`). A stroke is answered while a background run is on its way, so two answers can
+    arrive the other way round: the panel drops pictures with a lower `rev` than the one on screen
+    (`takeSessionPictures`, `takeRecomputeAnswer`).
+  - The clothing switch during a run: `sess["dress_live"]` holds the clothing state the window named
+    last; a background run draws its pictures with it.
+  - Apply: the panel sends `followBackground: true` when a background run for the very values on the
+    sliders is on its way; `apply_session(follow_background=True)` then waits for it
+    (`_compute_turn(ask_way=False, follower=…)`) instead of stopping it, and its progress bar goes on
+    from the numbers of that run. The frame is computed once.
+  - 2 passes have no light way: `requestPreviewRefresh` goes straight to the background run; the former
+    picture stays meanwhile and the badge says «↻ Перераховую перегляд із новими значеннями…».
+  - The button `gBtnRecompute` stays, as «↻ Перерахувати зараз (не обов’язково)»: the full recompute with
+    the progress card, for the case that the exact picture did not come by itself.
+  - A server before 4.8.0 (its start answer has no `exact`): `bgUnsupported`, nothing is asked in the
+    background, the window behaves as 4.7.0.
+  - **The brush on the cleaned photo.** Nothing switches the mask on by itself any more: not a stroke, not
+    picking a tool (button or key), not the inversion, not Ctrl + click on the brush or the eraser. The
+    trace of a stroke (`dlgStrokeDots`) is shown over the cleaned photo and over the mask alike, until the
+    answer comes. A mask the user switched on stays on through his strokes. A stroke over «ДО» brings the
+    cleaned photo back. The three actions on the whole mask say in words what they did (`sayInWindow`).
+  - **Zoom keys**: Ctrl + «+» / Ctrl + «−» / Ctrl + 0 (`zoomKeyOf` asks `e.code`, `e.key` and `e.keyCode`;
+    `zoomBy(factor, cx, cy)`, `ZOOM_KEY_STEP`); the keys zoom around the middle of the view, the wheel
+    around the pointer, as before. **Right button**: `startPan` / `panTo` / `endPan` in `initEvents`;
+    `mousedown` with button 2, the `contextmenu` event suppressed over the photo, and pointer events as a
+    second way for a host that reports the right button only through them.
+  - **The name**: see the table above. In `main.js` the history steps and command names lost the 2 as
+    well; the layers are made under `LAYER_NAME_AI` / `LAYER_NAME_SELECTION`.
+  - **The plugin icon**: `icons/plugin*.png` are opaque now (a full dark square instead of a rounded one
+    cut out of transparency) and the manifest names the theme `all` too - what Adobe asks of a plugin
+    icon. This is the icon Photoshop shows in its own list of plugins. The list of the Creative Cloud
+    desktop app shows no custom icon for a plugin installed from a local `.ccx` (answers of Adobe staff on
+    the developer forum, found in this session); nothing inside the plugin changes that, and he was told
+    so.
+  - Checks: the new group `exact`; `http` sends `background` / `followBackground` through the HTTP layer;
+    `server` checks the name, the layer names and the icon. The scripted server of the panel test speaks
+    the protocol of 4.8.0 (`bgAware`, `rev`, `exact`, background runs that give way, `skipped`); without
+    `rev` / `exact` in its answers the panel would take it for an older server and ask nothing.
+    `env.recomputes()` are the requests a control asked for, `env.exacts()` the background ones.
+    `tests/try_defects.py` holds the 48 deliberate defects of 4.8.0 (13 for the engine and the server, 35
+    for the panel); a panel defect can now name several scenario texts (`panel("a", "b")`).
 
 ## 3. Current state — update this at the end of every session
 
