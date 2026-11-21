@@ -64,6 +64,15 @@ Part 2 - what this program does differently from v3.2.1, each with its own measu
             times sharper than the working picture enlarged; the layer shows what it showed (also after a stroke,
             the eraser, a light refresh, the exact picture); ironed clothing keeps the weave of the cloth; the
             working size, by which the window places everything, is unchanged
+  edge      the corner and the stains change the tone of the backdrop right up to the person: no strip of the old
+            tone is left around it (the rim along a hem and around the shoes); the person is not touched; the
+            repair away from the person is what it was
+  line      a joint of the vinyl that the corner tool takes for the corner: its thin dark line goes with the step,
+            with the seam tool on and off; a joint or a corner without such a line: nothing is taken out
+  hair      the slider of the single hairs: hairs that stick out of the hairdo are repaired, also inside the
+            protected band; the fuzz of the outline, an eyelash, a dark line that grows out of the lit face, a
+            line that touches nobody and the person stay; dark and light hairs, a close-up; at 0 nothing is looked
+            for; in the big window a light refresh and a full recompute give the frame of that slider value
 
 Part 3 - the program around the engine:
   server    settings migration, binary packets, one version everywhere; the name a person reads has no 2 (since
@@ -4381,6 +4390,371 @@ def _exact_cases():
     return bad, n_places, tried
 
 
+# ----------------------------------------------------------------------------------------------------------------------
+# 4.9.0: the tone stages reach the person, the thin line of the corner, single hairs
+# ----------------------------------------------------------------------------------------------------------------------
+def _person_core(matte):
+    """
+    The person of a synthetic frame for "is not touched": every pixel the network is sure of (matte above 0.9).
+    Since 4.9.0 the tone of the backdrop is shifted right up to the person, and along the soft edge of the matte
+    the photo decides where that is - but never where the network is sure (TONE_GATE_SURE).
+    """
+    return matte > 0.9
+
+
+def check_edge():
+    """
+    "toneEdge". The corner and the stains change the tone of the backdrop - and stopped at the margin of the
+    protection, so a strip around the person kept the old tone: a rim along the hem and around the shoes that no
+    position of the protection slider removed (it only made the strip wider or narrower). A change of tone is no
+    repair: it now goes right up to the person, whose outline is taken from the network and from the photo itself.
+    """
+    bad, notes = [], []
+    off = dict(H.STD, spots=0, scuffs=0, seamOn=False, blur=0, smokeOn=False)
+    gray = lambda a: a[..., :3].astype(np.float32).mean(axis=2)  # noqa: E731
+    w, h = 1500, 2000
+    img, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=3)
+    matte = cv2.resize(sil, (w, h))
+    dist = cv2.distanceTransform((matte <= 0.5).astype(np.uint8), cv2.DIST_L2, 5)
+    inside = _person_core(matte)
+    # the corner of this frame is at 0.62 of the height: the floor right under it gets darker, the wall above lighter
+    under = np.zeros((h, w), bool)
+    under[int(h * 0.625):int(h * 0.645)] = True
+    over = np.zeros((h, w), bool)
+    over[int(h * 0.595):int(h * 0.615)] = True
+    eng = H.make_engine(E, sil)
+    for mode in ("fast", "quality"):
+        for edge in (70, 90):
+            share = {}
+            for on in (True, False):
+                comp = _comp(img, _quiet(eng.process, img, 8, dict(off, speedMode=mode, cycCurve=65, edge=edge, toneEdge=on))[0])
+                d = gray(comp) - gray(img)
+                # how much of the shift of the open backdrop (90..130 px away) arrives 2..4 px from the person
+                share[on] = [float(d[rows & (dist >= 2) & (dist < 4)].mean() / d[rows & (dist >= 90) & (dist < 130)].mean()) for rows in (under, over)]
+                if float(np.abs(comp - img.astype(np.float32))[inside].max()) > 0.0:
+                    bad.append(f"corner, {mode}, protection {edge}, toneEdge {on}: the person was changed by {np.abs(comp - img.astype(np.float32))[inside].max():.2f} levels")
+            if min(share[True]) < 0.85 or max(share[True]) > 1.15:
+                bad.append(f"corner, {mode}, protection {edge}: next to the person the backdrop moves {share[True]} of what it moves in the open (under, over the corner)")
+            if max(share[False]) > 0.50:
+                bad.append(f"corner, {mode}, protection {edge}: the measurement does not see the strip the former way leaves ({share[False]})")
+            if mode == "fast" and edge == 70:
+                notes.append(f"corner: next to the person the floor moves {100 * share[True][0]:.0f}% of what it moves in the open (the former way: {100 * share[False][0]:.0f}%)")
+
+    # Stains: what is left of them right at the person. (The stage itself judges by less backdrop there, so it is
+    # weaker than in the open; the strip of the protection no longer adds to that.)
+    stained, clean, sil_s, g = _stained_frame(w, h)
+    person = g["person"]
+    dist_s = cv2.distanceTransform((~person).astype(np.uint8), cv2.DIST_L2, 5)
+    S = cv2.GaussianBlur(g["stains"], (0, 0), 2.0)
+    strip = (dist_s >= 2) & (dist_s < 5) & (np.abs(S) > 1.2)
+    eng_s = H.make_engine(E, sil_s)
+    left = {}
+    for on in (True, False):
+        comp = _comp(stained, _quiet(eng_s.process, stained, 8, dict(off, scuffs=65, speedMode="fast", toneEdge=on))[0])
+        R = cv2.GaussianBlur(gray(comp) - gray(clean), (0, 0), 2.0)
+        left[on] = float((R[strip] * S[strip]).sum() / float((S[strip] ** 2).sum()))
+        core = cv2.erode(person.astype(np.uint8), np.ones((7, 7), np.uint8)) > 0
+        if float(np.abs(comp - stained.astype(np.float32))[core].max()) > 0.0:
+            bad.append(f"stains, toneEdge {on}: the person was changed")
+    if left[True] > 0.76 or left[True] > left[False] - 0.06:
+        bad.append(f"stains 2..5 px from the person: {left[True]:.2f} of them left (the former way: {left[False]:.2f})")
+    notes.append(f"stains right at the person: {100 * left[True]:.0f}% left (the former way: {100 * left[False]:.0f}%)")
+
+    # The repair under the protected band stays what it was: with no tone stage the result is the one of the
+    # former way wherever the protection is whole or absent (in between, the repair fades once instead of twice).
+    img_d, sil_d = H.make_studio_image(w, h, seed=5)
+    eng_d = H.make_engine(E, sil_d)
+    p_d = dict(H.STD, scuffs=0, blur=0, cycCurve=0, smokeOn=False, speedMode="fast")
+    c_on = _comp(img_d, _quiet(eng_d.process, img_d, 8, dict(p_d, toneEdge=True))[0])
+    c_off = _comp(img_d, _quiet(eng_d.process, img_d, 8, dict(p_d, toneEdge=False))[0])
+    matte_d = cv2.resize(sil_d, (w, h))
+    dist_d = cv2.distanceTransform((matte_d <= 0.5).astype(np.uint8), cv2.DIST_L2, 5)
+    apart = dist_d > 0.02 * h
+    core_d = _person_core(matte_d)
+    if float(np.abs(c_on - c_off)[apart].max()) > 0.0 or float(np.abs(c_on - img_d.astype(np.float32))[core_d].max()) > 0.0:
+        bad.append(f"repair without tone stages: away from the person the result differs from the former way by {np.abs(c_on - c_off)[apart].max():.2f} levels, "
+                   f"the person by {np.abs(c_on - img_d.astype(np.float32))[core_d].max():.2f}")
+    if float(np.abs(c_off - img_d.astype(np.float32)).max()) < 5.0:
+        bad.append("repair without tone stages: nothing was repaired in the frame of this check")
+    report("edge", not bad, "the tone stages reach the person: " + "; ".join(notes) + "; the person is not touched; the repair away from the person is as before"
+           if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
+def _hairline_frame(w=1500, h=2000, at=0.77, slope=0.012, depth=2.2, lit=30.0, level=24.0, seed=21, noise=1.1, line=True):
+    """
+    A dark floor with the joint of two vinyl sheets across the frame, as on the owner's frame 3417: above the joint
+    the floor is lit, below it is not, and along the joint runs a thin dark line - `depth` levels deep, two pixels
+    wide, a little tilted. There is no wall-floor corner sharp enough to be found: the joint is what the corner tool
+    takes for the corner. line=False: the same frame without the thin line.
+    Returns (frame, silhouette, the row of the joint for every column).
+    """
+    rng = np.random.default_rng(seed)
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    rows = at * h + slope * (xx[0] - w / 2.0)
+    t = 1.0 / (1.0 + np.exp(-np.clip((yy - rows[None, :]) / (0.004 * h), -40, 40)))
+    lum = level + lit * (1.0 - t) * (0.55 + 0.45 * np.exp(-((xx / w - 0.62) / 0.45) ** 2))
+    lum = lum * (1.0 - 0.10 * ((xx / w - 0.5) * 2) ** 2)
+    if line:
+        lum -= depth * np.exp(-0.5 * ((yy - rows[None, :]) / 0.9) ** 2)
+    _, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=1)
+    person = cv2.resize(sil, (w, h)) > 0.5
+    img = lum[..., None] * np.float32([1.03, 1.0, 0.95]) + rng.standard_normal((h, w, 3)).astype(np.float32) * noise
+    img[person] = np.float32([12, 12, 14]) + rng.standard_normal((int(person.sum()), 3)).astype(np.float32) * 0.5
+    return np.clip(img + 0.5, 0, 255).astype(np.uint8), sil, rows
+
+
+def _line_dip(pic, rows, cols, off=(5, 9)):
+    """How much darker the rows of a thin line are than the rows 5..9 px above and below it (levels; columns averaged)."""
+    g = pic[..., :3].astype(np.float32).mean(axis=2)
+    xs = np.arange(cols.start, cols.stop)
+    r0 = np.round(rows[xs]).astype(int)
+    at = np.mean([g[r0 + k, xs] for k in (-1, 0, 1)], axis=0)
+    around = np.mean([g[r0 + s * k, xs] for k in range(off[0], off[1] + 1) for s in (-1, 1)], axis=0)
+    return float((around - at).mean())
+
+
+def _step_over(pic, rows, cols, gap=30, tall=20):
+    """Mean brightness `gap` px above a line minus `gap` px below it (levels; columns averaged)."""
+    g = pic[..., :3].astype(np.float32).mean(axis=2)
+    xs = np.arange(cols.start, cols.stop)
+    r0 = np.round(rows[xs]).astype(int)
+    return float((np.mean([g[r0 - gap - k, xs] for k in range(tall)], axis=0) - np.mean([g[r0 + gap + k, xs] for k in range(tall)], axis=0)).mean())
+
+
+def check_line():
+    """
+    "cornerHair". A joint of the vinyl that the corner tool takes for the corner: the tool turns the step into a
+    slope - and left the thin dark line of the joint lying on that slope (about a third of its depth), while the
+    seam tool leaves the corner to the corner tool. The corner tool now takes the thin line as well.
+    """
+    bad, notes = [], []
+    w, h = 1500, 2000
+    frame, sil, rows = _hairline_frame(w, h)
+    sides = (slice(int(w * 0.05), int(w * 0.30)), slice(int(w * 0.70), int(w * 0.95)))
+    dip0 = [_line_dip(frame, rows, c) for c in sides]
+    step0 = [_step_over(frame, rows, c) for c in sides]
+    if min(dip0) < 1.0 or min(step0) < 15.0:
+        bad.append(f"the frame of this check has no line to remove: dip {dip0}, step {step0}")
+    eng = H.make_engine(E, sil)
+    p = dict(H.STD, spots=0, scuffs=0, blur=0, smokeOn=False, cycCurve=65)
+    core = _person_core(cv2.resize(sil, (w, h)))
+    for mode in ("fast", "quality"):
+        for seam in (False, True):
+            got = {}
+            for on in (True, False):
+                out, st = _quiet(eng.process, frame, 8, dict(p, speedMode=mode, seamOn=seam, seam=90, cornerHair=on))
+                comp = _comp(frame, out)
+                got[on] = ([_line_dip(comp, rows, c) for c in sides], [_step_over(comp, rows, c) for c in sides], st)
+                if float(np.abs(comp - frame.astype(np.float32))[core].max()) > 0.0:
+                    bad.append(f"{mode}, seam {seam}, cornerHair {on}: the person was changed")
+            dip, step, st = got[True]
+            tag = f"{mode}, seam tool {'on' if seam else 'off'}"
+            if st.get("corner_row") is None or abs(st["corner_row"] - 0.77) > 0.012 or not st.get("corner_hair"):
+                bad.append(f"{tag}: the joint at 0.77 was not taken with its thin line (corner_row {st.get('corner_row')}, corner_hair {st.get('corner_hair')})")
+            if max(abs(a) / b for a, b in zip(dip, dip0)) > 0.15:
+                bad.append(f"{tag}: the thin line went {dip0} -> {dip} levels - still there")
+            if max(a / b for a, b in zip(step, step0)) > 0.45:
+                bad.append(f"{tag}: the step of the joint went {step0} -> {step} levels - not evened")
+            if min(a / b for a, b in zip(got[False][0], dip0)) < 0.22 or got[False][2].get("corner_hair"):
+                bad.append(f"{tag}: the measurement does not see the line the former way leaves ({got[False][0]}, corner_hair {got[False][2].get('corner_hair')})")
+            if mode == "fast" and not seam:
+                notes.append(f"thin line of a joint taken for the corner: {max(dip0):.1f} -> {max(abs(v) for v in dip):.2f} levels (the former way: {max(got[False][0]):.2f}), "
+                             f"its step {max(step0):.0f} -> {max(step):.0f}")
+    # the same frame without the thin line: nothing is found, nothing is taken out
+    plain, sil_p, rows_p = _hairline_frame(w, h, line=False)
+    eng_p = H.make_engine(E, sil_p)
+    out, st = _quiet(eng_p.process, plain, 8, dict(p, speedMode="fast", seamOn=False))
+    comp = _comp(plain, out)
+    if st.get("corner_hair") or max(abs(_line_dip(comp, rows_p, c)) for c in sides) > 0.12:
+        bad.append(f"a joint without a thin line: corner_hair {st.get('corner_hair')}, dip after {[_line_dip(comp, rows_p, c) for c in sides]}")
+    # a real wall-floor corner has no thin line either, and the usual frame is cleaned as before
+    img, sil_c = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=3)
+    eng_c = H.make_engine(E, sil_c)
+    off = dict(H.STD, spots=0, scuffs=0, seamOn=False, blur=0, smokeOn=False, cycCurve=65, speedMode="fast")
+    o1, s1 = _quiet(eng_c.process, img, 8, dict(off))
+    o0, s0 = _quiet(eng_c.process, img, 8, dict(off, cornerHair=False))
+    far = cv2.distanceTransform((cv2.resize(sil_c, (w, h)) <= 0.5).astype(np.uint8), cv2.DIST_L2, 5) > 0.03 * h
+    if s1.get("corner_hair") or float(np.abs(_comp(img, o1) - _comp(img, o0))[far].max()) > 0.0:
+        bad.append(f"a plain wall-floor corner: corner_hair {s1.get('corner_hair')}, the result away from the person differs from the former way by "
+                   f"{np.abs(_comp(img, o1) - _comp(img, o0))[far].max():.2f} levels")
+    report("line", not bad, "; ".join(notes) + "; with the seam tool on and off, both fills; a joint or a corner without such a line: nothing is taken out"
+           if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
+def _hair_frame(w=1500, h=2000, zoom=1.0, wall=150.0, hair=26.0, skin=188.0, line=62.0, thick=2, seed=9, noise=1.2):
+    """
+    A head in profile against a plain wall, with thin things that stick out of it:
+      "out"    three single hairs that grow out of the hairdo and lead away from it (two of them curved);
+      "fringe" short hairs that lie along the outline of the hairdo - its soft edge;
+      "lash"   a short dark line on the lit face (an eyelash in profile);
+      "face"   a long line of the same kind that grows out of the lit face;
+      "apart"  such a line that touches nobody.
+    zoom: the size of the head (1 = about 300 px wide in a frame 1500 px wide).
+    Returns (frame, silhouette for the stand-in matting network, {name: the pixels drawn}, silhouette of the frame size).
+    """
+    rng = np.random.default_rng(seed)
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    lum = wall * (1.0 - 0.10 * ((xx / w - 0.5) * 2) ** 2 - 0.06 * ((yy / h - 0.4) * 2) ** 2)
+    img = np.repeat(lum[..., None], 3, axis=2) * np.float32([1.02, 1.0, 0.97])
+    s = w / 1500.0 * zoom
+    rx, ry = int(150 * s), int(190 * s)
+    cx, cy = int(w * 0.50), int(max(h * 0.30, ry + 110 * s + 0.03 * h))
+    sil = np.zeros((h, w), np.uint8)
+    cv2.ellipse(sil, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
+    body = np.array([[cx - int(120 * s), cy + int(150 * s)], [cx + int(120 * s), cy + int(150 * s)],
+                     [cx + int(330 * s), h + int(400 * s)], [cx - int(330 * s), h + int(400 * s)]], np.int32)
+    cv2.fillPoly(sil, [body], 255)
+    person = np.empty((h, w, 3), np.float32)
+    person[:] = hair
+    face = np.zeros((h, w), np.uint8)   # the lit face: the front part of the head
+    cv2.ellipse(face, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
+    face[:, cx - int(60 * s):] = 0
+    face[: cy - int(70 * s)] = 0
+    person[face > 0] = (skin, skin * 0.84, skin * 0.74)
+    person[min(h, cy + int(240 * s)):] = (40, 40, 46)
+    marks = {}
+
+    def draw(name, pts, width=None):
+        m = np.zeros((h, w), np.uint8)
+        cv2.polylines(m, [np.round(np.array(pts, np.float32)).astype(np.int32)], False, 255,
+                      max(1, int(round((thick if width is None else width) * zoom))), lineType=cv2.LINE_AA)
+        a = (m.astype(np.float32) / 255.0)[..., None]
+        img[:] = img * (1 - a) + line * a
+        marks[name] = np.maximum(marks.get(name, 0), (m > 128).astype(np.uint8))
+
+    def ray(angle, r0, r1, bend=0.0, n=14):
+        """From the outline of the head outwards; the angle is counted from 'up', clockwise, in degrees."""
+        pts = []
+        for t in np.linspace(0.0, 1.0, n):
+            a = np.deg2rad(angle + bend * t * t)
+            pts.append((cx + (rx + r0 + (r1 - r0) * t) * np.sin(a), cy - (ry + r0 + (r1 - r0) * t) * np.cos(a)))
+        return pts
+
+    for angle, far, bend in ((-14, 95, 0.0), (10, 75, 9.0), (40, 62, 7.0)):
+        draw("out", ray(angle, -4 * s, far * s, bend))
+    for angle in (62, 70, 78, 86, 94, 102):   # along the outline, 5..11 px from it
+        d = (5 + (angle % 7)) * s
+        draw("fringe", [(cx + (rx + d) * np.sin(a), cy - (ry + d) * np.cos(a)) for a in np.deg2rad(np.linspace(angle - 4.0, angle + 4.0, 8))], width=1)
+    ex, ey = cx - rx * np.cos(np.deg2rad(8)), cy - ry * np.sin(np.deg2rad(8))
+    draw("lash", [(ex + 3 * s, ey), (ex - 12 * s, ey - 5 * s)])
+    fx, fy = cx - rx * np.cos(np.deg2rad(-20)), cy - ry * np.sin(np.deg2rad(-20))
+    draw("face", [(fx + 3 * s, fy), (fx - 80 * s, fy + 14 * s)])
+    draw("apart", [(cx + rx + 150 * s, cy - ry - 40 * s), (cx + rx + 230 * s, cy - ry - 70 * s)])
+
+    a = (cv2.GaussianBlur(sil, (0, 0), 0.8).astype(np.float32) / 255.0)[..., None]
+    img[:] = img * (1 - a) + person * a
+    img += rng.normal(0.0, noise, (h, w, 1)).astype(np.float32)
+    return (np.clip(img + 0.5, 0, 255).astype(np.uint8), cv2.resize(sil, (1024, 1024), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0,
+            marks, sil)
+
+
+def _mark_depth(pic, mark, ring=7):
+    """How far the pixels of a drawn line are from the tone of the wall around them (levels, darker or lighter)."""
+    around = (cv2.dilate(mark, np.ones((2 * ring + 1, 2 * ring + 1), np.uint8)) > 0) & ~(cv2.dilate(mark, np.ones((7, 7), np.uint8)) > 0)
+    g = pic[..., :3].astype(np.float32).mean(axis=2)
+    return abs(float(np.median(g[around]) - g[mark > 0].mean()))
+
+
+def check_hair():
+    """
+    "strayHair": the single hairs that stick out of the hairdo are repaired like dust - also inside the protected
+    band, where the dust search never looks. Everything else that is thin and near a head stays.
+    """
+    bad, notes = [], []
+    p = dict(H.STD, spots=0, scuffs=0, seamOn=False, blur=0, cycCurve=0, smokeOn=False)
+
+    def judged(tag, frame, marks, sil_full, out, st, taken=0.30, stay=("fringe", "lash", "face", "apart")):
+        comp = _comp(frame, out)
+        dist = cv2.distanceTransform((sil_full == 0).astype(np.uint8), cv2.DIST_L2, 5)
+        head_w = float((sil_full[: int(np.nonzero(sil_full.any(axis=1))[0][0] + 0.08 * frame.shape[0])] > 0).sum(axis=1).max())
+        free = (marks["out"] > 0) & (dist > 0.12 * head_w)   # (the first pixels of a hair, in the fuzz of the outline, stay)
+        kept = {}
+        for name, m in marks.items():
+            m = free.astype(np.uint8) if name == "out" else m
+            kept[name] = _mark_depth(comp, m) / _mark_depth(frame, m)
+        if not st.get("hair_px"):
+            bad.append(f"{tag}: no hair was marked (hair_px {st.get('hair_px')})")
+        if kept["out"] > taken:
+            bad.append(f"{tag}: the hairs that stick out of the hairdo kept {100 * kept['out']:.0f}% of their contrast")
+        for name in stay:
+            if kept[name] < 0.90:
+                bad.append(f"{tag}: '{name}' must stay, {100 * kept[name]:.0f}% of it is left")
+        changed = np.abs(comp - frame.astype(np.float32)).max(axis=2)
+        if float(changed[sil_full > 0].max()) > 0.0:
+            bad.append(f"{tag}: the person was changed by {changed[sil_full > 0].max():.1f} levels")
+        # (everything that may be taken in this scene, with room for the soft edge of the repair; 0.01: where the
+        #  layer is faintly there and says what the photo says, the composite differs by the rounding of floats)
+        may_go = np.zeros_like(marks["out"])
+        for name, m in marks.items():
+            if name not in stay:
+                may_go |= m
+        away = cv2.dilate(may_go, np.ones((int(0.32 * head_w) | 1,) * 2, np.uint8)) == 0
+        if float(changed[away].max()) > 0.01:
+            bad.append(f"{tag}: the frame was changed away from the hairs (by {changed[away].max():.2f} levels)")
+        return kept
+
+    frame, sil, marks, sil_full = _hair_frame()
+    eng = H.make_engine(E, sil)
+    for mode in ("fast", "quality"):
+        out0, st0 = _quiet(eng.process, frame, 8, dict(p, speedMode=mode))
+        out_z, st_z = _quiet(eng.process, frame, 8, dict(p, speedMode=mode, strayHair=0))
+        if st0.get("hair_px") or st_z.get("hair_px") or int(out0[..., 3].max()) != 0 or not np.array_equal(out0, out_z):
+            bad.append(f"{mode}: with the slider at 0 nothing may be looked for (hair_px {st0.get('hair_px')}, layer {int(out0[..., 3].max())})")
+        out, st = _quiet(eng.process, frame, 8, dict(p, speedMode=mode, strayHair=100))
+        kept = judged(f"{mode}, slider 100", frame, marks, sil_full, out, st)
+        if mode == "fast":
+            notes.append(f"hairs that stick out of the hairdo: {100 * kept['out']:.0f}% of their contrast left; the fuzz of the outline {100 * kept['fringe']:.0f}%, "
+                         f"an eyelash {100 * kept['lash']:.0f}%, a line out of the lit face {100 * kept['face']:.0f}%, a line that touches nobody {100 * kept['apart']:.0f}%")
+    # the slider: a lower value takes no more than a higher one
+    px = [int(_quiet(eng.process, frame, 8, dict(p, speedMode="fast", strayHair=v))[1].get("hair_px") or 0) for v in (1, 40, 100)]
+    if not (px[0] <= px[1] <= px[2]) or px[2] == 0:
+        bad.append(f"marked pixels at 1 / 40 / 100 of the slider: {px}")
+    # Light hairs in front of a dark wall (a light line that grows out of the lit face is a hair there: only a
+    # dark hair is asked what it grows out of); a close-up, with thicker hairs.
+    for tag, kw, taken, stay in (("light hairs on a dark wall", dict(wall=34.0, hair=92.0, line=150.0, seed=10), 0.35, ("fringe", "lash", "apart")),
+                                 ("close-up", dict(zoom=2.4, seed=11), 0.35, ("fringe", "lash", "face", "apart"))):
+        f2, s2, m2, full2 = _hair_frame(**kw)
+        o2, st2 = _quiet(H.make_engine(E, s2).process, f2, 8, dict(p, speedMode="fast", strayHair=100))
+        k2 = judged(tag, f2, m2, full2, o2, st2, taken=taken, stay=stay)
+        notes.append(f"{tag}: {100 * k2['out']:.0f}% left")
+    # the hairs go together with the usual clean, and the person stays untouched there too
+    out, st = _quiet(eng.process, frame, 8, dict(H.STD, smokeOn=False, cycCurve=65, speedMode="fast", strayHair=100))
+    comp = _comp(frame, out)
+    core = cv2.erode(sil_full, np.ones((7, 7), np.uint8)) > 0
+    if not st.get("hair_px") or float(np.abs(comp - frame.astype(np.float32))[core].max()) > 0.0:
+        bad.append(f"with the usual clean: hair_px {st.get('hair_px')}, the person changed by {np.abs(comp - frame.astype(np.float32))[core].max():.1f}")
+
+    # The big window: the slider moved after the window opened gives the frame of a window opened with that value,
+    # the quick way and the full way; back at 0 nothing is left of it.
+    big, sil_b, marks_b, full_b = _hair_frame(2100, 2800, seed=12)
+    win = dict(p, speedMode="quality")
+
+    def applied(eng_, sid):
+        return _quiet(eng_.apply_session, sid, 100.0, False, False, 0.0)[0]
+
+    e_ref = H.make_engine(E, sil_b)
+    ref100 = applied(e_ref, _quiet(e_ref.start_session, big, 8, dict(win, strayHair=100))["session_id"])
+    e_ref0 = H.make_engine(E, sil_b)
+    ref0 = applied(e_ref0, _quiet(e_ref0.start_session, big, 8, dict(win))["session_id"])
+    if int(ref0[..., 3].max()) != 0 or int(ref100[..., 3].max()) == 0:
+        bad.append("window: a session opened with the slider at 0 / at 100 gives a layer / no layer")
+    for quick in (True, False):
+        e1 = H.make_engine(E, sil_b)
+        r = _quiet(e1.start_session, big, 8, dict(win))
+        q = _quiet(e1.recompute_session, r["session_id"], dict(win, strayHair=100), True, None, quick)
+        if quick and (q.get("quick") is not True or not q["stats"].get("hair_px")):
+            bad.append(f"window: the light refresh did not mark the hairs (quick {q.get('quick')}, hair_px {q['stats'].get('hair_px')})")
+        if not np.array_equal(applied(e1, r["session_id"]), ref100):
+            bad.append(f"window: slider moved to 100 ({'light refresh' if quick else 'full recompute'}), then Apply: not the frame of a window opened at 100")
+        e2 = H.make_engine(E, sil_b)
+        r = _quiet(e2.start_session, big, 8, dict(win, strayHair=100))
+        q = _quiet(e2.recompute_session, r["session_id"], dict(win, strayHair=0), True, None, quick)
+        if q["stats"].get("hair_px") or not np.array_equal(applied(e2, r["session_id"]), ref0):
+            bad.append(f"window: slider back at 0 ({'light refresh' if quick else 'full recompute'}), then Apply: something of the hair repair is left")
+    report("hair", not bad, "; ".join(notes) + "; the person untouched; slider at 0: nothing looked for; the big window: light refresh and full recompute == opened with that value"
+           if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
 def check_plugin():
     root = H.REPO_ROOT
     r = subprocess.run([sys.executable, os.path.join(root, "tools", "build_ccx.py"), "--check"], capture_output=True, text=True)
@@ -4410,6 +4784,7 @@ GROUPS = [("convert", check_convert), ("process", check_process), ("stage", chec
           ("brush", check_brush),
           ("dark", check_dark), ("gear", check_gear), ("shadow", check_shadow), ("undo", check_undo),
           ("exact", check_exact), ("sharp", check_sharp),
+          ("edge", check_edge), ("line", check_line), ("hair", check_hair),
           ("server", check_server), ("http", check_http),
           ("folders", lambda: IC.check_folders(report)), ("install", lambda: IC.check_install(report)),
           ("bat", lambda: IC.check_bat(report)), ("plugin", check_plugin)]

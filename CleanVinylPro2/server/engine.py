@@ -826,6 +826,8 @@ class CleanVinylEngine:
     # brightness of the photo changes (a guided filter - the matte is 1024 pixels wide, the photo five times that).
     TONE_GATE_R = 1.5         # half-size of that window, in pixels of the 1024 matte
     TONE_GATE_EPS = 1.0e-4    # an edge of the photo weaker than about its square root (of 0..1) is not followed
+    TONE_GATE_FLOOR = 10      # of 255: a pixel that is the person to more than 96% takes no shift at all
+    TONE_GATE_SURE = 224      # of 255: where the network is this sure of the person, the photo is not asked
     _TONE_GATE_LUT = np.clip(np.rint(255.0 * (1.0 - np.clip((np.arange(256, dtype=np.float32) / 255.0 - 0.30) / 0.40, 0.0, 1.0))), 0, 255).astype(np.uint8)
 
     @staticmethod
@@ -876,6 +878,9 @@ class CleanVinylEngine:
         that fits the matte best. A backdrop pixel next to a dark hem is as light as the backdrop and gets the full
         shift; the hem gets none; a hair in front of the wall gets what shows of the wall through it. Where the
         photo has no edge (a white dress on a white wall) the answer is the matte, softened.
+        The photo is asked only where the network itself is in doubt - along its soft edge. Where it is sure of
+        the person (TONE_GATE_SURE) nothing is shifted, whatever the brightness says: a bare leg as light as the
+        floor behind it has no edge to go by, and the fit would let a part of the shift onto it.
         Never less than the former gate.
         """
         h, w = img_rgb_u8.shape[:2]
@@ -894,7 +899,8 @@ class CleanVinylEngine:
             self._checkpoint()
             yb = min(y1, ya + 768)
             a0, b0 = max(y0, ya - m2), min(y1, yb + m2)
-            p = cv2.LUT(self._tight_person_rows(tight_1024, w, h, a0, b0, x0, x1), self._TONE_GATE_LUT).astype(np.float32) * (1.0 / 255.0)
+            t_rows = self._tight_person_rows(tight_1024, w, h, a0, b0, x0, x1)
+            p = cv2.LUT(t_rows, self._TONE_GATE_LUT).astype(np.float32) * (1.0 / 255.0)
             g = cv2.cvtColor(np.ascontiguousarray(img_rgb_u8[a0:b0, x0:x1]), cv2.COLOR_RGB2GRAY).astype(np.float32) * (1.0 / 255.0)
             m_g, m_p = cv2.blur(g, k), cv2.blur(p, k)
             cov = cv2.blur(g * p, k) - m_g * m_p
@@ -903,6 +909,10 @@ class CleanVinylEngine:
             b = m_p - a * m_g
             q = cv2.blur(a, k) * g + cv2.blur(b, k)
             q8 = np.clip(np.rint(q[ya - a0:yb - a0] * 255.0), 0, 255).astype(np.uint8)
+            # (the fit leaves a few 255ths on pixels that are plainly the person: they would move by a fraction of
+            #  a level with the backdrop - nothing to see, and yet "the person is never touched" would not hold)
+            q8[q8 < self.TONE_GATE_FLOOR] = 0
+            q8[t_rows[ya - a0:yb - a0] >= self.TONE_GATE_SURE] = 0
             view = gate[ya:yb, x0:x1]
             np.maximum(view, q8, out=view)
         return gate
@@ -1893,7 +1903,7 @@ class CleanVinylEngine:
     #   a line that only runs along the outline; a line shorter than HAIR_MIN_LEN of the head (an eyelash in
     #   profile is about a twentieth); a dark line that grows out of something light (a dark hair grows out of
     #   dark hair - an eyelash on a lit face, a hair in front of a white sleeve do not); a tuft too dense to be
-    #   single hairs; a line that goes on beyond the searched zone (a cable, a pole); gear, smoke, cast shadows.
+    #   single hairs; a line that goes on beyond the searched zone (a cable, a pole); gear and smoke.
     #   Every size is measured in head widths, and a close-up is searched on a reduced copy, so a hair is the same
     #   few pixels thick whatever the framing.
     # It cannot tell a hair from other thin things that stand clear of a head - a thin earring, a chain, the stem
@@ -1964,13 +1974,15 @@ class CleanVinylEngine:
         return out
 
     def _detect_stray_hairs(self, img_rgb_u8: np.ndarray, tight_1024: np.ndarray, fg_mask_u8: np.ndarray,
-                            stand_s: np.ndarray, smoke_s: np.ndarray, shadow_s: np.ndarray, strength: float,
+                            stand_s: np.ndarray, smoke_s: np.ndarray, strength: float,
                             info: dict | None = None) -> np.ndarray:
         """
         The single hairs that stick out of the hairdo (see above), as a mask of the frame (uint8, 1 = repair).
         tight_1024: the person without the margin (_tight_person_1024); fg_mask_u8: the protection mask (the
-        usual response of the backdrop is measured outside it); stand_s / smoke_s / shadow_s: the maps of the
-        gear, of the smoke and of the cast shadows (nothing is taken there).
+        usual response of the backdrop is measured outside it); stand_s / smoke_s: the maps of the gear and of
+        the smoke (nothing is taken there). The map of the cast shadows is not asked: it calls "shadow" whatever
+        is darker than what lies around - the wall next to a light hair, the gaps between hairs - and a thin
+        sharp line is no shadow.
         strength: the slider, 0..100 - how faint and how short a hair may be.
         info: receives "hairs", "head_px", "scale", "thr_dark", "thr_light", "min_len".
         """
@@ -2014,26 +2026,26 @@ class CleanVinylEngine:
             M = np.float32([[fx / ws, 0, (x0 + 0.5 / ws) * fx - 0.5], [0, fy / ws, (y0 + 0.5 / ws) * fy - 0.5]])
             return cv2.warpAffine(src, M, (bw_, bh_), flags=interp | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE)
 
-        # where nothing is taken: the person with the guard strip, far from the person, gear, smoke, cast shadows
+        # where nothing is taken: the person with the guard strip, far from the person, gear, smoke
         guard = 2 * max(1, int(round(self.HAIR_GUARD * long_side / 1024.0 * ws))) + 1
         solid = cv2.dilate((box_of(tight_1024) >= 77).astype(np.uint8),
                            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (guard, guard)))
         def wide_only(small: np.ndarray, level: int) -> np.ndarray:
             """
-            The map of the gear or of the cast shadows with its thin parts dropped. To those maps a strong hair
-            is itself a thin thing and a thin shadow: taken as they are, they would hide exactly the hairs that
-            show most. A stand, a softbox, the shadow of a head on the wall are wide. (A cable or a pole that
-            passes behind the head is told by its length: see "leaves the zone" below.)
+            The map of the gear with its thin parts dropped. To that map a strong hair is itself a thin thing
+            that the person holds: taken as it is, the map would hide exactly the hairs that show most. The body
+            of a lamp, a softbox, a stool are wide (GEAR_BODY_K, the measure the map itself tells a body by). A
+            cable or a pole that passes behind the head is told by its length: see "leaves the zone" below.
             """
             flagged = (small > level).astype(np.uint8) * np.uint8(255)
-            if min(flagged.shape[:2]) < 9:
+            k = int(self.GEAR_BODY_K)
+            if min(flagged.shape[:2]) <= k:
                 return flagged
-            return cv2.morphologyEx(flagged, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)))
+            return cv2.morphologyEx(flagged, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
 
         bad = (solid > 0) | (box_of(near_s * np.uint8(255), cv2.INTER_NEAREST) < 128)
         bad |= box_of(wide_only(stand_s, 75)) > 127
         bad |= box_of(smoke_s) > 65
-        bad |= box_of(wide_only(shadow_s, 65)) > 127
         pad = max(3, int(round(min(14, int(0.012 * min(h, w))) * ws)))
         for cut, at_edge in ((np.s_[:pad], y0 == 0), (np.s_[bh_ - pad:], y1 == h),
                              (np.s_[:, :pad], x0 == 0), (np.s_[:, bw_ - pad:], x1 == w)):
@@ -4419,7 +4431,7 @@ class CleanVinylEngine:
                                     (near_mask,) = rec_part
                                 else:
                                     near_mask = self._detect_stray_hairs(
-                                        img_rgb_u8, tight_1024, eff_fg_for_spots, eff_stand_protect, smoke_s, shadow_s, hair_eff)
+                                        img_rgb_u8, tight_1024, eff_fg_for_spots, eff_stand_protect, smoke_s, hair_eff)
                                     _sc_put("hair", k_hair, (near_mask,))
 
                             heal_mask = np.maximum(seam_mask, spot_mask)
@@ -4471,6 +4483,10 @@ class CleanVinylEngine:
                 small_specks_healed = 0
                 lama_f32 = None
                 tiles_run = 0
+                # the person with the guard strip of the hair search: there the source of a hair repair is painted
+                # over, and nothing of that repair may be blended in
+                hair_solid = (self._person_solid(tight_1024, w, h)
+                              if (near_mask is not None and tight_1024 is not None and hit_heal is None and do_inpaint) else None)
                 if hit_heal is not None:
                     tiles_run, small_specks_healed = hit_heal["tiles_run"], hit_heal["small_specks"]
                     _prog(78, "Підготовка шару...")
@@ -4488,7 +4504,7 @@ class CleanVinylEngine:
                         # that ends before the band, and far too rough to repair in: the tone of that average is
                         # not the tone of the wall right behind the head. With hairs to repair, only the person as
                         # the network drew it is painted over, and next to the outline with what lies right there.
-                        solid_full = self._person_solid(tight_1024, w, h) if (near_mask is not None and tight_1024 is not None) else None
+                        solid_full = hair_solid
                         if solid_full is not None:
                             fg_bad_s = cv2.resize(solid_full.view(np.uint8) * np.uint8(255), (sw_s, sh_s_dim), interpolation=cv2.INTER_AREA) > 22
                         else:
@@ -4561,8 +4577,9 @@ class CleanVinylEngine:
                         # The one exception are the single hairs (near_mask): they are repaired inside the band,
                         # wherever they were marked - the mark never reaches the person (_detect_stray_hairs).
                         lift = None
-                        if near_mask is not None:
+                        if near_mask is not None and hair_solid is not None:
                             lift = cv2.GaussianBlur(near_mask.astype(np.float32), (k_ha, k_ha), 0)
+                            lift[hair_solid] = 0.0   # (the soft edge of the mark ends where the guard strip begins)
                         for cy0, cy1, cx0, cx1 in heal_cells:
                             allow = 1.0 - np.clip((eff_fg_for_spots[cy0:cy1, cx0:cx1].astype(np.float32) - 40.0) / 170.0, 0.0, 1.0)
                             if lift is not None:
@@ -4856,7 +4873,6 @@ class CleanVinylEngine:
                 "speed_mode": speed_mode,
                 "seam_px": seam_px,
                 "spot_px": spot_px,
-                "hair_px": hair_px,
                 "dress_smooth": dress_smooth_on,
                 "changed_px": changed_px,
                 "reused_stages": reused_stages,
@@ -4870,6 +4886,8 @@ class CleanVinylEngine:
                 stats["corner_row"] = None if corner_line is None else round(float((corner_line["row"] + 0.5) / max(h, 1)), 4)
                 # how many pieces of a thin line were found along the corner and taken out with it
                 stats["corner_hair"] = 0 if corner_line is None else len(corner_line.get("hair") or ())
+            if hair_eff > 0:
+                stats["hair_px"] = hair_px  # pixels marked as single hairs (only said when the tool is on)
             return out_rgba, stats
         finally:
             self._end_job()
