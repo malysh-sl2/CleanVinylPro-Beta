@@ -927,6 +927,23 @@ async def session_apply(request: Request):
         return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
 
+@app.post("/session/stop-background")
+async def session_stop_background(request: Request):
+    """
+    The user took hold of a slider of the big window: the exact picture that is being computed in the background
+    will not be wanted. That run stops at its next safe place (its own request answers "superseded").
+    """
+    eng = get_engine()
+    if eng is None:
+        return {"ok": True, "stopped": False}
+    try:
+        body = await request.json()
+        sid = str(body.get("session_id", ""))
+    except Exception:
+        sid = ""
+    return eng.stop_background(sid)
+
+
 @app.post("/session/close")
 async def session_close(request: Request):
     eng = get_engine()

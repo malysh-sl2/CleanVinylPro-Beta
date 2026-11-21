@@ -55,8 +55,9 @@ Part 2 - what this program does differently from v3.2.1, each with its own measu
   exact     the exact picture of the big window comes by itself: a background recompute gives the frame of a full
             recompute; the brush and the eraser are answered while it computes and stay in the result; new slider
             values, Apply, closing the window or another photo make it stop at its next safe place with the
-            session untouched (tried at every such place); Apply waits for it when it computes the very frame
-            Apply needs; a mask that is the user's own drawing is never replaced by itself
+            session untouched (tried at every such place), and so does the window when a slider is taken; Apply
+            waits for it when it computes the very frame Apply needs; a mask that is the user's own drawing is
+            never replaced by itself; the clothing switch used meanwhile shows in the exact pictures
 
 Part 3 - the program around the engine:
   server    settings migration, binary packets, one version everywhere; the name a person reads has no 2 (since
@@ -2687,6 +2688,21 @@ def _http_quick_round_trip(client, srv, packet, split, bad) -> int:
         r = client.post("/session/recompute", json=dict(session_id=sid, params=p3, preserve_edits=True, background=True, jobId="c")); n += 1
         if r.status_code != 200 or r.json().get("skipped") is not True or r.json().get("exact") is not False or "comp_jpg_b64" in r.json():
             bad.append("/session/recompute with background=true and the user's own mask on screen must answer skipped=true")
+        # "a slider was taken": the request reaches the engine with the session it names
+        told = []
+        plain_stop = srv.ENGINE.stop_background
+
+        def watched_stop(session_id):
+            told.append(session_id)
+            return plain_stop(session_id)
+
+        srv.ENGINE.stop_background = watched_stop
+        r = client.post("/session/stop-background", json=dict(session_id=sid)); n += 1
+        r2 = client.post("/session/stop-background", json=dict(session_id="another-window")); n += 1
+        srv.ENGINE.stop_background = plain_stop
+        if r.status_code != 200 or r.json() != {"ok": True, "stopped": False} or r2.json() != {"ok": True, "stopped": False} \
+                or told != [sid, "another-window"]:
+            bad.append(f"/session/stop-background must hand the session to the engine and answer stopped=false when nothing runs: {told}")
         asked_to_follow = []
         plain_apply = srv.ENGINE.apply_session
 
@@ -3659,8 +3675,8 @@ def check_exact():
     report("exact", not bad,
            f"a background recompute gives the frame of a full one ({n_places} safe places); it gave way at {tried} of them with the "
            "session untouched and the next run correct; strokes are answered and kept meanwhile, the clothing switch too; new "
-           "values, Apply, closing and another photo stop it; Apply waits for the frame it needs (computed once); the user's "
-           "own mask is never replaced"
+           "values, a slider taken, Apply, closing and another photo stop it; Apply waits for the frame it needs (computed "
+           "once); the user's own mask is never replaced"
            if not bad else "wrong:\n   " + "\n   ".join(bad))
 
 
@@ -3759,7 +3775,7 @@ def _exact_cases():
         return False
 
     def idle(eng):
-        return (not eng._compute_lock.locked() and not eng.lock.locked() and eng._active_jobs == 0
+        return (not eng._compute_lock.locked() and not eng.lock.locked() and eng._active_jobs == 0 and eng._bg_runs == 0
                 and eng._compute_waiters == 0 and getattr(eng._bg_local, "check", None) is None and eng._bg_follower is None)
 
     def gave_way(ans):
@@ -3903,6 +3919,46 @@ def _exact_cases():
     ans2 = box2.get("ans") or {}
     if not waited or not gave_way(box.get("ans")) or ans2.get("exact") is not True or pictures(ans2) != pictures(ref) or not idle(eng):
         bad.append("a newer background run must make the older one give way, and come out as an undisturbed one")
+
+    # ---- 4b. the window says that a slider was taken (stop_background): the run stops although nobody waits for
+    #          the frame yet; a run asked for afterwards is not affected
+    eng, sid = opened()
+    gate, th, box = held_run(eng, sid)
+    told = eng.stop_background(sid)
+    gate.open()
+    th.join(120)
+    if told != {"ok": True, "stopped": True} or not gave_way(box.get("ans")) or state(eng) != light_state or not idle(eng):
+        bad.append(f"stop_background during a background run: the run must stop and leave the session untouched ({told})")
+    if eng.stop_background(sid) != {"ok": True, "stopped": False} or eng.stop_background("another-window") != {"ok": True, "stopped": False}:
+        bad.append("stop_background with no background run, or for another window, must answer stopped=False")
+    ans = recompute(eng, sid, moved, background=True)
+    if pictures(ans) != pictures(ref) or state(eng) != ref_state or not idle(eng):
+        bad.append("a background run asked for after stop_background must run to its end")
+    # ...and a run that still waits for its turn when the window says so does not start at all
+    eng, sid = opened()
+    runs = []
+    plain_process = eng.process
+
+    def counted_process(*a, **k):
+        runs.append(1)
+        return plain_process(*a, **k)
+
+    eng.process = counted_process
+    front = Gate()
+    th, box = in_thread(lambda: recompute(eng, sid, moved, cb=front))            # a recompute the user waits for...
+    front.reached.wait(120)
+    th2, box2 = in_thread(lambda: recompute(eng, sid, moved, background=True))   # ...and a background one behind it
+    for _ in range(1200):
+        if eng._bg_runs == 1 and eng._compute_waiters == 1:
+            break
+        time.sleep(0.01)
+    told = eng.stop_background(sid)
+    front.open()
+    th.join(120)
+    th2.join(120)
+    eng.process = plain_process
+    if told != {"ok": True, "stopped": True} or not gave_way(box2.get("ans")) or len(runs) != 1 or state(eng) != ref_state or not idle(eng):
+        bad.append(f"stop_background for a run that still waits for its turn: it must not start (frames computed: {len(runs)}, {told})")
 
     # ---- 5. Apply: waits for a run that computes the very frame it needs; stops it otherwise. The layer is the same.
     eng, sid = opened()

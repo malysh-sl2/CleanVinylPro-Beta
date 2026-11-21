@@ -1663,8 +1663,8 @@ function findLayerById(layers, targetId) {
   return null;
 }
 
-// The layers this plugin makes. Up to 4.7.0 the program was called "Чистий Вініл Pro 2" and its layers carried
-// the 2 as well: a document that holds such a layer is still served by the "До / Після" button of the panel.
+// The layers this plugin makes. Up to 4.7.0 the program was called «Чистий Вініл Pro 2» and its layers carried
+// the 2 as well: a document that holds such a layer is still served by the «До / Після» button of the panel.
 const LAYER_NAME_AI = "Чистий вініл (AI)";
 const LAYER_NAME_SELECTION = "Чистий вініл (Виділення)";
 const PLUGIN_LAYER_NAMES = [LAYER_NAME_AI, LAYER_NAME_SELECTION, "Чистий вініл 2 (AI)", "Чистий вініл 2 (Виділення)"];
@@ -2217,6 +2217,19 @@ function fireExactPreview() {
     return;
   }
   runExactPreview();
+}
+
+// A slider that changes the frame was taken hold of while the exact picture is being computed: that picture will
+// not be wanted. The server is told at once, so the run stops while the slider is still being moved - and the
+// refresh that follows the release does not have to wait for it to stop. (Without this the run stops all the
+// same, but only when that refresh arrives.) A server before 4.8.0 has no background runs.
+function stopBackgroundRun() {
+  if (!sessState.open || !sessState.id || exactJobs.size === 0 || sessState.bgUnsupported) return;
+  fetch(`${SERVER_URL}/session/stop-background`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessState.id })
+  }).catch(() => {});
 }
 
 function stopExactPolling() {
@@ -3568,6 +3581,9 @@ function initEvents() {
       activeDragSliderId = id;
       // Nothing is recomputed while a slider is being dragged; a refresh that was waiting is put off as well.
       cancelPreviewTimer();
+      // ...and the exact picture that is being computed right now will not be wanted if this slider moves
+      // (Blend and Clothing change nothing of the frame)
+      if (id !== "dlgSlBlend" && id !== "gSlDress") stopBackgroundRun();
       updatePreviewBadge();
       const tipOwner = node.closest ? node.closest("[data-tip]") : null;
       if (tipOwner) showTipForElement(tipOwner);
@@ -3616,6 +3632,10 @@ function initEvents() {
     if (finishedSliderId && finishedSliderId !== "dlgSlBlend" && finishedSliderId !== "gSlDress") {
       if (finishedSliderId === "gSlSmoke") askSmokeNote();
       requestPreviewRefresh(PREVIEW_DELAY_SLIDER_MS, false);
+    } else if (finishedSliderId) {
+      // Blend and Clothing change nothing of the frame. But whatever was waiting when the slider was taken - a
+      // light refresh, the exact picture - was put off, and goes on now.
+      requestPreviewRefresh(PREVIEW_DELAY_CLICK_MS, false);
     }
 
     if (finishedSliderId === "gSlDress" && sessState.open && sessState.id && dressSmoothEnabled) {

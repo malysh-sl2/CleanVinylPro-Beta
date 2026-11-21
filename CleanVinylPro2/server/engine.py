@@ -183,6 +183,8 @@ class CleanVinylEngine:
         self._compute_waiters = 0
         self._bg_local = threading.local()  # .check is set in the thread of a background recompute
         self._bg_follower = None            # the progress of the running background recompute also goes here
+        self._bg_stop = 0                   # goes up each time the window asks background recomputes to stop
+        self._bg_runs = 0                   # background recomputes that were asked for and have not answered yet
         self._active_jobs = 0
         self._last_used_mono = time.monotonic()
         self._unload_timer = None
@@ -5622,6 +5624,7 @@ class CleanVinylEngine:
         self._session_or_raise(session_id, stale_msg)
 
         t0 = time.perf_counter()
+        counted = False
         self._begin_job()
         try:
             if not background:
@@ -5636,9 +5639,15 @@ class CleanVinylEngine:
 
             # A background run waits for its turn like everybody else (so an older background run gives way to a
             # newer one), but holds the session itself only at the two ends.
+            with self._state_lock:
+                stop_mark = self._bg_stop  # (stop_background() after this moment is meant for this run too)
+                self._bg_runs += 1
+            counted = True
             with self._compute_turn():
                 with self._session_lock:
                     sess = self._session_or_raise(session_id, stale_msg)
+                    if self._bg_stop != stop_mark:
+                        return {"ok": True, "session_id": session_id, "superseded": True}
                     p, clean_params = self._recompute_params(sess, params)
                     refine_only = self._clean_signature(p) == self._clean_signature(sess["params"])
                     if refine_only and sess.get("mask_detached"):
@@ -5648,7 +5657,7 @@ class CleanVinylEngine:
                     sess["dress_live"] = (bool(p.get("dressSmooth", False)), float(p.get("dressStrength", 45)))
 
                 def give_way():
-                    if self._compute_waiters > 0 or self._active_session is not sess:
+                    if self._compute_waiters > 0 or self._active_session is not sess or self._bg_stop != stop_mark:
                         raise JobSuperseded()
 
                 def progress(pct: int, txt: str):
@@ -5674,7 +5683,25 @@ class CleanVinylEngine:
                         return {"ok": True, "session_id": session_id, "skipped": True, **self._picture_state(sess)}
                     return self._recompute_commit(sess, p, computed, True, t0, dress=sess.get("dress_live"))
         finally:
+            if counted:
+                with self._state_lock:
+                    self._bg_runs -= 1
             self._end_job()
+
+    def stop_background(self, session_id: str) -> dict:
+        """
+        The window says that the frame a background recompute is computing will not be wanted: the user has
+        taken hold of a slider. A run that is on its way (or still waits for its turn) stops at its next safe
+        place and answers {"superseded": True} - while the slider is still being moved. The refresh that follows
+        the release then starts at once instead of waiting for that run to give way.
+        Nothing else changes; without a background run this does nothing. Runs asked for later are not affected.
+        """
+        with self._state_lock:
+            sess = self._active_session
+            if not sess or sess["id"] != session_id:
+                return {"ok": True, "stopped": False}
+            self._bg_stop += 1
+            return {"ok": True, "stopped": self._bg_runs > 0}
 
     def edit_session_mask(
         self,

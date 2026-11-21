@@ -294,6 +294,13 @@ function makeEnv(serverOpts = {}) {
         case "/session/close":
           stopBackground();   // closing the window stops a background run
           return reply({ ok: true });
+        case "/session/stop-background": {
+          // the user took hold of a slider: a background run that is on its way stops
+          if (!server.bgAware) return reply({ detail: "Not Found" }, 404);
+          const stopped = bgRuns.size > 0;
+          stopBackground();
+          return reply({ ok: true, stopped });
+        }
         case "/session/dress-preview":
           return reply(Object.assign({ ok: true, inverted: false, comp_jpg_b64: pic("dress-" + server.rev), overlay_jpg_b64: pic("dress-" + server.rev) }, pictureState()));
         case "/backup/save": {
@@ -918,13 +925,27 @@ async function main() {
     env.release();                                           // released where it was: nothing changed
     await env.waitFor(() => env.exacts().length === 1, 2000);
     expect(env.exacts().length === 1 && env.recomputes().length === 1, "the exact picture is asked for after the release");
+    expect(env.of("/session/stop-background").length === 0, "nothing was running when the slider was taken: the server is not bothered");
     await sleep(300);                                        // the background run is on its way...
     expect(!env.exacts()[0].done, "the background run must still be running");
-    await env.drag("gSlSpots", 80);                          // ...and the slider is moved again
+    env.press("dlgSlBlend", 60);                             // Blend changes nothing of the frame: the run goes on
+    await sleep(60);
+    env.release();
+    env.press("gSlDress", 60);                               // ...and so does Clothing
+    await sleep(60);
+    env.release();
+    expect(env.of("/session/stop-background").length === 0 && !env.exacts()[0].done, "Blend and Clothing must not stop the background run");
+    env.press("gSlSpots", 180);                              // a slider that changes the frame is taken...
+    await sleep(80);
+    expect(env.of("/session/stop-background").length === 1, "the server must be told at once that the frame will not be wanted");
+    expect(env.exacts()[0].done && env.exacts()[0].outcome === "superseded", "the background run stops while the slider is still held");
+    expect(env.recomputes().length === 1, "nothing else is asked while the slider is held");
+    for (const x of [176, 170, 164, 160]) { await sleep(15); env.move(x); }
+    env.release();                                           // ...moved and released
     await lightDone(env, 2);
     await sleep(30);
-    expect(env.server.bgSeen.superseded === 1, "the background run must give way to the light refresh");
-    expect(env.exacts()[0].outcome === "superseded", "the first exact request ends without a picture");
+    expect(env.server.bgSeen.superseded === 1, "one background run was stopped");
+    expect(env.of("/session/stop-background").length === 1, "one stop request, not more");
     expect(env.pictureName().startsWith("light-") && env.recomputes()[1].body.params.spots === 80, "the quick picture for the new value, got " + env.pictureName());
     expect(env.modeBadge().includes("уточнюється"), "still a quick picture: " + env.modeBadge());
     expect(env.exacts().length === 1, "no second exact request before the quiet moment");
@@ -934,6 +955,36 @@ async function main() {
     expect(env.pictureName().startsWith("exact-") && env.modeBadge() === "ПІСЛЯ · чисте фото", `the exact picture at the end: ${env.pictureName()} / ${env.modeBadge()}`);
     await env.settle(1200);
     expect(env.exacts().length === 2 && env.recomputes().length === 2, "and nothing after it");
+  });
+
+  await scenario("Blend or Clothing taken while a refresh was waiting: what was put off goes on after the release", { bgDelay: 300 }, async (env, expect) => {
+    await env.open();
+    await env.drag("gSlSpots", 90);
+    await lightDone(env);
+    await sleep(300);
+    env.press("dlgSlBlend", 120);                            // Blend is taken before the exact request went...
+    await sleep(900);
+    expect(env.exacts().length === 0, "nothing starts while a slider is held");
+    env.release();                                           // ...and released: the exact picture is still due
+    await exactDone(env);
+    await sleep(30);
+    expect(env.exacts().length === 1 && env.modeBadge() === "ПІСЛЯ · чисте фото", `the exact picture must come after the release: ${env.exacts().length} / ${env.modeBadge()}`);
+    env.click("dlgBtnGear");
+    env.click("gBtnDress");                                  // (the Clothing slider works only with the switch on)
+    await env.waitFor(() => env.of("/session/dress-preview").length === 1 && env.of("/session/dress-preview")[0].done, 1000);
+    env.click("dlgFracMed");                                 // a light refresh is due in a moment...
+    await sleep(40);
+    env.press("gSlDress", 100);                              // ...and Clothing is taken before it went
+    expect(env.state("activeDragSliderId") === "gSlDress", "the Clothing slider is held");
+    await sleep(600);
+    expect(env.recomputes().length === 1, "nothing is computed while a slider is held");
+    env.release();
+    await lightDone(env, 2);
+    expect(env.recomputes().length === 2 && env.recomputes()[1].body.quick === true, "the light refresh that was put off must go on after the release");
+    await exactDone(env, 2);
+    await sleep(30);
+    expect(env.exacts().length === 2 && env.badge() === "" && env.modeBadge() === "ПІСЛЯ · чисте фото", `...and its exact picture follows: '${env.badge()}' / '${env.modeBadge()}'`);
+    expect(env.of("/session/stop-background").length === 0, "Blend and Clothing never ask the server to stop anything");
   });
 
   await scenario("the brush works while the exact picture is on its way; an older picture never replaces a newer one", { bgDelay: 600, bgAnswerDelay: 600 }, async (env, expect) => {
