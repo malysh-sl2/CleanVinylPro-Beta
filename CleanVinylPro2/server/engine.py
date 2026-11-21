@@ -1889,8 +1889,8 @@ class CleanVinylEngine:
     # ------------------------------------------------------------------
     # The dust search never looks inside the protected band around the person, and it is tuned for specks. A hair
     # that stands away from the hairdo begins inside that band, and what the dust search takes of it is the far end
-    # at best. This search is for those hairs alone, and what it marks is repaired like dust - also inside the
-    # protected band (process()).
+    # at best. This search is for those hairs alone. What it marks is repaired like dust, and like every repair it
+    # fades out inside the protected band (process()): the first pixels of a hair, next to the hairdo, stay.
     #   What a stray hair is here: a thin line, darker or lighter than the backdrop behind it, that starts at the
     #   outline of the person and leads away from it, in the upper part of the figure (from the top of the head
     #   down HAIR_ZONE_DOWN head widths: hair is not looked for at the hem or at the shoes).
@@ -1917,7 +1917,7 @@ class CleanVinylEngine:
     HAIR_STICK_OUT = 0.07        # head widths: its far end is at least this far from the guard strip
     HAIR_ATTACH = 0.03           # head widths: its near end is at most this far from the fuzz of the outline
     HAIR_AWAY = 0.25             # of its length: a piece gets at least this much further from the person
-    HAIR_OUTWARD = 0.45          # ...and this share of it points away from the outline rather than along it
+    HAIR_OUTWARD = 0.45          # ...and this share of it (by strength) points away from the outline, not along it
     HAIR_GAP = 0.03              # head widths: pieces closer than this are one hair (a faint stretch, a crossing)
     HAIR_FLOOR = (3.5, 2.0)      # brightness levels above the usual response of the backdrop, slider 0 .. 100
     HAIR_SIGMA = (6.0, 3.0)      # ...and so many times the spread of that response, slider 0 .. 100
@@ -2213,11 +2213,16 @@ class CleanVinylEngine:
                 np.minimum.at(c_min, cid, cd)
                 np.maximum.at(c_max, cid, cd)
                 count = np.bincount(cid, minlength=n).astype(np.float32)
-                outw = np.bincount(cid, weights=outward, minlength=n).astype(np.float32)
+                # (every centre pixel counts by how far it stands out. Beside a strong line the kernels that cross
+                #  it leave faint centre pixels of their own, a few pixels to its side, and those point across it:
+                #  counted by the head, they made a strong straight line "run along the outline")
+                show = np.maximum(cv_.astype(np.float32) - med, 0.0)
+                shown = np.bincount(cid, weights=show, minlength=n).astype(np.float32)
+                outw = np.bincount(cid, weights=show * outward, minlength=n).astype(np.float32)
                 length = np.maximum(st[:, cv2.CC_STAT_WIDTH], st[:, cv2.CC_STAT_HEIGHT]).astype(np.float32) - 2.0
                 ok = ((peak > thr) & (total >= (med + self.HAIR_MEAN * rise) * count)
                       & (length >= piece_min) & (count <= self.HAIR_TUFT * length)
-                      & ((c_max - c_min) >= self.HAIR_AWAY * length) & (outw >= self.HAIR_OUTWARD * count))
+                      & ((c_max - c_min) >= self.HAIR_AWAY * length) & (outw >= self.HAIR_OUTWARD * shown))
                 ok[0] = False
                 sel = ok[cid]
                 py, px, d, pv = cy[sel], cx[sel], cd[sel], cv_[sel]
@@ -4355,7 +4360,7 @@ class CleanVinylEngine:
             corner_line = None  # the wall-floor corner (_corner_line_of_frame); None = not looked for or not there
             corner_frame = None  # the same before the selection rule (the line as the frame has it)
             tight_1024 = None   # the person without the margin (_tight_person_1024); None = not known
-            near_mask = None    # the part of the heal mask that is repaired inside the protected band (stray hairs)
+            near_mask = None    # the marks of the single hairs (a part of the heal mask); they begin inside the protected band
             hair_px = 0
             tone_gate = None    # the outline of the person for the tone stages (_tone_gate); None = the former way
             dress_src_1024 = None
@@ -4568,8 +4573,7 @@ class CleanVinylEngine:
                 small_specks_healed = 0
                 lama_f32 = None
                 tiles_run = 0
-                # the person with the guard strip of the hair search: there the source of a hair repair is painted
-                # over, and nothing of that repair may be blended in
+                # the person with the guard strip of the hair search: there the source of a hair repair is painted over
                 hair_solid = (self._person_solid(tight_1024, w, h)
                               if (near_mask is not None and tight_1024 is not None and hit_heal is None and do_inpaint) else None)
                 if hit_heal is not None:
@@ -4584,11 +4588,12 @@ class CleanVinylEngine:
                         s_sc = min(1.0, 640.0 / max(h, w))
                         sw_s, sh_s_dim = max(16, int(round(w * s_sc))), max(16, int(round(h * s_sc)))
                         src_s = cv2.resize(img_rgb_u8, (sw_s, sh_s_dim), interpolation=cv2.INTER_AREA).astype(np.float32)
-                        # Single hairs are repaired INSIDE the protected band. The band painted over with a wide
-                        # average of the backdrop is good enough to keep the colours of the person out of a repair
-                        # that ends before the band, and far too rough to repair in: the tone of that average is
-                        # not the tone of the wall right behind the head. With hairs to repair, only the person as
-                        # the network drew it is painted over, and next to the outline with what lies right there.
+                        # The mark of a single hair begins INSIDE the protected band, at the guard strip of the
+                        # person. The band painted over with a wide average of the backdrop is good enough to keep
+                        # the colours of the person out of a repair that ends before the band, and far too rough
+                        # to repair next to: the tone of that average is not the tone of the wall right behind the
+                        # head. With hairs to repair, only the person as the network drew it is painted over, and
+                        # next to the outline with what lies right there.
                         solid_full = hair_solid
                         if solid_full is not None:
                             fg_bad_s = cv2.resize(solid_full.view(np.uint8) * np.uint8(255), (sw_s, sh_s_dim), interpolation=cv2.INTER_AREA) > 22
@@ -4659,18 +4664,15 @@ class CleanVinylEngine:
                         # "toneEdge". The repair used to be blended into the frame under the protected band too and
                         # was only hidden there by the layer alpha. Now that the tone stages make the layer visible
                         # right up to the person, the frame itself must be untouched wherever the protection says so.
-                        # The one exception are the single hairs (near_mask): they are repaired inside the band,
-                        # wherever they were marked - the mark never reaches the person (_detect_stray_hairs).
-                        lift = None
-                        if near_mask is not None and hair_solid is not None:
-                            lift = cv2.GaussianBlur(near_mask.astype(np.float32), (k_ha, k_ha), 0)
-                            lift[hair_solid] = 0.0   # (the soft edge of the mark ends where the guard strip begins)
+                        # That goes for the single hairs too. A hair is marked from the guard strip of the person
+                        # outwards, so its mark begins inside the band: there it fades in with the band, like every
+                        # repair. (For a while the mark was blended at full strength inside the band. What that
+                        # gained was a stub a few pixels shorter - a hair kept 25% instead of 52% of its contrast
+                        # over the outer 4 pixels of the band of a 2000 px frame - at the price of an exception to
+                        # "nothing is repaired inside the protection".)
                         for cy0, cy1, cx0, cx1 in heal_cells:
                             allow = 1.0 - np.clip((eff_fg_for_spots[cy0:cy1, cx0:cx1].astype(np.float32) - 40.0) / 170.0, 0.0, 1.0)
-                            if lift is not None:
-                                np.maximum(allow, np.minimum(1.0, 2.0 * lift[cy0:cy1, cx0:cx1]), out=allow)
                             heal_alpha[cy0:cy1, cx0:cx1] *= allow
-                        del lift
                     if heal_bbox is not None:
                         y0h, y1h, x0h, x1h = heal_bbox
                         rng = np.random.default_rng(42)

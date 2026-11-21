@@ -89,6 +89,8 @@ DEFECTS = [
      "                                        skip_line = dict(skip_line, half=skip_line.get(\"zone\", skip_line[\"half\"]))\n",
      "                                        pass\n"),
     # ---- single hairs, the search (4.9.0)
+    # Not in the list, because they change nothing that can be seen: HAIR_AWAY taken out alone (HAIR_OUTWARD turns
+    # the same pieces away), and either half of the strength test of a piece (HAIR_MEAN, the peak) in these scenes.
     ("hair: a line that touches nobody is a hair", "hair", ENGINE,
      "                good = ((d_min <= attach) & (d_max >= stick_out) & (d_max < leaves) & ~at_border\n",
      "                good = ((d_max >= stick_out) & (d_max < leaves) & ~at_border\n"),
@@ -111,8 +113,11 @@ DEFECTS = [
      "                        if inside > tone + 0.5 * depth:\n",
      "                        if False:\n"),
     ("hair: a hair that runs along the outline is taken", "hair", ENGINE,
-     "                      & ((c_max - c_min) >= self.HAIR_AWAY * length) & (outw >= self.HAIR_OUTWARD * count))\n",
+     "                      & ((c_max - c_min) >= self.HAIR_AWAY * length) & (outw >= self.HAIR_OUTWARD * shown))\n",
      "                      & ((c_max - c_min) >= self.HAIR_AWAY * length))\n"),
+    ("hair: the faint side lines of a strong hair count as much as the hair (it then 'runs along the outline')", "hair", ENGINE,
+     "                show = np.maximum(cv_.astype(np.float32) - med, 0.0)\n",
+     "                show = np.ones(cv_.shape, dtype=np.float32)\n"),
     ("hair: a wisp of crossing hairs is taken", "hair", ENGINE,
      "                      & (length >= piece_min) & (count <= self.HAIR_TUFT * length)\n",
      "                      & (length >= piece_min)\n"),
@@ -126,12 +131,6 @@ DEFECTS = [
      "        for op, gain in ((cv2.MORPH_BLACKHAT, 1.0), (cv2.MORPH_TOPHAT, self.HAIR_LIGHT)):\n",
      "        for op, gain in ((cv2.MORPH_BLACKHAT, 1.0),):\n"),
     # ---- single hairs, the repair and the window (4.9.0)
-    ("hair: a hair inside the protected band is found but not blended in", "hair", ENGINE,
-     "                                np.maximum(allow, np.minimum(1.0, 2.0 * lift[cy0:cy1, cx0:cx1]), out=allow)\n",
-     "                                pass\n"),
-    ("hair: the soft edge of a hair repair reaches into the person", "hair", ENGINE,
-     "                            lift[hair_solid] = 0.0   # (the soft edge of the mark ends where the guard strip begins)\n",
-     ""),
     ("hair: around a hair the repair is shown an average of the backdrop, not the photo", "hair", ENGINE,
      "                        solid_full = hair_solid\n",
      "                        solid_full = None\n"),

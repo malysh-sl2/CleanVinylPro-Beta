@@ -68,11 +68,13 @@ Part 2 - what this program does differently from v3.2.1, each with its own measu
             tone is left around it (the rim along a hem and around the shoes); the person is not touched; the
             repair away from the person is what it was
   line      a joint of the vinyl that the corner tool takes for the corner: its thin dark line goes with the step,
-            with the seam tool on and off; a joint or a corner without such a line: nothing is taken out
-  hair      the slider of the single hairs: hairs that stick out of the hairdo are repaired, also inside the
-            protected band, from the wall as the photo has it; what stays: the fuzz of the outline, a hair that
+            with the seam tool on and off - also when the line runs beside the middle of the step (one line, one
+            tool: the seam tool marks nothing of it); a joint or a corner without such a line: nothing is taken out
+  hair      the slider of the single hairs: hairs that stick out of the hairdo are repaired (also a dead straight
+            one), from the wall as the photo has it; what stays: the fuzz of the outline, a hair that
             runs along it, an eyelash, a dark line that grows out of the lit face, a line that touches nobody, a
-            wisp of crossing hairs, a thread at the clothes, a cable (also one crossed by hairs) and the person;
+            wisp of crossing hairs, a thread at the clothes, a cable (also one crossed by hairs), a pole that goes
+            on beyond the searched zone or to the top of the frame, and the person;
             the lower the slider, the longer a hair must be, and a higher position never takes less; dark and
             light hairs, a close-up; at 0 nothing is looked for; in the big window a light refresh and a full
             recompute give the frame of that slider value
@@ -4507,13 +4509,14 @@ def check_edge():
            if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
-def _hairline_frame(w=1500, h=2000, at=0.77, slope=0.012, depth=2.2, lit=30.0, level=24.0, seed=21, noise=1.1, line=True):
+def _hairline_frame(w=1500, h=2000, at=0.77, slope=0.012, depth=2.2, lit=30.0, level=24.0, seed=21, noise=1.1, line=True, off=0.0):
     """
     A dark floor with the joint of two vinyl sheets across the frame, as on the owner's frame 3417: above the joint
     the floor is lit, below it is not, and along the joint runs a thin dark line - `depth` levels deep, two pixels
     wide, a little tilted. There is no wall-floor corner sharp enough to be found: the joint is what the corner tool
-    takes for the corner. line=False: the same frame without the thin line.
-    Returns (frame, silhouette, the row of the joint for every column).
+    takes for the corner. line=False: the same frame without the thin line. off: the thin line runs so many pixels
+    below the middle of the step of light.
+    Returns (frame, silhouette, the row of the thin line for every column).
     """
     rng = np.random.default_rng(seed)
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
@@ -4521,6 +4524,7 @@ def _hairline_frame(w=1500, h=2000, at=0.77, slope=0.012, depth=2.2, lit=30.0, l
     t = 1.0 / (1.0 + np.exp(-np.clip((yy - rows[None, :]) / (0.004 * h), -40, 40)))
     lum = level + lit * (1.0 - t) * (0.55 + 0.45 * np.exp(-((xx / w - 0.62) / 0.45) ** 2))
     lum = lum * (1.0 - 0.10 * ((xx / w - 0.5) * 2) ** 2)
+    rows = rows + off
     if line:
         lum -= depth * np.exp(-0.5 * ((yy - rows[None, :]) / 0.9) ** 2)
     _, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=1)
@@ -4617,6 +4621,18 @@ def check_line():
             if mode == "fast" and not seam:
                 notes.append(f"thin line of a joint taken for the corner: {max(dip0):.1f} -> {max(abs(v) for v in dip):.2f} levels (the former way: {max(got[False][0]):.2f}), "
                              f"its step {max(step0):.0f} -> {max(step):.0f}")
+    # The thin line need not lie in the middle of the step. Here it runs 38 px below it: outside the strip that the
+    # seam search always leaves to the corner tool, inside the zone in which the corner tool looks for its line.
+    # One line, one tool: the corner tool takes it, and the seam tool - switched on - marks nothing of it.
+    beside, sil_s, rows_s = _hairline_frame(w, h, off=38.0)
+    out, st = _quiet(H.make_engine(E, sil_s).process, beside, 8, dict(p, speedMode="fast", seamOn=True, seam=90))
+    dip_s0 = [_line_dip(beside, rows_s, c) for c in sides]
+    dip_s = [_line_dip(_comp(beside, out), rows_s, c) for c in sides]
+    if not min(dip_s0) >= 1.0:
+        bad.append(f"the frame with the line beside the step has no line to remove: dip {dip_s0}")
+    elif not st.get("corner_hair") or st.get("seam_px") or not max(abs(a) / b for a, b in zip(dip_s, dip_s0)) <= 0.15:
+        bad.append(f"a thin line 38 px beside the middle of the step, seam tool on: corner_hair {st.get('corner_hair')}, the seam tool marked {st.get('seam_px')} px "
+                   f"(one line, one tool), the line went {dip_s0} -> {dip_s} levels")
     # the same frame without the thin line: nothing is found, nothing is taken out
     plain, sil_p, rows_p = _hairline_frame(w, h, line=False)
     eng_p = H.make_engine(E, sil_p)
@@ -4658,14 +4674,18 @@ def check_line():
     if streak[False] < 8.0:
         bad.append(f"pool of light next to the hem: the measurement does not see the streak the former way leaves ({streak[False]:.1f} levels)")
     notes.append(f"a pool of light that reaches below the joint at the hem: the strip under the joint is {streak[True]:+.1f} levels against the floor above it (the former way: {streak[False]:+.1f})")
-    report("line", not bad, "; ".join(notes) + "; with the seam tool on and off, both fills; a joint or a corner without such a line: nothing is taken out"
+    report("line", not bad, "; ".join(notes) + "; with the seam tool on and off, both fills; a line that runs beside the middle of the step is taken by the corner tool "
+           "alone; a joint or a corner without such a line: nothing is taken out"
            if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
-def _hair_frame(w=1500, h=2000, zoom=1.0, wall=150.0, hair=26.0, skin=188.0, line=62.0, thick=2, seed=9, noise=1.2, spot=0.0, skip=()):
+def _hair_frame(w=1500, h=2000, zoom=1.0, wall=150.0, hair=26.0, skin=188.0, line=62.0, thick=2, seed=9, noise=1.2, spot=0.0, skip=(),
+                top="hair"):
     """
     A head in profile against a plain wall, with thin things that stick out of it:
       "out"    three single hairs that grow out of the hairdo and lead away from it (two of them curved);
+      "up"     one more on top of the head, dead straight and exactly vertical (next to such a line the line search
+               finds faint side lines, which point across it);
       "short"  one more such hair, a tenth of the head long;
       "fringe" short hairs that lie along the outline of the hairdo - its soft edge;
       "along"  a hair that leaves the hairdo and then runs along its outline;
@@ -4674,7 +4694,10 @@ def _hair_frame(w=1500, h=2000, zoom=1.0, wall=150.0, hair=26.0, skin=188.0, lin
       "apart"  such a line that touches nobody;
       "tuft"   a wisp: six faint hairs that cross each other;
       "low"    a thread that sticks out of the clothes, three head widths below the top of the head;
-      "cable"  such a line that starts at the hairdo and goes on to the border of the frame.
+      "cable"  such a line that starts at the hairdo and goes on to the border of the frame;
+      "long"   with top="pole", in the place of "up": a straight line a head width long, two degrees off the
+               vertical - it leaves the searched zone, and in a close-up it reaches the top of the frame (a pole,
+               a strap behind the head).
     zoom: the size of the head (1 = about 300 px wide in a frame 1500 px wide). spot: a spot of light on the wall
     behind the head, so many levels at its middle. skip: the names that are not drawn (the same frame without them).
     Returns (frame, silhouette for the stand-in matting network, {name: the pixels drawn}, silhouette of the frame size).
@@ -4725,6 +4748,10 @@ def _hair_frame(w=1500, h=2000, zoom=1.0, wall=150.0, hair=26.0, skin=188.0, lin
 
     for angle, far, bend in ((-14, 95, 0.0), (10, 75, 9.0), (40, 62, 7.0)):
         draw("out", ray(angle, -4 * s, far * s, bend))
+    if top == "pole":
+        draw("long", ray(-2, -4 * s, 300 * s, n=2))
+    else:
+        draw("up", ray(0, -4 * s, 85 * s, n=2))
     draw("short", ray(25, -4 * s, 36 * s))
     draw("along", ray(-60, -4 * s, 28 * s, n=5)
          + [(cx + (rx + 28 * s) * np.sin(a), cy - (ry + 28 * s) * np.cos(a)) for a in np.deg2rad(np.linspace(-58.0, -28.0, 16))])
@@ -4765,13 +4792,13 @@ def _mark_depth(pic, mark, ring=7):
 
 def check_hair():
     """
-    "strayHair": the single hairs that stick out of the hairdo are repaired like dust - also inside the protected
-    band, where the dust search never looks. Everything else that is thin and near a head stays.
+    "strayHair": the single hairs that stick out of the hairdo are found where the dust search never looks - from
+    the edge of the hairdo outwards - and repaired like dust. Everything else that is thin and near a head stays.
     """
     bad, notes = [], []
     p = dict(H.STD, spots=0, scuffs=0, seamOn=False, blur=0, cycCurve=0, smokeOn=False)
 
-    STAY = ("fringe", "along", "lash", "face", "apart", "tuft", "low", "cable")
+    STAY = ("fringe", "along", "lash", "face", "apart", "tuft", "low", "cable", "long")
 
     def judged(tag, frame, marks, sil_full, out, st, taken=0.30, stay=STAY):
         comp = _comp(frame, out)
@@ -4836,21 +4863,23 @@ def check_hair():
             bad.append(f"{mode}: with the slider at 0 nothing may be looked for (hair_px {st0.get('hair_px')}, layer {int(out0[..., 3].max())})")
         out, st, fill = with_fill_source(eng, frame, dict(p, speedMode=mode, strayHair=100))
         kept = judged(f"{mode}, slider 100", frame, marks, sil_full, out, st)
-        # A hair is repaired inside the protected band, so the network must be shown the wall around it as the
-        # photo has it. (Elsewhere the band is painted over with an average of the backdrop further away, to
+        # The mark of a hair begins inside the protected band, so the network must be shown the wall around it as
+        # the photo has it. (Elsewhere the band is painted over with an average of the backdrop further away, to
         # keep the colours of the person out of a repair that ends before the band: next to a head that average
-        # is not the tone of the wall right there.)
+        # is not the tone of the wall right there.) Looked at from 5 px off the person: beyond the guard strip,
+        # which is painted over either way, and still inside the band.
         if "src" not in fill:
             bad.append(f"{mode}: no repair was asked for")
         else:
-            off_person = cv2.distanceTransform((sil_full == 0).astype(np.uint8), cv2.DIST_L2, 5) > 8
+            off_person = cv2.distanceTransform((sil_full == 0).astype(np.uint8), cv2.DIST_L2, 5) > 5
             around = (cv2.dilate((fill["mask"] > 0).astype(np.uint8), np.ones((49, 49), np.uint8)) > 0) & off_person & (fill["mask"] == 0)
             differs = np.abs(fill["src"].astype(np.int16) - frame[..., :3].astype(np.int16)).max(axis=2)[around]
             if differs.size == 0 or int(differs.max()) > 0:
                 bad.append(f"{mode}: around the hairs the repair is shown something else than the photo "
                            f"({100.0 * float((differs > 0).mean()) if differs.size else 0:.0f}% of the surroundings, up to {int(differs.max()) if differs.size else 0} levels)")
         if mode == "fast":
-            notes.append(f"hairs that stick out of the hairdo: {100 * kept['out']:.0f}% of their contrast left; the fuzz of the outline {100 * kept['fringe']:.0f}%, "
+            notes.append(f"hairs that stick out of the hairdo: {100 * kept['out']:.0f}% of their contrast left (a dead straight vertical one: {100 * kept['up']:.0f}%); "
+                         f"the fuzz of the outline {100 * kept['fringe']:.0f}%, "
                          f"a hair that turns to run along the outline {100 * kept['along']:.0f}%, "
                          f"an eyelash {100 * kept['lash']:.0f}%, a line out of the lit face {100 * kept['face']:.0f}%, a line that touches nobody {100 * kept['apart']:.0f}%, "
                          f"a thread at the clothes {100 * kept['low']:.0f}%, a cable that goes on to the frame border {100 * kept['cable']:.0f}%")
@@ -4861,23 +4890,26 @@ def check_hair():
     notes.append(f"a hair a tenth of the head long: {100 * short100:.0f}% left at 100, {100 * k30['short']:.0f}% at 30")
     # A wisp - hairs that cross each other - is no single hair. (Judged without the cable: next to it the map of
     # the gear takes the wisp for a part of the same thing, and the search does not look there at all.)
-    fw, sw_, mw, fullw = _hair_frame(skip=("cable",))
+    # In the same frame a pole stands where the vertical hair was: a line that grows out of the hairdo like a hair
+    # and is still there where the searched zone ends.
+    fw, sw_, mw, fullw = _hair_frame(skip=("cable",), top="pole")
     ow, stw = _quiet(H.make_engine(E, sw_).process, fw, 8, dict(p, speedMode="fast", strayHair=100))
-    kw_ = judged("a wisp", fw, mw, fullw, ow, stw)
-    notes.append(f"a wisp of crossing hairs {100 * kw_['tuft']:.0f}%")
+    kw_ = judged("a wisp and a pole", fw, mw, fullw, ow, stw)
+    notes.append(f"a wisp of crossing hairs {100 * kw_['tuft']:.0f}%, a pole that leaves the searched zone {100 * kw_['long']:.0f}%")
     # the slider: what a lower position takes, a higher one takes too
     px = [int(_quiet(eng.process, frame, 8, dict(p, speedMode="fast", strayHair=v))[1].get("hair_px") or 0) for v in (25, 50, 75, 100)]
     if sorted(px) != px or px[-1] == 0:
         bad.append(f"marked pixels at 25 / 50 / 75 / 100 of the slider: {px}")
     # Light hairs in front of a dark wall (a light line that grows out of the lit face is a hair there: only a
     # dark hair is asked what it grows out of); a close-up, with thicker hairs - there the wisp reaches the cable,
-    # and the piece of the cable between the head and that knot ends in the open like a hair.
+    # and the piece of the cable between the head and that knot ends in the open like a hair; the pole on top of
+    # the head ends at the top of the frame there, before the searched zone does.
     for tag, kw, taken, stay in (("light hairs on a dark wall", dict(wall=34.0, hair=92.0, line=150.0, seed=10), 0.35, tuple(n for n in STAY if n != "face")),
-                                 ("close-up", dict(zoom=3.2, seed=11), 0.35, STAY)):
+                                 ("close-up", dict(zoom=3.2, seed=11, top="pole"), 0.35, STAY)):
         f2, s2, m2, full2 = _hair_frame(**kw)
         o2, st2 = _quiet(H.make_engine(E, s2).process, f2, 8, dict(p, speedMode="fast", strayHair=100))
         k2 = judged(tag, f2, m2, full2, o2, st2, taken=taken, stay=stay)
-        notes.append(f"{tag}: {100 * k2['out']:.0f}% left")
+        notes.append(f"{tag}: {100 * k2['out']:.0f}% left" + (f", the pole that ends at the top of the frame {100 * k2['long']:.0f}%" if "long" in k2 else ""))
     # the hairs go together with the usual clean, and the person stays untouched there too
     out, st = _quiet(eng.process, frame, 8, dict(H.STD, smokeOn=False, cycCurve=65, speedMode="fast", strayHair=100))
     comp = _comp(frame, out)
