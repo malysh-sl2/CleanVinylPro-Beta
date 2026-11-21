@@ -4196,6 +4196,80 @@ class CleanVinylEngine:
         dark = int(np.count_nonzero(gray < cls.PREVIEW_DARK_LEVEL))
         return cls.PREVIEW_JPEG_QUALITY_DARK if dark >= cls.PREVIEW_DARK_SHARE * gray.size else cls.PREVIEW_JPEG_QUALITY
 
+    # The pictures the window is sent. The session works at <= 1080 px: the masks, the strokes and the cleaned
+    # proxy live there, and up to 4.7.0 the window got pictures of that size. In a large window, or zoomed in, the
+    # whole photo looked soft - the person too, although the layer never touches the person ("the person is
+    # blurred in the window, and fine after Apply"). Since 4.8.0 the pictures are drawn at up to DISPLAY_LONG px:
+    # the photo itself at that size, and over it the layer of the working size, enlarged (_compose_display).
+    # Whatever the layer leaves alone is then as sharp as the photo is at that size; the cleaned backdrop is as
+    # detailed as before. The working size, the masks and the brush are untouched: the window places everything
+    # by "preview_w" / "preview_h" and merely draws a picture with more pixels into the same box.
+    # "previewLong" of the start request overrules the size; at or below the working size (the checks against
+    # v3.2.1 ask for 1080) the working pictures themselves are sent, as before.
+    DISPLAY_LONG = 2160
+    DISPLAY_MIN_GAIN = 1.25      # a display picture less than this much larger than the working one is not worth it
+
+    @classmethod
+    def _display_size(cls, w: int, h: int, pw: int, ph: int, asked=None):
+        """(width, height) of the pictures the window is sent; None: the working pictures (pw x ph) themselves."""
+        long_side = cls.DISPLAY_LONG
+        if asked is not None:
+            try:
+                long_side = int(np.clip(int(asked), 0, 4320))
+            except (TypeError, ValueError):
+                pass
+        scale = min(1.0, float(long_side) / max(h, w, 1))
+        dw, dh = int(round(w * scale)), int(round(h * scale))
+        if dw < pw * cls.DISPLAY_MIN_GAIN or dh < ph * cls.DISPLAY_MIN_GAIN:
+            return None
+        return dw, dh
+
+    @staticmethod
+    def _compose_display(disp_bgr: np.ndarray, orig_small_bgr: np.ndarray, layer_small_bgr: np.ndarray,
+                         alpha_small: np.ndarray, relit_small: np.ndarray | None = None) -> np.ndarray:
+        """
+        The cleaned photo at the display size: the photo (`disp_bgr`) with the layer of the working size laid over
+        it. alpha_small (0..1): how much of the layer shows. Where it is 0 the result IS the photo, pixel for
+        pixel; where it is 1 the result is the enlarged layer.
+        relit_small (0..1, never above alpha_small; None = nowhere): the part of the layer that only re-lights the
+        photo - the ironed clothing. There the photo keeps its own fine detail and takes only the CHANGE the layer
+        makes (measured against `orig_small_bgr`, the photo at the working size, enlarged the same way as the
+        layer): the weave of the cloth stays as sharp as the rest of the person.
+        """
+        size = (disp_bgr.shape[1], disp_bgr.shape[0])
+        a = cv2.resize(alpha_small, size, interpolation=cv2.INTER_LINEAR)
+        layer = cv2.resize(layer_small_bgr, size, interpolation=cv2.INTER_CUBIC)
+        change = cv2.multiply(cv2.subtract(layer, disp_bgr, dtype=cv2.CV_32F), cv2.merge([a, a, a]))
+        if relit_small is not None:
+            r = cv2.resize(relit_small, size, interpolation=cv2.INTER_LINEAR)
+            orig_up = cv2.resize(orig_small_bgr, size, interpolation=cv2.INTER_CUBIC)
+            change += cv2.multiply(cv2.subtract(disp_bgr, orig_up, dtype=cv2.CV_32F), cv2.merge([r, r, r]))
+        return cv2.add(disp_bgr, change, dtype=cv2.CV_8U)  # (rounds and clamps to 0..255)
+
+    @classmethod
+    def _overlay_display(cls, comp_bgr: np.ndarray, mask_small_u8: np.ndarray,
+                         marked_small_u8: np.ndarray | None = None) -> np.ndarray:
+        """
+        The "Маска" view at the display size, from the cleaned photo of that size (`comp_bgr`) and the masks of the
+        working size. The same tints as _encode_overlay_jpg, written as  photo * keep + RED * red + GREEN * green:
+        the three maps depend on the masks only, so they are made at the working size and enlarged.
+        """
+        m = mask_small_u8.astype(np.float32) * (1.0 / 255.0)
+        red_a = 0.36 * (1.0 - m)
+        if marked_small_u8 is None:
+            grn_a = cls.OVERLAY_GREEN * m
+        else:
+            mk = marked_small_u8.astype(np.float32) * (1.0 / 255.0)
+            grn_a = cls.OVERLAY_GREEN * mk + cls.OVERLAY_GREEN_PALE * np.maximum(m - mk, 0.0)
+        size = (comp_bgr.shape[1], comp_bgr.shape[0])
+        keep = cv2.resize((1.0 - red_a) * (1.0 - grn_a), size, interpolation=cv2.INTER_LINEAR)
+        red = cv2.resize(red_a * (1.0 - grn_a), size, interpolation=cv2.INTER_LINEAR)
+        green = cv2.resize(grn_a, size, interpolation=cv2.INTER_LINEAR)
+        out = cv2.multiply(comp_bgr, cv2.merge([keep, keep, keep]), dtype=cv2.CV_32F)
+        # (B, G, R) of the two tints: red (18, 18, 178), green (52, 255, 16)
+        out += cv2.merge([cv2.addWeighted(red, r_c, green, g_c, 0.0) for r_c, g_c in ((18.0, 52.0), (18.0, 255.0), (178.0, 16.0))])
+        return cv2.convertScaleAbs(out)  # (rounds and clamps to 0..255; nothing is negative here)
+
     @staticmethod
     def _encode_green_mask_png(mask_u8: np.ndarray) -> str:
         mh, mw = mask_u8.shape[:2]
@@ -4303,22 +4377,28 @@ class CleanVinylEngine:
                 # Blend: background areas use eff_mask; dress areas use dress_alpha_s
                 m_bg = eff_mask.astype(np.float32) / 255.0
                 m_comb = np.maximum(m_bg, np.clip(dress_alpha_s * 1.15, 0.0, 1.0))[:, :, None]
-                comp_bgr = np.clip(
-                    orig_s.astype(np.float32) * (1.0 - m_comb) + dressed_bgr.astype(np.float32) * m_comb,
-                    0, 255,
-                ).astype(np.uint8)
+                layer_s, alpha_s = dressed_bgr, m_comb[:, :, 0]
+                relit_s = alpha_s - m_bg  # what the ironing adds to the layer: the cloth is re-lit there, not replaced
             else:
                 m_f = (eff_mask.astype(np.float32) / 255.0)[:, :, None]
+                layer_s, alpha_s, relit_s = base_clean_s, m_f[:, :, 0], None
+
+            disp = sess.get("orig_disp_bgr")
+            marked = None if marked_mask is eff_mask else marked_mask
+            quality = int(sess.get("preview_q", self.PREVIEW_JPEG_QUALITY))
+            if disp is None:
+                # the working pictures themselves (a small frame, or "previewLong" at the working size)
+                m3 = alpha_s[:, :, None]
                 comp_bgr = np.clip(
-                    orig_s.astype(np.float32) * (1.0 - m_f) + base_clean_s.astype(np.float32) * m_f,
+                    orig_s.astype(np.float32) * (1.0 - m3) + layer_s.astype(np.float32) * m3,
                     0, 255,
                 ).astype(np.uint8)
-
-            quality = int(sess.get("preview_q", self.PREVIEW_JPEG_QUALITY))
-            out["comp_jpg_b64"] = self._encode_b64_jpg(comp_bgr, quality=quality)
-            out["overlay_jpg_b64"] = self._encode_overlay_jpg(
-                comp_bgr, eff_mask, quality=quality, marked_u8=(None if marked_mask is eff_mask else marked_mask)
-            )
+                out["comp_jpg_b64"] = self._encode_b64_jpg(comp_bgr, quality=quality)
+                out["overlay_jpg_b64"] = self._encode_overlay_jpg(comp_bgr, eff_mask, quality=quality, marked_u8=marked)
+            else:
+                comp_bgr = self._compose_display(disp, orig_s, layer_s, alpha_s, relit_s)
+                out["comp_jpg_b64"] = self._encode_b64_jpg(comp_bgr, quality=quality)
+                out["overlay_jpg_b64"] = self._encode_b64_jpg(self._overlay_display(comp_bgr, eff_mask, marked), quality=quality)
         return out
 
     # ---- the brush and the eraser of the big window ---------------------------------------------------------------
@@ -5396,6 +5476,11 @@ class CleanVinylEngine:
                 ph = max(16, int(round(h * prev_scale)))
 
                 orig_small_bgr = cv2.cvtColor(cv2.resize(orig_rgb_u8, (pw, ph), interpolation=cv2.INTER_AREA), cv2.COLOR_RGB2BGR)
+                # ...and the photo at the size of the pictures the window is sent (see DISPLAY_LONG)
+                orig_disp_bgr = None
+                disp_size = self._display_size(w, h, pw, ph, p.get("previewLong"))
+                if disp_size is not None:
+                    orig_disp_bgr = cv2.cvtColor(cv2.resize(orig_rgb_u8, disp_size, interpolation=cv2.INTER_AREA), cv2.COLOR_RGB2BGR)
                 clean_small_bgr, auto_mask_small, repair_mask_small = self._session_proxies(
                     cleaned_rgba, out_cache.get("heal_mask_full"), pw, ph, ps_max,
                     tone=self._tone_stages_on(clean_params), heal_pass2=out_cache.get("heal_mask_pass2"),
@@ -5425,6 +5510,7 @@ class CleanVinylEngine:
                     "core_mask_u8": out_cache["core_mask_u8"],
                     "dress_s": dress_s,
                     "orig_small_bgr": orig_small_bgr,
+                    "orig_disp_bgr": orig_disp_bgr,  # the photo at the display size; None: the window gets working pictures
                     "clean_base_small_bgr": clean_small_bgr,
                     "clean_paint_small_bgr": clean_small_bgr.copy(),
                     "auto_mask_small_u8": auto_mask_small,      # the layer: everything the clean changes
@@ -5450,7 +5536,8 @@ class CleanVinylEngine:
                 dress_str = float(p.get("dressStrength", 45))
                 sess["dress_live"] = (dress_on, dress_str)  # the clothing state the window last named
                 previews = self._render_session_previews(sess, dress_on, dress_str, need_comp=True, need_mask=False)
-                orig_jpg_b64 = self._encode_b64_jpg(orig_small_bgr, quality=sess["preview_q"])
+                orig_jpg_b64 = self._encode_b64_jpg(orig_small_bgr if orig_disp_bgr is None else orig_disp_bgr,
+                                                    quality=sess["preview_q"])
 
                 elapsed_ms = int((time.perf_counter() - t0) * 1000)
                 stats["elapsed_ms"] = elapsed_ms

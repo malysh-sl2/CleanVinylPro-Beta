@@ -8,7 +8,9 @@ Puts deliberate defects into the program, one at a time, and tells whether the s
 
 A check that lets a defect through is a hole in the checks, not a proof that the code is right. For every defect
 the script replaces one exact piece of text in a program file, runs the check groups the defect belongs to
-(tests/run_checks.py <groups>), puts the file back and reports "caught" or "NOT CAUGHT".
+(tests/run_checks.py <groups>), puts the file back and reports "caught" or "NOT CAUGHT" - or "CRASHED" when the
+checks ended without saying FAIL (killed, or an error of their own): that is not a catch, run the defect again.
+Run nothing heavy next to this script: a check that runs out of memory is killed without a word.
 
 A defect of the PANEL (the word "panel" instead of a check group) is put into a copy of the plugin folder, and the
 two tests of the panel are pointed at that copy (CV_PLUGIN_DIR): the settings test, and the scenarios of the
@@ -285,16 +287,24 @@ def main() -> int:
                     code, out = _run_panel_tests(copy, groups[1:])
                 finally:
                     shutil.rmtree(tmp, ignore_errors=True)
-            caught = bool(code)
+            # "Caught" means: a check said FAIL. A run that ended badly WITHOUT such a line did not finish - it
+            # crashed, or was killed (out of memory when something heavy runs next to it). That proves nothing.
+            lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+            at = next((k for k, ln in enumerate(lines) if ln.startswith(("[FAIL]", "FAIL "))), None)
+            caught = bool(code) and at is not None
             why = ""
             if caught:
-                lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
-                at = next((k for k, ln in enumerate(lines) if ln.startswith(("[FAIL]", "FAIL "))), None)
-                nxt = lines[at + 1] if at is not None and at + 1 < len(lines) else ""
-                why = (nxt if nxt and not nxt.startswith(("[", "FAIL ", "plugin ")) else (lines[at] if at is not None else lines[-1]))[:150]
+                nxt = lines[at + 1] if at + 1 < len(lines) else ""
+                why = (nxt if nxt and not nxt.startswith(("[", "FAIL ", "plugin ")) else lines[at])[:150]
+                state = "caught    "
+            elif code:
+                why = f"the checks did not finish (exit code {code}); last line: {(lines[-1] if lines else '')[:110]}"
+                state = "CRASHED   "
+                missed.append(name + "  (the checks crashed: run it again by itself)")
             else:
+                state = "NOT CAUGHT"
                 missed.append(name)
-            print(f"[{i:2d}/{len(chosen)}] {'caught    ' if caught else 'NOT CAUGHT'} {name}  ({time.perf_counter() - t1:.0f} s){'  <- ' + why if why else ''}", flush=True)
+            print(f"[{i:2d}/{len(chosen)}] {state} {name}  ({time.perf_counter() - t1:.0f} s){'  <- ' + why if why else ''}", flush=True)
     finally:
         for rel in touched:  # whatever happened, the files are as they were
             with open(os.path.join(ROOT, rel), "w", encoding="utf-8", newline="") as f:

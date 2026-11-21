@@ -129,7 +129,7 @@ def _quiet(fn, *a, **k):
 def _legacy(p: dict) -> dict:
     """The parameters under which the engine must still give the pixels of v3.2.1 (see the header)."""
     return dict(p, speedMode="quality", smokeOn=False, cycCurve=0, dressSmooth=False, scuffs=0, seamJoin=False,
-                grainLocal=False, previewQuality=90, gearBody=False, shadowSpots=False, brushSoft=False)
+                grainLocal=False, previewQuality=90, gearBody=False, shadowSpots=False, brushSoft=False, previewLong=1080)
 
 
 def _legacy_window(p: dict) -> dict:
@@ -1909,6 +1909,7 @@ def check_mask():
     """
     bad = []
     w, h = 1500, 2000
+    pw, ph = int(round(w * 1080.0 / max(w, h))), int(round(h * 1080.0 / max(w, h)))  # the working size of the window
     img, sil = H.make_studio_image(w, h, n_dust=60, n_hair=4, seed=77)
     speck = (int(w * 0.25), int(h * 0.35))          # a mark on the wall that the search is not allowed to take (see `quiet`)
     cv2.circle(img, speck, 7, tuple(int(v) - 45 for v in img[speck[1], speck[0]]), -1, lineType=cv2.LINE_AA)
@@ -1920,8 +1921,12 @@ def check_mask():
         return eng, _quiet(eng.start_session, image, 8, dict(params))
 
     def jpg(b64):
+        """A picture of the window, brought to the working size the masks have (it is sent larger: check_sharp)."""
         import base64
-        return cv2.imdecode(np.frombuffer(base64.b64decode(b64), np.uint8), cv2.IMREAD_COLOR).astype(np.float32)
+        pic = cv2.imdecode(np.frombuffer(base64.b64decode(b64), np.uint8), cv2.IMREAD_COLOR)
+        if pic.shape[0] > ph:
+            pic = cv2.resize(pic, (pw, ph), interpolation=cv2.INTER_AREA)
+        return pic.astype(np.float32)
 
     def counted(eng):
         s = eng._active_session
@@ -3141,10 +3146,18 @@ def check_dark():
         return eng, r
 
     def fine_kept(eng, r, key="orig_jpg_b64"):
-        """How much of the pixel-to-pixel noise of the dark wall is left in the picture the window gets."""
+        """
+        How much of the pixel-to-pixel noise of the dark wall is left in the picture the window gets. Measured
+        against what the picture is made of: the photo at the size of the picture - and, for the cleaned photo of a
+        picture larger than the working size, the working-size photo enlarged like the layer is (check_sharp).
+        """
         s = eng._active_session
-        src = cv2.cvtColor(s["orig_small_bgr"], cv2.COLOR_BGR2GRAY).astype(np.float32)
         pic = cv2.imdecode(np.frombuffer(base64.b64decode(r[key]), np.uint8), cv2.IMREAD_GRAYSCALE).astype(np.float32)
+        made_of = s["orig_small_bgr"]
+        if pic.shape != made_of.shape[:2]:
+            made_of = (s["orig_disp_bgr"] if key == "orig_jpg_b64" else
+                       cv2.resize(made_of, (pic.shape[1], pic.shape[0]), interpolation=cv2.INTER_CUBIC))
+        src = cv2.cvtColor(made_of, cv2.COLOR_BGR2GRAY).astype(np.float32)
         ph, pw = src.shape
         wall = (slice(int(ph * 0.05), int(ph * 0.45)), slice(int(pw * 0.05), int(pw * 0.30)))
         return float(np.abs(np.diff(pic[wall], axis=1)).mean() / max(1e-6, np.abs(np.diff(src[wall], axis=1)).mean()))
@@ -3497,6 +3510,242 @@ def check_shadow():
                 bad.append(f"the green preview differs from the cleaning ({missed} px not shown, {extra} px shown but not cleaned)")
     report("shadow", not bad, "; ".join(notes) + f"; the rule on drawn spots: {len(cases)} cases, the owner's scuff taken, the rim of a shadow, a faint "
            "patch, a contact shadow, a streak and a light gap left; nothing else in the shadow is touched" if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# The pictures the window is sent (4.8.0)
+# ----------------------------------------------------------------------------------------------------------------------
+def check_sharp():
+    """
+    "The person looks blurred in the window, and is fine after Apply." The session works at <= 1080 px (masks,
+    strokes, the cleaned proxy), and up to 4.7.0 the window was sent pictures of that size: in a large window or
+    zoomed in, the whole photo was soft. Now the pictures are drawn at up to DISPLAY_LONG px: the photo at that
+    size, and over it the layer of the working size, enlarged.
+      * the size: twice the working size on a large frame, never larger than the frame, not at all where little
+        would be gained; "previewLong" of the request overrules it (the checks against v3.2.1 ask for 1080);
+        the working size ("preview_w" / "preview_h"), by which the window places everything, stays;
+      * what the layer leaves alone IS the photo of that size, pixel for pixel - the person is as sharp in the
+        cleaned picture as in the picture of the original, and several times sharper than the working picture
+        enlarged;
+      * the layer shows what it showed: reduced to the working size, the pictures are the working pictures (the
+        cleaned photo and the mask view), also after a stroke, the eraser, a light refresh and the exact picture;
+      * the eraser brings the photo back at its full sharpness;
+      * ironed clothing keeps the weave of the cloth: the photo takes only the change the ironing makes;
+      * a small frame gets the working pictures, as before.
+    """
+    import base64
+    bad, notes = [], []
+
+    def dec(b64):
+        return cv2.imdecode(np.frombuffer(base64.b64decode(b64), np.uint8), cv2.IMREAD_COLOR)
+
+    def fine(pic, zone):
+        """Fine detail: the mean step between neighbouring pixels inside the zone (levels of 255)."""
+        g = cv2.cvtColor(pic, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        d = np.abs(np.diff(g, axis=1))
+        return float(d[zone[:, 1:] & zone[:, :-1]].mean())
+
+    def gap(a, b, zone=None):
+        """How far two pictures are apart (mean of the absolute difference, levels of 255)."""
+        d = np.abs(a.astype(np.float32) - b.astype(np.float32)).mean(axis=2)
+        return float(d.mean() if zone is None else d[zone].mean())
+
+    # ---- 1. the size, by the rule alone
+    for (fw, fh, asked), want in (
+        ((5760, 3840, None), (2160, 1440)),      # his camera: twice the working size
+        ((3840, 5760, None), (1440, 2160)),
+        ((3000, 2000, None), (2160, 1440)),
+        ((2000, 1500, None), (2000, 1500)),      # never larger than the frame itself
+        ((1300, 900, None), None),               # less than a quarter larger than the working picture: not worth it
+        ((1000, 700, None), None),               # a small frame: the working picture is the frame
+        ((5760, 3840, 1080), None),              # the working size was asked for (the checks against v3.2.1)
+        ((5760, 3840, 0), None),
+        ((5760, 3840, 2880), (2880, 1920)),
+        ((5760, 3840, 99999), (4320, 2880)),     # the request has a limit
+        ((5760, 3840, "abc"), (2160, 1440)),     # nonsense: the usual size
+    ):
+        sc = min(1.0, 1080.0 / max(fw, fh))
+        got = ENG._display_size(fw, fh, max(16, int(round(fw * sc))), max(16, int(round(fh * sc))), asked)
+        if got != want:
+            bad.append(f"size of the window pictures for a {fw}x{fh} frame, 'previewLong' {asked!r}: {got}, expected {want}")
+
+    # ---- 2. a frame whose person has detail down to one pixel, as skin, hair and cloth have
+    w, h = 3000, 2000
+    img, sil = H.make_studio_image(w, h, n_dust=60, n_hair=4, seed=77)
+    person = cv2.resize(sil, (w, h), interpolation=cv2.INTER_NEAREST) > 0.5
+    f = img.astype(np.float32)
+    f[person] += np.random.default_rng(11).normal(0.0, 12.0, (h, w)).astype(np.float32)[person][:, None]
+    img = np.clip(f, 0, 255).astype(np.uint8)
+    params = dict(H.STD, speedMode="fast", smokeAuto=True)
+
+    def opened(image, matte, **over):
+        eng = H.make_engine(E, matte)
+        return eng, _quiet(eng.start_session, image, 8, dict(params, **over))
+
+    def stroke(eng, r, pts, radius, erase=False, dress=False):
+        return _quiet(eng.edit_session_mask, r["session_id"], "stroke", [{"x": x, "y": y, "norm": 1} for x, y in pts],
+                      radius, erase, dress, 80.0, 1.0)
+
+    e_d, r_d = opened(img, sil)                      # as the panel asks: the display pictures
+    e_w, r_w = opened(img, sil, previewLong=1080)    # the working pictures, as up to 4.7.0
+    pw, ph = r_d["preview_w"], r_d["preview_h"]
+    dw, dh = 2160, 1440
+    o_d, c_d, v_d = (dec(r_d[key]) for key in ("orig_jpg_b64", "comp_jpg_b64", "overlay_jpg_b64"))
+    o_w, c_w, v_w = (dec(r_w[key]) for key in ("orig_jpg_b64", "comp_jpg_b64", "overlay_jpg_b64"))
+    if (pw, ph) != (1080, 720) or (r_w["preview_w"], r_w["preview_h"]) != (pw, ph):
+        bad.append(f"the working size of the window must stay 1080x720 for a 3000x2000 frame: {pw}x{ph} / {r_w['preview_w']}x{r_w['preview_h']}")
+    if not (o_d.shape == c_d.shape == v_d.shape == (dh, dw, 3)):
+        bad.append(f"the three pictures of a 3000x2000 frame must be 2160x1440: {o_d.shape}, {c_d.shape}, {v_d.shape}")
+    if not (o_w.shape == c_w.shape == v_w.shape == (ph, pw, 3)):
+        bad.append(f"with 'previewLong' 1080 the three pictures must be the working ones: {o_w.shape}, {c_w.shape}, {v_w.shape}")
+    if bad:
+        report("sharp", False, "wrong:\n  " + "\n  ".join(bad))
+        return
+
+    def reduced(pic):
+        return cv2.resize(pic, (pw, ph), interpolation=cv2.INTER_AREA)
+
+    def zones(eng):
+        """(untouched, layer): where the layer shows nothing / everything, with room to spare, at the display size."""
+        eff = eng._compute_effective_mask_small(eng._active_session)
+        k = np.ones((25, 25), np.uint8)
+        big = lambda m: cv2.resize(cv2.erode(m.astype(np.uint8), k), (dw, dh), interpolation=cv2.INTER_NEAREST) > 0  # noqa: E731
+        return big(eff == 0), big(eff == 255)
+
+    alone, layer = zones(e_d)
+    inside = alone & (cv2.resize(person.astype(np.uint8), (dw, dh), interpolation=cv2.INTER_NEAREST) > 0)
+    photo = cv2.cvtColor(cv2.resize(img, (dw, dh), interpolation=cv2.INTER_AREA), cv2.COLOR_RGB2BGR)
+    if not (inside.mean() >= 0.03 and layer.mean() >= 0.3):
+        bad.append(f"test frame: {inside.mean():.1%} of it is the inside of the person, {layer.mean():.1%} is backdrop inside the layer")
+    # (a) the picture of the original is the photo at that size
+    if not (gap(o_d, photo) <= 2.5 and fine(o_d, inside) >= 0.8 * fine(photo, inside)):
+        bad.append(f"the picture of the original is not the photo at 2160x1440: {gap(o_d, photo):.2f} levels apart, "
+                   f"fine detail {fine(o_d, inside):.2f} of {fine(photo, inside):.2f}")
+    # (b) what the layer leaves alone is that photo, pixel for pixel (the two JPEGs hold the same blocks there)
+    if not np.array_equal(c_d[inside], o_d[inside]):
+        bad.append(f"inside the person the cleaned picture must BE the picture of the original: "
+                   f"{int(np.count_nonzero((c_d != o_d).any(axis=2) & inside))} pixels differ")
+    # (c) ...and that is several times sharper than the working picture, enlarged as the window enlarges it
+    f_disp, f_photo = fine(c_d, inside), fine(photo, inside)
+    f_work = fine(cv2.resize(c_w, (dw, dh), interpolation=cv2.INTER_LINEAR), inside)
+    if not (f_disp >= 0.8 * f_photo and f_disp >= 2.0 * f_work):
+        bad.append(f"fine detail of the person: {f_disp:.2f} in the window picture, {f_photo:.2f} in the photo of that size, "
+                   f"{f_work:.2f} in the working picture enlarged (must keep 80 % and be twice the latter)")
+
+    # (d) the layer shows what it showed
+    def same_layer(what, r_disp, r_work, zone_s=None, limit=1.0):
+        cd, cw = dec(r_disp["comp_jpg_b64"]), dec(r_work["comp_jpg_b64"])
+        vd, vw = dec(r_disp["overlay_jpg_b64"]), dec(r_work["overlay_jpg_b64"])
+        if cd.shape != (dh, dw, 3) or vd.shape != (dh, dw, 3) or cw.shape != (ph, pw, 3):
+            bad.append(f"{what}: the pictures changed their size ({cd.shape}, {vd.shape} / {cw.shape})")
+            return cd
+        back = cv2.erode((e_w._compute_effective_mask_small(e_w._active_session) == 255).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        zone = back if zone_s is None else (back & zone_s)
+        g_c, g_v = gap(reduced(cd), cw, zone), gap(reduced(vd), vw)
+        worst = float(cv2.GaussianBlur(np.abs(reduced(cd).astype(np.float32) - cw.astype(np.float32)).mean(axis=2), (0, 0), 2.0)[zone].max())
+        if not (g_c <= limit and worst <= 4.0 and g_v <= 2.0):
+            bad.append(f"{what}: reduced to the working size, the cleaned picture is {g_c:.2f} levels from the working one inside "
+                       f"the layer (largest patch {worst:.2f}), the mask view {g_v:.2f} (at most {limit}, 4.0 and 2.0)")
+        return cd
+
+    same_layer("on opening", r_d, r_w)
+    # (e) the mask view of that size carries the same tints as the working one (the two ways of drawing it)
+    s_w = e_w._active_session
+    eff_w = e_w._compute_effective_mask_small(s_w)
+    marked_w = e_w._compute_marked_mask_small(s_w, eff_w)
+    for mk in (marked_w, None):
+        m = eff_w.astype(np.float32)[:, :, None] / 255.0
+        red_a = 0.36 * (1.0 - m)
+        grn_a = ENG.OVERLAY_GREEN * m if mk is None else (
+            ENG.OVERLAY_GREEN * (mk.astype(np.float32)[:, :, None] / 255.0)
+            + ENG.OVERLAY_GREEN_PALE * np.maximum(m - mk.astype(np.float32)[:, :, None] / 255.0, 0.0))
+        tints = c_w.astype(np.float32) * (1.0 - red_a) + np.float32([18.0, 18.0, 178.0]) * red_a
+        tints = tints * (1.0 - grn_a) + np.float32([52.0, 255.0, 16.0]) * grn_a
+        new_way = ENG._overlay_display(c_w, eff_w, mk).astype(np.float32)
+        old_way = dec(ENG._encode_overlay_jpg(c_w, eff_w, quality=100, marked_u8=mk)).astype(np.float32)
+        d_new, d_old = float(np.abs(new_way - tints).max()), float(np.abs(old_way - tints).mean())
+        if d_new > 1.01 or d_old > 2.0:
+            bad.append(f"the mask view: the tints of _overlay_display are {d_new:.2f} levels from the rule at most (allowed 1), "
+                       f"the JPEG of _encode_overlay_jpg {d_old:.2f} on average (allowed 2)")
+
+    # ---- 3. a stroke, the eraser, a light refresh, the exact picture: the same on both, and the size stays
+    line_b = [(0.12 + 0.01 * i, 0.30) for i in range(10)]
+    line_e = [(0.70 + 0.01 * i, 0.82) for i in range(12)]
+    same_layer("after a brush stroke", stroke(e_d, r_d, line_b, 26), stroke(e_w, r_w, line_b, 26))
+    rd, rw = stroke(e_d, r_d, line_e, 30, erase=True), stroke(e_w, r_w, line_e, 30, erase=True)
+    c_e = same_layer("after the eraser", rd, rw)
+    erased = np.zeros((dh, dw), bool)   # the core of the erased band
+    erased[int(0.82 * dh) - 30:int(0.82 * dh) + 30, int(0.71 * dw):int(0.80 * dw)] = True
+    if not gap(c_e, o_d, erased) <= 1.5:
+        bad.append(f"the eraser must bring the photo back at its full size: the erased band is {gap(c_e, o_d, erased):.2f} levels from the picture of the original")
+    moved = dict(params, spots=40, seam=30)
+    recompute = lambda eng, r, **k: _quiet(eng.recompute_session, r["session_id"], dict(moved), True, None, **k)  # noqa: E731
+    same_layer("after a light refresh", recompute(e_d, r_d, quick=True), recompute(e_w, r_w, quick=True))
+    rd, rw = recompute(e_d, r_d, background=True), recompute(e_w, r_w, background=True)
+    if rd.get("exact") is not True or rw.get("exact") is not True:
+        bad.append("the exact picture did not come")
+    else:
+        c_x = same_layer("the exact picture", rd, rw)
+        alone_x, _ = zones(e_d)
+        inside_x = alone_x & inside
+        if not np.array_equal(c_x[inside_x], o_d[inside_x]) or not inside_x.mean() >= 0.03:
+            bad.append("after the edits and the recomputes the inside of the person must still BE the picture of the original")
+
+    # ---- 4. ironed clothing keeps the weave of the cloth
+    gimg, core, g = _garment_frame()
+    gh, gw = gimg.shape[:2]
+    matte = cv2.resize(core, (1024, 1024), interpolation=cv2.INTER_AREA)
+    e_g, r_g = opened(gimg, matte, dressSmooth=True, dressStrength=80)
+    e_gw, r_gw = opened(gimg, matte, dressSmooth=True, dressStrength=80, previewLong=1080)
+    o_g, c_g, c_gw = dec(r_g["orig_jpg_b64"]), dec(r_g["comp_jpg_b64"]), dec(r_gw["comp_jpg_b64"])
+    if c_g.shape != (gh, gw, 3) or o_g.shape != (gh, gw, 3):
+        bad.append(f"a {gw}x{gh} frame: the pictures must have the size of the frame itself, they have {c_g.shape}")
+    else:
+        cloth = cv2.erode(g["dress"].astype(np.uint8), np.ones((61, 61), np.uint8)) > 0
+        cloth_s = cv2.resize(cloth.astype(np.uint8), (c_gw.shape[1], c_gw.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
+        o_gw = dec(r_gw["orig_jpg_b64"])
+        near_fold = cv2.dilate((np.abs(g["fold"]) > 0.02).astype(np.uint8), np.ones((41, 41), np.uint8)) > 0
+
+        def creases(pic):
+            """How much of the drawn creases is in a picture (about 1 = as drawn, 0 = gone), measured at its own size."""
+            size = (pic.shape[1], pic.shape[0])
+            field = np.log1p(cv2.resize(g["wrinkles"], size, interpolation=cv2.INTER_AREA))
+            zone = cv2.resize((cloth & ~near_fold).astype(np.uint8), size, interpolation=cv2.INTER_NEAREST) > 0
+            clean = cv2.resize(np.ascontiguousarray(g["clean"][:, :, 1]), size, interpolation=cv2.INTER_AREA)
+            resid = np.log(pic[:, :, 1].astype(np.float32) / 255.0 + 0.02) - np.log(clean / 255.0 + 0.02)
+            sigma = 25.0 * size[0] / gw
+            resid = resid - cv2.GaussianBlur(resid, (0, 0), sigma)
+            field = field - cv2.GaussianBlur(field, (0, 0), sigma)
+            return float((resid[zone] * field[zone]).sum() / (field[zone] * field[zone]).sum())
+
+        left_d, left_w = creases(c_g) / creases(o_g), creases(c_gw) / creases(o_gw)   # what the ironing leaves of them
+        kept = fine(c_g, cloth) / max(1e-6, fine(o_g, cloth))
+        if not left_w <= 0.85:
+            bad.append(f"test frame: the ironing leaves {left_w:.0%} of the creases in the working picture")
+        if not abs(left_d - left_w) <= 0.12:
+            bad.append(f"ironed clothing: the window picture keeps {left_d:.0%} of the creases, the working picture {left_w:.0%} - the same ironing must show")
+        if not kept >= 0.8:
+            bad.append(f"ironed clothing lost the weave of the cloth: {kept:.0%} of the fine detail of the photo is left (at least 80 %)")
+        r_off = _quiet(e_g.dress_preview_session, r_g["session_id"], False, 80.0)
+        c_off = dec(r_off["comp_jpg_b64"])
+        deep = cv2.erode(cloth.astype(np.uint8), np.ones((65, 65), np.uint8)) > 0
+        if c_off.shape != c_g.shape or not np.array_equal(c_off[deep], o_g[deep]):
+            bad.append("clothing switched off: the cloth must be the photo again, at the size of the other pictures")
+        notes.append(f"ironed clothing keeps {kept:.0%} of the weave and shows the same ironing ({left_d:.0%} of the creases left; working picture: {left_w:.0%})")
+
+    # ---- 5. a small frame: the working pictures are the frame
+    simg, ssil = H.make_studio_image(900, 600, n_dust=20, n_hair=2, seed=3)
+    e_s, r_s = opened(simg, ssil)
+    if dec(r_s["comp_jpg_b64"]).shape != (600, 900, 3) or dec(r_s["orig_jpg_b64"]).shape != (600, 900, 3) \
+            or e_s._active_session.get("orig_disp_bgr") is not None:
+        bad.append("a 900x600 frame must get pictures of 900x600")
+
+    report("sharp", not bad,
+           (f"a 3000x2000 frame: the window gets pictures of 2160x1440 and still works at 1080x720; inside the person the cleaned "
+            f"picture is the photo of that size, pixel for pixel: fine detail {f_disp:.1f} levels (the photo: {f_photo:.1f}; the "
+            f"working picture enlarged: {f_work:.1f}); the layer shows what it showed, also after a stroke, the eraser, a light "
+            f"refresh and the exact picture; " + "; ".join(notes) + "; a small frame gets its own size")
+           if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -4083,7 +4332,7 @@ GROUPS = [("convert", check_convert), ("process", check_process), ("stage", chec
           ("format", check_format), ("scene", check_scene), ("stains", check_stains), ("seam", check_seam), ("mask", check_mask),
           ("brush", check_brush),
           ("dark", check_dark), ("gear", check_gear), ("shadow", check_shadow), ("undo", check_undo),
-          ("exact", check_exact),
+          ("exact", check_exact), ("sharp", check_sharp),
           ("server", check_server), ("http", check_http),
           ("folders", lambda: IC.check_folders(report)), ("install", lambda: IC.check_install(report)),
           ("bat", lambda: IC.check_bat(report)), ("plugin", check_plugin)]
