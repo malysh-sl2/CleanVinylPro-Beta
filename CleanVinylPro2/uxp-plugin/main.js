@@ -207,6 +207,20 @@ let sessState = {
   previewSyncedSig: "",    // the settings the preview on screen was made for
   previewForce: false,     // refresh even if the settings look the same (AUTO fractions were asked for again)
   quickUnsupported: false, // the running server is an older build that only knows the full recompute
+  // The exact picture comes by itself (see scheduleExactPreview): after a light refresh the server computes the
+  // real frame in the background, and the window puts the exact picture in place of the quick one.
+  picRev: 0,               // number of the pictures on screen, as the server counts them (see takeSessionPictures)
+  syncRev: 0,              // ...and of the last recompute whose settings the window took over
+  exactShown: true,        // the picture on screen is the exact one: the real frame was computed for it
+  exactTimer: null,        // the background recompute that waits for a quiet moment
+  exactSig: "",            // the settings the latest background recompute was asked for
+  exactJob: null,          // its progress job
+  exactPct: null,          // ...and its progress, percent
+  exactPollTimer: null,
+  exactPollBusy: false,
+  exactError: "",          // why the last one failed (it is not tried again until something changes)
+  exactHold: false,        // the server declined: the mask is the user's own drawing (asked again after the next answer)
+  bgUnsupported: false,    // the running server is an older build that has no background recompute
   lastStats: null,
   maskShare: null,         // share of the frame where defects were found (bright green), as the server last reported it
   presetNote: null,        // a preset was just clicked: say what it changed when the refresh comes back
@@ -217,10 +231,16 @@ let sessState = {
 let pendingApplyPayload = null;
 
 // The preview follows the sliders by itself: once, shortly after the last change, and never while a slider is
-// still being dragged. That refresh is light (the server redraws only the preview). The full-size frame is
-// computed one time - when "Застосувати" is pressed.
+// still being dragged. That refresh is light (the server redraws only the preview) and shows at once. The exact
+// picture - the real frame, computed in full - follows by itself: once the window has been quiet for
+// EXACT_DELAY_MS, the server computes it in the background (see scheduleExactPreview). No button has to be pressed.
 const PREVIEW_DELAY_SLIDER_MS = 450;
 const PREVIEW_DELAY_CLICK_MS = 150;
+const EXACT_DELAY_MS = 700;
+const EXACT_POLL_MS = 350;
+// Background recomputes that are on their way. (A set per window: an answer that comes after its window was
+// closed must not be counted for the next one.)
+let exactJobs = new Set();
 
 // Custom Drag-Only Sliders
 const ALL_SLIDER_IDS = [
@@ -370,17 +390,18 @@ function escapeHtml(s) {
 const USER_GUIDE_TIPS = [
   "💡 Вікно відкривається одразу з чистим фото. Кнопка «До / Після» показує оригінал, ще раз — знову результат.",
   "💡 Кнопка «Маска»: яскраво-зелене — знайдені дефекти, блідо-зелене — фон, який вирівнюється. Гумка (E) стирає зайве зелене з одягу, взуття або тіней.",
+  "💡 Пензлем і гумкою можна працювати просто по чистому фото: відпустили мишку — результат одразу видно. Зелену маску вмикає кнопка «Маска».",
   "💡 Розводи й сліди на підлозі вирівнюються аж до самих ніг, тіні лишаються. Лінію стіна–підлога прибирає «Циклорама»; щоб лишити її — поставте 0%.",
   "💡 Пресет підбирається сам під кадр: темний фон, ближній, середній план чи повний зріст. Іншої думки — виберіть свій у списку.",
   "💡 Ctrl + Клік по іконці Пензля (B) показує шар на всьому кадрі; Ctrl + Клік по Гумці (E) — повністю очищає маску.",
   "💡 Увімкніть іконку сукні зверху, щоб AI делікатно розгладив різкі складки на одязі без впливу на шкіру й волосся.",
   "💡 Натисніть квадратики фракцій знизу (Дрібна / Середня / Велика), щоб швидко вмикати або вимикати типи чистки.",
-  "💡 Колесо миші масштабує фото, а Пробіл + мишка дає змогу плавно рухати кадр у наближенні.",
+  "💡 Зум: колесо миші або Ctrl + «+» / Ctrl + «−», як у Photoshop; Ctrl + 0 — вписати фото у вікно. Рухати наближене фото: затисніть праву кнопку миші й тягніть (або Пробіл + мишка).",
   "💡 Гарячі клавіші [ і ] миттєво зменшують або збільшують розмір пензля й гумки.",
   "💡 Поставте галочку «Make Mask» зверху, якщо хочете отримати у Photoshop редаговану маску шару.",
   "💡 Якщо на фоні є стійки, кабелі чи прилади — увімкніть їх видалення в налаштуваннях (шестигранник) або пресеті «Без стійок (AI)».",
   "💡 Пензель і гумка мають м’який край — без смуги й різкого переходу. Потрібен чіткий край — нижній кружечок під розміром пензля.",
-  "💡 Перегляд оновлюється сам, щойно відпустите повзунок. Повний розрахунок робиться один раз — коли натиснете «Застосувати»."
+  "💡 Перегляд перераховується сам: щойно відпустите повзунок — швидко, а за мить — точно, для всього кадру. Кнопку для цього натискати не треба."
 ];
 
 let tipCycleIndex = Math.floor(Math.random() * USER_GUIDE_TIPS.length);
@@ -1642,11 +1663,17 @@ function findLayerById(layers, targetId) {
   return null;
 }
 
+// The layers this plugin makes. Up to 4.7.0 the program was called "Чистий Вініл Pro 2" and its layers carried
+// the 2 as well: a document that holds such a layer is still served by the "До / Після" button of the panel.
+const LAYER_NAME_AI = "Чистий вініл (AI)";
+const LAYER_NAME_SELECTION = "Чистий вініл (Виділення)";
+const PLUGIN_LAYER_NAMES = [LAYER_NAME_AI, LAYER_NAME_SELECTION, "Чистий вініл 2 (AI)", "Чистий вініл 2 (Виділення)"];
+
 function findLatestPluginLayer(layers) {
   if (!layers) return null;
   for (let i = 0; i < layers.length; i++) {
     const l = layers[i];
-    if (l.name === "Чистий вініл 2 (AI)" || l.name === "Чистий вініл 2 (Виділення)") return l;
+    if (PLUGIN_LAYER_NAMES.includes(l.name)) return l;
     if (l.layers && l.layers.length > 0) {
       const nested = findLatestPluginLayer(l.layers);
       if (nested) return nested;
@@ -1668,7 +1695,9 @@ function clampBounds(b, maxW, maxH) {
 // Stage Geometry, Zoom / Pan & Reliable Opaque JPEG Previews (No Canvas!)
 // ------------------------------------------------------------------
 // One of three views at any moment: "До / Після" switches original <-> cleaned photo (never the red/green one),
-// "Маска" switches mask <-> cleaned photo. The brush and the eraser work on the mask, so using them shows it.
+// "Маска" switches mask <-> cleaned photo. The window never switches to the mask by itself: the brush and the
+// eraser are used on whatever is on screen - on the cleaned photo their result is seen at once (since 4.8.0; up
+// to 4.7.0 every stroke switched the mask on, and the result stayed hidden under the green).
 function setView(view) {
   sessState.view = view === "original" || view === "mask" ? view : "result";
   updateStageVisibility();
@@ -1698,27 +1727,37 @@ function updateStageVisibility() {
     over.style.opacity = "1";
   }
   if (dots) {
-    dots.style.display = showMask ? "block" : "none";
+    // the trace of a stroke (it exists only from the press until the server's answer) is seen over the cleaned
+    // photo and over the mask alike
+    dots.style.display = showOrig ? "none" : "block";
   }
 
   if (el("dlgBtnBeforeAfter")) el("dlgBtnBeforeAfter").classList.toggle("active", showOrig);
   if (el("dlgBtnMask")) el("dlgBtnMask").classList.toggle("active", sessState.view === "mask");
+  updateModeBadge();
+}
 
-  // The corner label always names what is on screen (hidden until the first scan has something to show)
+// The corner label always names what is on screen (hidden until the first scan has something to show). For the
+// cleaned photo it also says whether the picture is the exact one or a quick preview whose exact version is on
+// its way (see scheduleExactPreview).
+function updateModeBadge() {
   const badge = el("dlgModeBadge");
-  if (badge) {
-    if (!sessState.id) {
-      badge.className = "r4m-mode-badge";
-    } else if (showOrig) {
-      badge.textContent = "ДО · оригінал";
-      badge.className = "r4m-mode-badge visible";
-    } else if (showMask) {
-      badge.textContent = "МАСКА · яскраве — дефекти, бліде — вирівняний фон";
-      badge.className = "r4m-mode-badge visible mask";
-    } else {
-      badge.textContent = "ПІСЛЯ · чисте фото";
-      badge.className = "r4m-mode-badge visible clean";
-    }
+  if (!badge) return;
+  const showOrig = sessState.view === "original";
+  const showMask = sessState.view === "mask" && !sessState.peekingClean && !sessState.peekingBlend;
+  const kind = previewKind();
+  const refining = kind === "refining" ? " · уточнюється…" + exactProgressText() : "";
+  if (!sessState.id) {
+    badge.className = "r4m-mode-badge";
+  } else if (showOrig) {
+    badge.textContent = "ДО · оригінал";
+    badge.className = "r4m-mode-badge visible";
+  } else if (showMask) {
+    badge.textContent = "МАСКА · яскраве — дефекти, бліде — вирівняний фон" + refining;
+    badge.className = "r4m-mode-badge visible mask";
+  } else {
+    badge.textContent = kind === "exact" ? "ПІСЛЯ · чисте фото" : "ПІСЛЯ · швидкий перегляд" + refining;
+    badge.className = "r4m-mode-badge visible clean";
   }
 }
 
@@ -1760,6 +1799,25 @@ function resetZoomFit() {
   sessState.zoom = sessState.fitZoom;
   sessState.panX = 0;
   sessState.panY = 0;
+  applyStageLayout();
+}
+
+const ZOOM_MIN = 0.15;
+const ZOOM_MAX = 6.0;
+const ZOOM_WHEEL_STEP = 1.14;
+const ZOOM_BUTTON_STEP = 1.25;
+const ZOOM_KEY_STEP = 1.4;   // Ctrl + "+" / Ctrl + "−"
+
+// Zoom by `factor`; the point of the photo that is (cx, cy) away from the middle of the viewport stays where it
+// is. The mouse wheel passes the pointer; the keys and the two buttons pass nothing - the middle of the view
+// stays, as with Ctrl + "+" in Photoshop.
+function zoomBy(factor, cx = 0, cy = 0) {
+  const oldZoom = sessState.zoom;
+  const nextZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, oldZoom * factor));
+  const ratio = nextZoom / Math.max(0.01, oldZoom);
+  sessState.panX = cx - (cx - sessState.panX) * ratio;
+  sessState.panY = cy - (cy - sessState.panY) * ratio;
+  sessState.zoom = nextZoom;
   applyStageLayout();
 }
 
@@ -1898,14 +1956,15 @@ async function postMaskEdit(body) {
     } catch (_) {
       d = null;
     }
-    if (d && sessState.id === body.session_id) {
-      if (d.comp_jpg_b64 && el("dlgCompImg")) el("dlgCompImg").src = "data:image/jpeg;base64," + d.comp_jpg_b64;
-      if (d.overlay_jpg_b64 && el("dlgOverlayImg")) el("dlgOverlayImg").src = "data:image/jpeg;base64," + d.overlay_jpg_b64;
+    if (d && sessState.id === body.session_id && takeSessionPictures(d)) {
       if (typeof d.mask_share === "number") sessState.maskShare = d.mask_share;
       if (d.history) setEditHistory(d.history);
     }
   }
   clearStrokeDots();
+  // (a stroke changes nothing about the frame itself; but if the picture under it is still a quick preview, its
+  //  exact version is due - and was put off while the brush was busy)
+  if (sessState.id === body.session_id) scheduleExactPreview();
   return d;
 }
 
@@ -2019,8 +2078,7 @@ async function sendDressPreviewUpdate() {
     });
     if (r.ok) {
       const d = await r.json();
-      if (d.comp_jpg_b64 && el("dlgCompImg")) el("dlgCompImg").src = "data:image/jpeg;base64," + d.comp_jpg_b64;
-      if (d.overlay_jpg_b64 && el("dlgOverlayImg")) el("dlgOverlayImg").src = "data:image/jpeg;base64," + d.overlay_jpg_b64;
+      takeSessionPictures(d);
     }
   } catch (_) {}
 }
@@ -2068,6 +2126,218 @@ function cancelPreviewTimer() {
     clearTimeout(sessState.previewTimer);
     sessState.previewTimer = null;
   }
+}
+
+function cancelExactTimer() {
+  if (sessState.exactTimer) {
+    clearTimeout(sessState.exactTimer);
+    sessState.exactTimer = null;
+  }
+}
+
+// Every answer of the big window carries the two pictures and their number in order ("rev"). A brush stroke is
+// answered while a background recompute is still on its way, so two answers can arrive the other way round: a
+// picture older than the one on screen is dropped. Returns false for such an answer.
+// "exact" of the answer: the real frame was computed for these pictures (false after a light refresh).
+function takeSessionPictures(d) {
+  if (!d) return false;
+  if (typeof d.rev === "number") {
+    if (d.rev < sessState.picRev) return false;
+    sessState.picRev = d.rev;
+  }
+  if (d.comp_jpg_b64 && el("dlgCompImg")) el("dlgCompImg").src = "data:image/jpeg;base64," + d.comp_jpg_b64;
+  if (d.overlay_jpg_b64 && el("dlgOverlayImg")) el("dlgOverlayImg").src = "data:image/jpeg;base64," + d.overlay_jpg_b64;
+  if (typeof d.exact === "boolean") sessState.exactShown = d.exact;
+  // something new is on screen: whatever kept the exact recompute from being asked for may be over
+  sessState.exactHold = false;
+  sessState.exactError = "";
+  updateModeBadge();
+  return true;
+}
+
+// What the picture on screen is:
+//   "exact"    - the real frame was computed for it: this is what the layer will be;
+//   "refining" - a quick preview, and the exact picture is on its way by itself;
+//   "quick"    - a quick preview that stays for now (the exact one failed, or the server declined - see exactHold).
+function previewKind() {
+  if (sessState.exactShown || sessState.bgUnsupported) return "exact";
+  return (sessState.exactHold || sessState.exactError) ? "quick" : "refining";
+}
+
+function exactProgressText() {
+  return exactJobs.size > 0 && typeof sessState.exactPct === "number" ? ` ${Math.round(sessState.exactPct)} %` : "";
+}
+
+// Should the exact picture be computed now, by itself?
+function exactPreviewWanted() {
+  if (!sessState.open || !sessState.id || sessState.isApplying || sessState.bgUnsupported) return false;
+  if (sessState.exactError) return false;
+  // a quick preview is on screen (exactHold: the server declined to replace the user's own mask by itself)
+  if (previewMatchesSettings()) return !sessState.exactShown && !sessState.exactHold;
+  return !lightPreviewAvailable();  // new values and no light way (2 passes): the exact picture is the only one
+}
+
+// The exact picture comes by itself. Once the window has been quiet for a moment and the picture on screen is a
+// quick preview (or still shows the former values, where there is no light way), the server computes the real
+// frame in the background. Nothing waits for it: the brush and the eraser work meanwhile, and a change of the
+// settings simply goes first - the server stops the background run and this function is called again afterwards.
+function scheduleExactPreview(waitMs) {
+  cancelExactTimer();
+  if (exactPreviewWanted()) {
+    const ms = waitMs === undefined ? EXACT_DELAY_MS : Math.max(0, Number(waitMs) || 0);
+    sessState.exactTimer = setTimeout(fireExactPreview, ms);
+  }
+  updatePreviewBadge();
+  updateModeBadge();
+}
+
+function fireExactPreview() {
+  sessState.exactTimer = null;
+  // Not now: a slider is held, or another request for the frame is on its way or about to go. Each of them calls
+  // scheduleExactPreview() when it is done.
+  const busy = activeDragSliderId || sessState.recomputing || sessState.previewTimer;
+  const onItsWay = exactJobs.size > 0 && sessState.exactSig === previewSettingsSignature();
+  if (!exactPreviewWanted() || busy || onItsWay) {
+    updatePreviewBadge();
+    updateModeBadge();
+    return;
+  }
+  runExactPreview();
+}
+
+function stopExactPolling() {
+  if (sessState.exactPollTimer) {
+    clearInterval(sessState.exactPollTimer);
+    sessState.exactPollTimer = null;
+  }
+  sessState.exactPct = null;
+}
+
+// The percent next to "уточнюється": asked from the server a few times a second while a background run is on.
+function startExactPolling() {
+  if (sessState.exactPollTimer) return;
+  sessState.exactPollTimer = setInterval(async () => {
+    const job = sessState.exactJob;
+    if (!job || !exactJobs.has(job)) {
+      stopExactPolling();
+      return;
+    }
+    if (sessState.exactPollBusy) return;
+    sessState.exactPollBusy = true;
+    try {
+      const r = await fetch(`${SERVER_URL}/progress?job_id=${encodeURIComponent(job)}`);
+      if (r.ok) {
+        const d = await r.json();
+        if (d && d.ok && typeof d.pct === "number" && sessState.exactJob === job && exactJobs.has(job)) {
+          sessState.exactPct = d.pct;
+          updatePreviewBadge();
+          updateModeBadge();
+        }
+      }
+    } catch (_) {
+    } finally {
+      sessState.exactPollBusy = false;
+    }
+  }, EXACT_POLL_MS);
+}
+
+// One background recompute: the real frame for the values on the sliders, without the progress card.
+async function runExactPreview() {
+  const sid = sessState.id;
+  if (!sid) return false;
+  const jobs = exactJobs;
+  const jobId = makeJobId();
+  const sigAtSend = previewSettingsSignature();
+  const refine = previewMatchesSettings();  // the same values as on screen: only the quick picture becomes exact
+  const params = readCurrentConfig();
+  params.autoFractions = fracAuto;
+  jobs.add(jobId);
+  sessState.exactJob = jobId;
+  sessState.exactSig = sigAtSend;
+  sessState.exactPct = null;
+  sessState.previewForce = false;
+  startExactPolling();
+  updatePreviewBadge();
+  updateModeBadge();
+
+  let d = null;
+  let failed = "";
+  try {
+    const r = await fetch(`${SERVER_URL}/session/recompute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sid, params, preserve_edits: true, background: true, jobId })
+    });
+    if (!r.ok) {
+      let msg = `Помилка (${r.status})`;
+      try { const j = await r.json(); if (j.error) msg = j.error; } catch (_) {}
+      throw new Error(msg);
+    }
+    d = await r.json();
+  } catch (err) {
+    failed = err && err.message ? err.message : String(err);
+  } finally {
+    jobs.delete(jobId);
+  }
+  if (jobs !== exactJobs || sessState.id !== sid || !sessState.open) return false;  // that window is closed
+  if (jobs.size === 0) stopExactPolling();
+
+  let done = false;
+  if (failed) {
+    // Not tried again by itself: the next change of the settings or of the mask clears this (takeSessionPictures)
+    sessState.exactError = failed;
+  } else if (d.superseded) {
+    // another request went first; it asks for the exact picture again when it is done
+  } else if (d.skipped) {
+    // the mask on screen is the user's own drawing: a recompute would put the automatic one back. "Застосувати"
+    // computes the real frame in that case.
+    if (typeof d.exact === "boolean") sessState.exactShown = d.exact;
+    sessState.exactHold = true;
+  } else {
+    if (typeof d.exact !== "boolean") sessState.bgUnsupported = true;  // an older server: it made everything wait
+    takeRecomputeAnswer(d, sigAtSend, params, refine);
+    done = true;
+  }
+  updateStageVisibility();
+  scheduleExactPreview();  // (e.g. the values were changed meanwhile and there is no light way)
+  return done;
+}
+
+// The answer of a recompute - light, full or background - is taken over: pictures, fractions, notes, and which
+// settings the picture on screen now belongs to. `refine`: a background run for the values already on screen.
+function takeRecomputeAnswer(d, sigAtSend, params, refine) {
+  // (false: a newer picture is on screen already - a brush stroke answered later; it has this recompute in it)
+  const fresh = takeSessionPictures(d);
+  if (typeof d.rev === "number") {
+    if (d.rev < sessState.syncRev) return;  // a later recompute has been taken over already
+    sessState.syncRev = d.rev;
+  }
+  // Nothing was touched while the server was busy -> the picture that came back is for the current settings.
+  const untouched = previewSettingsSignature() === sigAtSend;
+  if (d.auto_fractions && (untouched || (params.autoFractions && fracAuto))) {
+    fracFine = !!d.auto_fractions.fracFine;
+    fracMed = !!d.auto_fractions.fracMed;
+    fracLarge = !!d.auto_fractions.fracLarge;
+    updateFractionButtonsUI();
+  }
+  if (fresh && d.history) setEditHistory(d.history);  // the brush strokes live on through a refresh, and so do their steps
+  sessState.lastStats = d.stats || null;
+  sessState.previewSyncedSig = untouched ? previewSettingsSignature() : sigAtSend;
+  if (sessState.presetNote && untouched) {
+    const note = sessState.presetNote;
+    sessState.presetNote = null;
+    sessState.smokeNote = false;
+    showPreviewNote(presetNoteText(note, d.mask_share));
+  } else if (sessState.smokeNote && untouched) {
+    // (also in the hint strip: the note in the corner goes away by itself, the strip stays until the next hint)
+    sessState.smokeNote = false;
+    const smokeText = smokeNoteText(d.smoke);
+    showPreviewNote(smokeText, 12000);
+    if (smokeText) sayInWindow(smokeText);
+  } else if (sessState.note && !refine) {
+    showPreviewNote("");  // the note on screen described the picture that has just been replaced
+  }
+  if (fresh && typeof d.mask_share === "number") sessState.maskShare = d.mask_share;
 }
 
 // A short message in the corner of the photo: which preset was picked and why, what a clicked preset changed.
@@ -2151,17 +2421,25 @@ function updatePreviewBadge() {
   let text = "";
   let cls = "r4m-preview-badge";
   if (sessState.open && sessState.id && !sessState.isApplying) {
+    const stale = !previewMatchesSettings();
     if (sessState.previewBusy || sessState.previewTimer) {
       text = "↻ Оновлюю перегляд…";
       cls += " visible";
-    } else if (!activeDragSliderId && !sessState.recomputing && !previewMatchesSettings()) {
-      if (sessState.quickUnsupported) {
-        text = "Перегляд ще зі старими значеннями. Запущено стару версію сервера — перезапустіть його (restart_gpu_server.bat). Оновити зараз: кнопка «↻ Точний перегляд» у налаштуваннях.";
-      } else if (cleanPasses >= 2) {
-        text = "Перегляд ще зі старими значеннями. З 2× проходом він оновлюється кнопкою «↻ Точний перегляд» у налаштуваннях. «Застосувати» врахує нові значення й без цього.";
+    } else if (stale && exactPreviewWanted() && (sessState.exactTimer || exactJobs.size > 0)) {
+      // no light way for these values (2 passes): the picture still shows the former ones until the exact one comes
+      text = "↻ Перераховую перегляд із новими значеннями…" + exactProgressText();
+      cls += " visible";
+    } else if (!activeDragSliderId && !sessState.recomputing && stale) {
+      if (sessState.exactError) {
+        text = `Перегляд не вдалося оновити: ${sessState.exactError}. Спробуйте кнопку «↻ Перерахувати зараз» у налаштуваннях. «Застосувати» врахує нові значення й без цього.`;
+      } else if (sessState.quickUnsupported || sessState.bgUnsupported) {
+        text = "Перегляд ще зі старими значеннями. Запущено стару версію сервера — перезапустіть його (restart_gpu_server.bat). Оновити зараз: кнопка «↻ Перерахувати зараз» у налаштуваннях.";
       } else {
-        text = "Перегляд не оновився. Натисніть «↻ Точний перегляд» у налаштуваннях. «Застосувати» врахує нові значення й без цього.";
+        text = "Перегляд не оновився. Натисніть «↻ Перерахувати зараз» у налаштуваннях. «Застосувати» врахує нові значення й без цього.";
       }
+      cls += " visible stale";
+    } else if (sessState.exactError && !sessState.exactShown) {
+      text = `Точний перегляд не вдалося порахувати: ${sessState.exactError}. На екрані швидкий перегляд; «Застосувати» все одно зробить точний розрахунок.`;
       cls += " visible stale";
     } else if (sessState.note) {
       text = sessState.note;
@@ -2173,14 +2451,21 @@ function updatePreviewBadge() {
 }
 
 // A setting of the cleaned background was changed: refresh the preview once, a moment after the last change.
+// The light way where there is one; otherwise (2 passes) the exact picture is asked for, in the background.
 function requestPreviewRefresh(waitMs, force) {
   if (!sessState.open || !sessState.id) return;
   if (force) sessState.previewForce = true;
   cancelPreviewTimer();
+  sessState.exactError = "";  // the values changed: an exact recompute that failed may be tried again
   if (!sessState.isApplying && lightPreviewAvailable() && !previewMatchesSettings()) {
+    cancelExactTimer();
     sessState.previewTimer = setTimeout(firePreviewRefresh, Math.max(0, Number(waitMs) || 0));
+    updatePreviewBadge();
+    updateModeBadge();
+    return;
   }
-  updatePreviewBadge();
+  // (also when the slider came back to the value the preview shows: a quick preview still wants its exact picture)
+  scheduleExactPreview(previewMatchesSettings() ? undefined : waitMs);
 }
 
 function firePreviewRefresh() {
@@ -2188,22 +2473,25 @@ function firePreviewRefresh() {
   const idle = !sessState.open || !sessState.id || sessState.isApplying;
   // A slider is being dragged again: nothing is computed during a drag, its release asks once more.
   if (idle || activeDragSliderId || !lightPreviewAvailable() || previewMatchesSettings()) {
-    updatePreviewBadge();
+    if (!idle && !activeDragSliderId) scheduleExactPreview();
+    else updatePreviewBadge();
     return;
   }
   recomputeInteractiveSession(true, true);
 }
 
-// Buttons that always recomputed at once (fractions, smoke checkbox, presets): now they refresh the preview the
-// light way; where there is no light way (2 passes, older server) they recompute in full at once, as before.
+// Buttons that always recomputed at once (fractions, smoke checkbox, presets): they refresh the preview the light
+// way; with 2 passes, where there is no light way, the exact picture comes in the background. Only an older
+// server, which knows neither, recomputes in full at once, as before.
 function refreshPreviewAfterClick(force) {
   if (!sessState.open || !sessState.id) return;
-  if (lightPreviewAvailable()) requestPreviewRefresh(PREVIEW_DELAY_CLICK_MS, force);
+  if (lightPreviewAvailable() || !sessState.bgUnsupported) requestPreviewRefresh(PREVIEW_DELAY_CLICK_MS, force);
   else recomputeInteractiveSession(true, false);
 }
 
 // quick = true: light refresh, only the preview is redrawn, nothing blocks the window.
-// quick = false: full recompute of the real frame with the progress card (exact preview).
+// quick = false: full recompute of the real frame with the progress card - the button "↻ Перерахувати зараз".
+// (The exact picture that comes by itself is runExactPreview: the same computation in the background.)
 async function recomputeInteractiveSession(preserveEdits = true, quick = false) {
   if (!sessState.id) return false;
   if (sessState.recomputing) {
@@ -2214,6 +2502,8 @@ async function recomputeInteractiveSession(preserveEdits = true, quick = false) 
     return false;
   }
   cancelPreviewTimer();
+  cancelExactTimer();
+  sessState.exactError = "";
   quick = !!quick;
   sessState.recomputing = true;
   sessState.previewBusy = quick;
@@ -2268,34 +2558,8 @@ async function recomputeInteractiveSession(preserveEdits = true, quick = false) 
           el("dlgHoverHint").textContent = "Запущено стару версію сервера: перезапустіть його (restart_gpu_server.bat), щоб перегляд оновлювався сам.";
         }
       }
-      // Nothing was touched while the server was busy -> the picture that came back is for the current settings.
-      const untouched = previewSettingsSignature() === sigAtSend;
-      if (d.auto_fractions && (untouched || (params.autoFractions && fracAuto))) {
-        fracFine = !!d.auto_fractions.fracFine;
-        fracMed = !!d.auto_fractions.fracMed;
-        fracLarge = !!d.auto_fractions.fracLarge;
-        updateFractionButtonsUI();
-      }
-      if (d.comp_jpg_b64 && el("dlgCompImg")) el("dlgCompImg").src = "data:image/jpeg;base64," + d.comp_jpg_b64;
-      if (d.overlay_jpg_b64 && el("dlgOverlayImg")) el("dlgOverlayImg").src = "data:image/jpeg;base64," + d.overlay_jpg_b64;
-      if (d.history) setEditHistory(d.history);  // the brush strokes live on through a refresh, and so do their steps
-      sessState.lastStats = d.stats || null;
-      sessState.previewSyncedSig = untouched ? previewSettingsSignature() : sigAtSend;
-      if (sessState.presetNote && untouched) {
-        const note = sessState.presetNote;
-        sessState.presetNote = null;
-        sessState.smokeNote = false;
-        showPreviewNote(presetNoteText(note, d.mask_share));
-      } else if (sessState.smokeNote && untouched) {
-        // (also in the hint strip: the note in the corner goes away by itself, the strip stays until the next hint)
-        sessState.smokeNote = false;
-        const smokeText = smokeNoteText(d.smoke);
-        showPreviewNote(smokeText, 12000);
-        if (smokeText) sayInWindow(smokeText);
-      } else if (sessState.note) {
-        showPreviewNote("");  // the note on screen described the picture that has just been replaced
-      }
-      if (typeof d.mask_share === "number") sessState.maskShare = d.mask_share;
+      if (typeof d.exact !== "boolean") sessState.bgUnsupported = true;  // an older server: no background recompute
+      takeRecomputeAnswer(d, sigAtSend, params, false);
       done = true;
       updateStageVisibility();
     }
@@ -2335,7 +2599,9 @@ async function recomputeInteractiveSession(preserveEdits = true, quick = false) 
       await recomputeInteractiveSession(nextPreserve, true);
     }
   }
-  updatePreviewBadge();
+  // The light picture is on screen: its exact version follows by itself after a quiet moment.
+  if (sessState.open && sessState.id === sid) scheduleExactPreview();
+  else updatePreviewBadge();
   return done;
 }
 
@@ -2411,7 +2677,7 @@ async function openInteractiveWorkspace() {
         autoFractions: !!params.autoFractions,
         scenePresetIds: scenePresets ? scenePresets.ids : null
       };
-    }, { commandName: "Читання фото Чистий Вініл Pro 2" });
+    }, { commandName: "Читання фото Чистий Вініл Pro" });
   } catch (err) {
     hideProgressUI("panel");
     isBusy = false;
@@ -2450,6 +2716,18 @@ async function openInteractiveWorkspace() {
   sessState.previewSyncedSig = "";
   sessState.previewForce = false;
   sessState.quickUnsupported = false;
+  cancelExactTimer();
+  stopExactPolling();
+  exactJobs = new Set();
+  sessState.picRev = 0;
+  sessState.syncRev = 0;
+  sessState.exactShown = true;
+  sessState.exactSig = "";
+  sessState.exactJob = null;
+  sessState.exactError = "";
+  sessState.exactHold = false;
+  sessState.bgUnsupported = false;
+  sessState.isPanning = false;
   setEditHistory(null);
   pendingApplyPayload = null;
   updatePreviewBadge();
@@ -2469,7 +2747,7 @@ async function openInteractiveWorkspace() {
   if (el("dlgGearPopover")) el("dlgGearPopover").classList.remove("visible");
   if (el("dlgInfoPopover")) el("dlgInfoPopover").classList.remove("visible");
 
-  // Default tool = Eraser: the first stroke over the photo shows the mask and erases the extra green there
+  // Default tool = Eraser: a stroke over the photo takes the cleaning back there (the photo shows it at once)
   setActiveTool("eraser");
   updateStageVisibility();
   updateFractionButtonsUI();
@@ -2500,6 +2778,12 @@ async function openInteractiveWorkspace() {
       sessState.pw = res.preview_w;
       sessState.ph = res.preview_h;
       sessState.lastStats = res.stats || null;
+      // The first pictures are exact (the real frame was computed for them) and carry their number in order.
+      // A server that says neither is an older build: no background recompute is asked of it.
+      sessState.picRev = typeof res.rev === "number" ? res.rev : 0;
+      sessState.syncRev = sessState.picRev;
+      sessState.exactShown = true;
+      sessState.bgUnsupported = typeof res.exact !== "boolean";
 
       // Sliders may have been moved while the first scan was running: then the picture is for the values sent.
       const untouched = previewSettingsSignature() === captured.settingsSig;
@@ -2560,13 +2844,15 @@ async function openInteractiveWorkspace() {
 
   try {
     await dlg.uxpShowModal({
-      title: "Чистий Вініл Pro 2",
+      title: "Чистий Вініл Pro",
       resize: "both",
       size: { width: 1020, height: 740 }
     });
   } finally {
     sessState.scanAborted = true;
     cancelPreviewTimer();
+    cancelExactTimer();
+    stopExactPolling();
     sessState.pendingRecompute = false;
     sessState.presetNote = null;
     sessState.smokeNote = false;
@@ -2599,10 +2885,14 @@ async function applyInteractiveResultToPhotoshop() {
   // The layer is always made for the values that are on the sliders right now: they travel with the request and
   // the server computes the full-size frame for them - once, here. A light refresh still waiting is not needed.
   cancelPreviewTimer();
+  cancelExactTimer();
   sessState.pendingRecompute = false;
   updatePreviewBadge();
   const applyParams = readCurrentConfig();
   applyParams.autoFractions = fracAuto;
+  // The exact picture for these very values is being computed in the background right now: Apply waits for that
+  // run instead of stopping it and computing the same frame from the start.
+  const followBackground = exactJobs.size > 0 && sessState.exactSig === previewSettingsSignature();
 
   const doc = app.activeDocument;
   const makeMask = el("dlgChkMakeMask") ? !!el("dlgChkMakeMask").checked : false;
@@ -2624,6 +2914,7 @@ async function applyInteractiveResultToPhotoshop() {
         dressSmooth: dressSmoothEnabled,
         dressStrength: getSliderVal("gSlDress"),
         params: applyParams,
+        followBackground,
         jobId
       })
     });
@@ -2655,7 +2946,8 @@ async function applyInteractiveResultToPhotoshop() {
     stopProgressPolling();
     hideProgressUI("modal");
     sessState.isApplying = false;
-    updatePreviewBadge();
+    if (sessState.open && sessState.id) scheduleExactPreview();  // (Apply failed: the window goes on)
+    else updatePreviewBadge();
   }
 }
 
@@ -2674,13 +2966,13 @@ async function commitApplyPayloadToPhotoshop(payload) {
     await core.executeAsModal(async (executionContext) => {
       const suspensionID = await executionContext.hostControl.suspendHistory({
         documentID: doc.id,
-        name: "Чистий Вініл Pro 2"
+        name: "Чистий Вініл Pro"
       });
       try {
         const topBefore = doc.layers && doc.layers.length > 0 ? doc.layers[0] : null;
         const newLayer = doc.createPixelLayer
-          ? await doc.createPixelLayer({ name: "Чистий вініл 2 (AI)", opacity: Math.round(blend) })
-          : await doc.createLayer({ name: "Чистий вініл 2 (AI)" });
+          ? await doc.createPixelLayer({ name: LAYER_NAME_AI, opacity: Math.round(blend) })
+          : await doc.createLayer({ name: LAYER_NAME_AI });
 
         if (!newLayer) throw new Error("Photoshop не зміг створити новий шар.");
 
@@ -2803,7 +3095,7 @@ async function commitApplyPayloadToPhotoshop(payload) {
       } finally {
         await executionContext.hostControl.resumeHistory(suspensionID);
       }
-    }, { commandName: "Чистий Вініл Pro 2" });
+    }, { commandName: "Чистий Вініл Pro" });
 
     const totalSec = opStartMs > 0 ? ((Date.now() - opStartMs) / 1000).toFixed(2) : "—";
     const chPx = (meta.stats && meta.stats.changed_px) || 0;
@@ -2926,13 +3218,13 @@ async function runQuickSelectionClean() {
     const outTyped = captured.bitDepth === 16 ? new Uint16Array(pixelBuffer) : new Uint8Array(pixelBuffer);
 
     await core.executeAsModal(async (executionContext) => {
-      const suspensionID = await executionContext.hostControl.suspendHistory({ documentID: doc.id, name: "Чистий Вініл 2 (Виділення)" });
+      const suspensionID = await executionContext.hostControl.suspendHistory({ documentID: doc.id, name: "Чистий Вініл (Виділення)" });
       try {
         await action.batchPlay([{ _obj: "set", _target: [{ _ref: "channel", _property: "selection" }], to: { _enum: "ordinal", _value: "none" } }], {});
         const topBefore = doc.layers && doc.layers.length > 0 ? doc.layers[0] : null;
         const newLayer = doc.createPixelLayer
-          ? await doc.createPixelLayer({ name: "Чистий вініл 2 (Виділення)", opacity: 100 })
-          : await doc.createLayer({ name: "Чистий вініл 2 (Виділення)" });
+          ? await doc.createPixelLayer({ name: LAYER_NAME_SELECTION, opacity: 100 })
+          : await doc.createLayer({ name: LAYER_NAME_SELECTION });
         if (topBefore && newLayer.id !== topBefore.id && constants && constants.ElementPlacement) {
           try { await newLayer.move(topBefore, constants.ElementPlacement.PLACEBEFORE); } catch (_) {}
         }
@@ -2953,7 +3245,7 @@ async function runQuickSelectionClean() {
       } finally {
         await executionContext.hostControl.resumeHistory(suspensionID);
       }
-    }, { commandName: "Чистий Вініл 2 (Виділення)" });
+    }, { commandName: "Чистий Вініл (Виділення)" });
 
     const sec = ((Date.now() - opStartMs) / 1000).toFixed(2);
     setFooterStatus(`✓ Виділену ділянку очищено за ${sec} с.`, "success");
@@ -3065,7 +3357,7 @@ async function runExtendCanvasToFormat() {
     updateProgressUI(92, "Розширення полотна у Photoshop...", "panel");
 
     await core.executeAsModal(async (executionContext) => {
-      const suspensionID = await executionContext.hostControl.suspendHistory({ documentID: doc.id, name: "Формат 5:7 (Чистий Вініл 2)" });
+      const suspensionID = await executionContext.hostControl.suspendHistory({ documentID: doc.id, name: "Формат 5:7 (Чистий Вініл)" });
       try {
         await action.batchPlay([{ _obj: "set", _target: [{ _ref: "channel", _property: "selection" }], to: { _enum: "ordinal", _value: "none" } }], {});
 
@@ -3113,7 +3405,7 @@ async function runExtendCanvasToFormat() {
       } finally {
         await executionContext.hostControl.resumeHistory(suspensionID);
       }
-    }, { commandName: "Формат 5:7 (Чистий Вініл 2)" });
+    }, { commandName: "Формат 5:7 (Чистий Вініл)" });
 
     const sec = ((Date.now() - opStartMs) / 1000).toFixed(1);
     const added = meta.left > 0 ? `по ${meta.left} px зліва і справа` : `по ${meta.top} px зверху і знизу`;
@@ -3151,14 +3443,14 @@ async function toggleBeforeAfterInPhotoshop() {
         }
       }
       if (!layer) {
-        setFooterStatus("Шар «Чистий вініл 2 (AI)» ще не створено.", "info");
+        setFooterStatus(`Шар «${LAYER_NAME_AI}» ще не створено.`, "info");
         return;
       }
       compareShowingOriginal = layer.visible;
       layer.visible = !compareShowingOriginal;
       el("btnCompare").classList.toggle("active", compareShowingOriginal);
       el("btnCompare").textContent = compareShowingOriginal ? "До / Після (Оригінал)" : "До / Після";
-    }, { commandName: "До / Після (Чистий Вініл 2)" });
+    }, { commandName: "До / Після (Чистий Вініл)" });
   } catch (err) {
     setFooterStatus("Помилка До/Після: " + (err && err.message ? err.message : String(err)), "error");
   }
@@ -3240,6 +3532,16 @@ function updateSliderFromClientX(sliderId, clientX) {
   }
 }
 
+// The photo follows the pointer while it is being dragged (see startPan in initEvents)
+function panTo(clientX, clientY) {
+  const dx = clientX - sessState.dragStartX;
+  const dy = clientY - sessState.dragStartY;
+  if (dx !== 0 || dy !== 0) sessState.panMoved = true;
+  sessState.panX = sessState.panStartX + dx;
+  sessState.panY = sessState.panStartY + dy;
+  applyStageLayout();
+}
+
 function initEvents() {
   // Custom drag-only sliders
   ALL_SLIDER_IDS.forEach((id) => {
@@ -3271,9 +3573,7 @@ function initEvents() {
     if (!sessState.open || !sessState.pw) return;
 
     if (sessState.isPanning) {
-      sessState.panX = sessState.panStartX + (e.clientX - sessState.dragStartX);
-      sessState.panY = sessState.panStartY + (e.clientY - sessState.dragStartY);
-      applyStageLayout();
+      panTo(e.clientX, e.clientY);
       return;
     }
 
@@ -3501,7 +3801,8 @@ function initEvents() {
     scheduleSaveSettings();
     requestPreviewRefresh(PREVIEW_DELAY_CLICK_MS, false);
   });
-  // Exact preview on request: the real frame is recomputed in full (the same work "Застосувати" would do).
+  // The exact picture on request, at once and with the progress card. Not needed any more: the same picture comes
+  // by itself after every change (scheduleExactPreview). The button stays for the case that it does not.
   el("gBtnRecompute").addEventListener("click", async () => {
     el("dlgGearPopover").classList.remove("visible");
     const active = presetsList.find((p) => p.id === activePresetId);
@@ -3543,26 +3844,28 @@ function initEvents() {
   // Left Toolbar (Pan / Brush + Ctrl-Click Fill / Eraser + Ctrl-Click Clear / Invert / Size)
   el("dlgToolPan").addEventListener("click", () => setActiveTool("pan"));
 
-  // The brush, the eraser and the inversion work on the mask: picking one of them shows it
+  // The brush, the eraser and the inversion change the mask. The window keeps showing what it shows: on the
+  // cleaned photo the result of every stroke is seen at once; the mask is seen when the user switched it on with
+  // "Маска". The three actions on the whole mask say in words what they did (on the photo it is not obvious).
   el("dlgToolBrush").addEventListener("click", async (e) => {
     setActiveTool("brush");
-    setView("mask");
     if (e.ctrlKey || e.metaKey) {
-      await sendMaskEditOp("fill");
+      const d = await sendMaskEditOp("fill");
+      if (d) sayInWindow("Шар показано на всьому кадрі. Зони видно кнопкою «Маска»; скасувати — Ctrl + Z.");
     }
   });
 
   el("dlgToolEraser").addEventListener("click", async (e) => {
     setActiveTool("eraser");
-    setView("mask");
     if (e.ctrlKey || e.metaKey) {
-      await sendMaskEditOp("clear");
+      const d = await sendMaskEditOp("clear");
+      if (d) sayInWindow("Маску стерто повністю: шар тепер нічого не змінює. Скасувати — Ctrl + Z.");
     }
   });
 
   el("dlgToolInvert").addEventListener("click", async () => {
-    setView("mask");
-    await sendMaskEditOp("invert");
+    const d = await sendMaskEditOp("invert");
+    if (d) sayInWindow("Маску інвертовано: шар тепер діє там, де не діяв. Зони видно кнопкою «Маска»; скасувати — Ctrl + Z.");
   });
 
   // One step back / forward for the mask edits (the keys: Ctrl + Z, Ctrl + Shift + Z, Ctrl + Y - see below)
@@ -3576,6 +3879,53 @@ function initEvents() {
 
   // Viewport Mouse Interactions: Draw / Pan / Peek Clean Photo Outside Image!
   const vp = el("dlgViewport");
+
+  function startPan(e) {
+    if (e.preventDefault) e.preventDefault();
+    sessState.isPanning = true;
+    sessState.panButton = e.button;
+    sessState.panStartedMs = Date.now();
+    sessState.panMoved = false;
+    sessState.dragStartX = e.clientX;
+    sessState.dragStartY = e.clientY;
+    sessState.panStartX = sessState.panX;
+    sessState.panStartY = sessState.panY;
+    vp.style.cursor = "grabbing";
+    const cur = el("dlgBrushCursor");
+    if (cur) cur.style.display = "none";
+  }
+
+  function endPan() {
+    if (!sessState.isPanning) return;
+    sessState.isPanning = false;
+    setActiveTool(sessState.tool);
+  }
+
+  // The right mouse button drags the photo, so it must not open a menu over it. Where the host reports the
+  // release of the right button only this way (no "mouseup"), the drag ends here - but not at the press itself
+  // (some systems send this event when the button goes down).
+  vp.addEventListener("contextmenu", (e) => {
+    if (!sessState.open) return;
+    e.preventDefault();
+    if (sessState.isPanning && sessState.panButton === 2 && (sessState.panMoved || Date.now() - sessState.panStartedMs > 250)) {
+      endPan();
+    }
+  });
+
+  // (Pointer events: a host that reports the right button only through them is served as well. Where both kinds
+  //  of events come, the second one finds the drag already started and changes nothing.)
+  vp.addEventListener("pointerdown", (e) => {
+    if (!sessState.open || e.button !== 2 || sessState.isPanning) return;
+    startPan(e);
+  });
+  document.addEventListener("pointermove", (e) => {
+    if (!sessState.open || !sessState.isPanning || sessState.panButton !== 2) return;
+    panTo(e.clientX, e.clientY);
+  });
+  document.addEventListener("pointerup", (e) => {
+    if (sessState.isPanning && sessState.panButton === 2 && e.button === 2) endPan();
+  });
+
   vp.addEventListener("mousedown", (e) => {
     if (!sessState.open) return;
     // Close open popovers when clicking viewport
@@ -3583,14 +3933,9 @@ function initEvents() {
       if (el(id)) el(id).classList.remove("visible");
     });
 
-    if (e.button === 1 || sessState.spaceDown || sessState.tool === "pan") {
-      e.preventDefault();
-      sessState.isPanning = true;
-      sessState.dragStartX = e.clientX;
-      sessState.dragStartY = e.clientY;
-      sessState.panStartX = sessState.panX;
-      sessState.panStartY = sessState.panY;
-      vp.style.cursor = "grabbing";
+    // Drag the photo: the right or the middle mouse button with any tool, Space + mouse, or the hand tool
+    if (e.button === 1 || e.button === 2 || sessState.spaceDown || sessState.tool === "pan") {
+      startPan(e);
       return;
     }
 
@@ -3605,7 +3950,9 @@ function initEvents() {
     if (e.button === 0 && (sessState.tool === "brush" || sessState.tool === "eraser")) {
       e.preventDefault();
       if (!sessState.id) return;                         // nothing to draw on while the first scan is running
-      if (sessState.view !== "mask") setView("mask");    // a stroke edits the mask: show it
+      // The stroke is made on what is on screen: the cleaned photo (its result shows there the moment the mouse
+      // is released) or the mask. Only "До" is left: nothing a stroke does can be seen on the original.
+      if (sessState.view === "original") setView("result");
       sessState.isDrawing = true;
       sessState.lastDotX = -1;
       sessState.lastDotY = -1;
@@ -3617,17 +3964,8 @@ function initEvents() {
   vp.addEventListener("wheel", (e) => {
     if (!sessState.open || !sessState.pw) return;
     e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.14 : 1 / 1.14;
-    const oldZoom = sessState.zoom;
-    const nextZoom = Math.max(0.15, Math.min(6.0, oldZoom * factor));
     const r = vp.getBoundingClientRect();
-    const cx = e.clientX - r.left - r.width * 0.5;
-    const cy = e.clientY - r.top - r.height * 0.5;
-    const scaleRatio = nextZoom / Math.max(0.01, oldZoom);
-    sessState.panX = cx - (cx - sessState.panX) * scaleRatio;
-    sessState.panY = cy - (cy - sessState.panY) * scaleRatio;
-    sessState.zoom = nextZoom;
-    applyStageLayout();
+    zoomBy(e.deltaY < 0 ? ZOOM_WHEEL_STEP : 1 / ZOOM_WHEEL_STEP, e.clientX - r.left - r.width * 0.5, e.clientY - r.top - r.height * 0.5);
   });
 
   // Keyboard shortcuts inside modal
@@ -3648,6 +3986,19 @@ function initEvents() {
         stepMaskEdit(isZ && !e.shiftKey);
         return;
       }
+      // Ctrl + "+" and Ctrl + "−" zoom in and out around the middle of the view, Ctrl + 0 fits the photo into the
+      // window - the keys of Photoshop. The key next to Backspace ("=" / "+") and the numeric pad both count; the
+      // key is told by its place first (e.code), so the keyboard layout does not matter.
+      const zoomIn = e.code === "Equal" || e.code === "NumpadAdd" || k === "+" || k === "=";
+      const zoomOut = e.code === "Minus" || e.code === "NumpadSubtract" || k === "-" || k === "_" || k === "−";
+      const zoomFit = e.code === "Digit0" || e.code === "Numpad0" || k === "0";
+      if ((zoomIn || zoomOut || zoomFit) && sessState.pw) {
+        e.preventDefault();
+        if (e.stopPropagation) e.stopPropagation();
+        if (zoomFit) resetZoomFit();
+        else zoomBy(zoomIn ? ZOOM_KEY_STEP : 1 / ZOOM_KEY_STEP);
+        return;
+      }
     }
     if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
     if (e.code === "Space") {
@@ -3659,10 +4010,8 @@ function initEvents() {
       adjustBrushSize(6);
     } else if (e.key === "b" || e.key === "B" || e.key === "и" || e.key === "И") {
       setActiveTool("brush");
-      if (sessState.id) setView("mask");
     } else if (e.key === "e" || e.key === "E" || e.key === "у" || e.key === "У") {
       setActiveTool("eraser");
-      if (sessState.id) setView("mask");
     } else if (e.key === "h" || e.key === "H" || e.key === "р" || e.key === "Р") {
       setActiveTool("pan");
     }
@@ -3705,14 +4054,8 @@ function initEvents() {
     if (fracAuto) refreshPreviewAfterClick(true);  // the server picks the fractions again
   });
 
-  el("dlgZoomOut").addEventListener("click", () => {
-    sessState.zoom = Math.max(0.15, sessState.zoom / 1.25);
-    applyStageLayout();
-  });
-  el("dlgZoomIn").addEventListener("click", () => {
-    sessState.zoom = Math.min(6.0, sessState.zoom * 1.25);
-    applyStageLayout();
-  });
+  el("dlgZoomOut").addEventListener("click", () => zoomBy(1 / ZOOM_BUTTON_STEP));
+  el("dlgZoomIn").addEventListener("click", () => zoomBy(ZOOM_BUTTON_STEP));
   el("dlgZoomLabel").addEventListener("click", resetZoomFit);
 
   el("dlgBtnApply").addEventListener("click", applyInteractiveResultToPhotoshop);

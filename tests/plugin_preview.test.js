@@ -20,7 +20,12 @@
 //   - one mode: there is no speed button, and every request asks for the full AI fill, whatever settings and
 //     presets of an older version say;
 //   - the edge of the brush and the eraser: soft unless the user chose the hard one; the choice travels with every
-//     stroke and is kept with the settings.
+//     stroke and is kept with the settings;
+//   - the exact picture comes by itself (4.8.0): a moment after a light refresh the real frame is asked for in the
+//     background, without the progress card and without any button; a newer picture is never replaced by an older
+//     one; a change of the settings goes first; Apply waits for a run that computes the very frame it needs;
+//   - the brush and the eraser are used on the cleaned photo: the mask never switches on by itself;
+//   - Ctrl + "+" / Ctrl + "-" / Ctrl + 0 zoom as in Photoshop; the right mouse button drags the photo.
 //
 //   node tests/plugin_preview.test.js
 //   node tests/plugin_preview.test.js "preset click" remembered     (only the scenarios whose name has one of the texts)
@@ -85,9 +90,36 @@ function makeEnv(serverOpts = {}) {
     backupSaveFails: false,
     backupFolder: "D:\\Plugin Photoshop\\CleanVinylPro2\\backup",
     backups: [],           // the files of the backup folder, oldest first
-    folderOpened: 0
+    folderOpened: 0,
+    // The exact picture by itself (4.8.0) - the rules of engine.py: recompute_session(background=True)
+    bgAware: true,         // false = a server before 4.8.0: "background" is ignored, no "rev" / "exact" in the answers
+    bgDelay: 250,          // ms one background recompute takes
+    failBackground: 0,     // how many next background recomputes answer with an error
+    ownMask: false,        // true = the mask is the user's own drawing ("invert + brush"): never replaced by itself
+    progressPct: 50,       // what /progress answers
+    rev: 0,                // the number of the pictures last sent
+    exact: true,           // the real frame is behind them
+    shown: "",             // the settings those pictures belong to
+    bgSeen: { started: 0, finished: 0, superseded: 0, skipped: 0 }
   }, serverOpts);
+  if (!server.quickAware) server.bgAware = false;   // (a build that old knows neither)
   const W = 4, H = 6;
+
+  // The picture of every answer says what it is ("light-3": a light refresh, the third picture of this window),
+  // so a test sees which one is on screen.
+  const pic = (text) => Buffer.from(text).toString("base64");
+  // Everything the cleaned frame depends on. Two requests with the same signature ask for the same frame.
+  const frameSig = (p) => JSON.stringify([
+    p.spots, p.scuffs, p.blur, p.cycCurve, p.feather, !!p.seamOn, p.seam, p.edge, !!p.smokeOn, p.smoke, p.grain,
+    !!p.shadow, !!p.removeStands, Math.max(100, Number(p.master) || 0), !!p.fracFine, !!p.fracMed, !!p.fracLarge,
+    Number(p.cleanPasses) >= 2 ? 2 : 1
+  ]);
+  const fractionsOf = (p) => (p.autoFractions ? server.autoFractions : { fracFine: p.fracFine, fracMed: p.fracMed, fracLarge: p.fracLarge });
+  const sigOf = (p) => frameSig(Object.assign({}, p, fractionsOf(p)));
+  const pictureState = () => (server.bgAware ? { rev: server.rev, exact: server.exact } : {});
+  // Background runs in flight. Such a run gives way to every other request that needs the frame.
+  const bgRuns = new Set();
+  const stopBackground = () => { for (const run of Array.from(bgRuns)) run.giveWay(); };
 
   const reply = (obj, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => obj, arrayBuffer: async () => new ArrayBuffer(0) });
   // What the engine says of smoke for the parameters `p` (the rule of engine.py: _smoke_auto, SMOKE_ALWAYS_FROM)
@@ -135,7 +167,7 @@ function makeEnv(serverOpts = {}) {
         case "/settings":
           return reply(method === "GET" ? { exists: false } : { ok: true });
         case "/progress":
-          return reply({ ok: true, pct: 50, stage: "…" });
+          return reply({ ok: true, pct: server.progressPct, stage: "…" });
         case "/session/start": {
           await waitOrAbort(server.startDelay, init.signal);
           // the automatic preset the way the engine does it: the set for this kind of frame replaces `params`
@@ -152,11 +184,15 @@ function makeEnv(serverOpts = {}) {
             }
           }
           rec.used = used;
-          const ans = {
+          stopBackground();
+          server.rev = 1;
+          server.exact = true;
+          server.shown = sigOf(used);
+          const ans = Object.assign({
             ok: true, session_id: "sess-1", width: W, height: H, preview_w: W, preview_h: H,
-            auto_fractions: used.autoFractions ? server.autoFractions : { fracFine: used.fracFine, fracMed: used.fracMed, fracLarge: used.fracLarge },
-            orig_jpg_b64: "QQ==", comp_jpg_b64: "QQ==", overlay_jpg_b64: "QQ==", stats: {}
-          };
+            auto_fractions: fractionsOf(used),
+            orig_jpg_b64: "QQ==", comp_jpg_b64: pic("start-1"), overlay_jpg_b64: pic("start-1"), stats: {}
+          }, pictureState());
           const smoke = smokeAnswer(used);
           if (smoke) {
             ans.smoke = smoke;
@@ -167,18 +203,61 @@ function makeEnv(serverOpts = {}) {
           return reply(ans);
         }
         case "/session/recompute": {
-          await waitOrAbort(server.recomputeDelay, init.signal);
-          if (server.failRecompute > 0) {
-            server.failRecompute--;
-            return reply({ ok: false, error: "test failure" }, 500);
-          }
           const p = body.params;
-          const ans = {
+          const background = server.bgAware && body.background === true;
+          stopBackground();   // one frame at a time: a background run gives way, also to a newer background run
+          if (background) {
+            // Nobody waits for this one. Same settings as on screen and the user's own mask: nothing is done.
+            const refineOnly = sigOf(p) === server.shown;
+            const skipped = () => {
+              server.bgSeen.skipped++;
+              rec.outcome = "skipped";
+              return reply(Object.assign({ ok: true, session_id: body.session_id, skipped: true }, pictureState()));
+            };
+            if (refineOnly && server.ownMask) return skipped();
+            server.bgSeen.started++;
+            const run = {};
+            const outcome = await new Promise((resolve) => {
+              const timer = setTimeout(() => resolve("done"), server.bgDelay);
+              run.giveWay = () => { clearTimeout(timer); resolve("superseded"); };
+              run.finished = new Promise((r2) => { run.finish = r2; });
+              bgRuns.add(run);
+            });
+            bgRuns.delete(run);
+            run.finish();
+            if (outcome === "superseded") {
+              server.bgSeen.superseded++;
+              rec.outcome = "superseded";
+              return reply({ ok: true, session_id: body.session_id, superseded: true });
+            }
+            if (server.failBackground > 0) {
+              server.failBackground--;
+              rec.outcome = "failed";
+              return reply({ ok: false, error: "test failure" }, 500);
+            }
+            if (refineOnly && server.ownMask) return skipped();   // (drawn while the frame was being computed)
+            server.bgSeen.finished++;
+            rec.outcome = "done";
+          } else {
+            await waitOrAbort(server.recomputeDelay, init.signal);
+            if (server.failRecompute > 0) {
+              server.failRecompute--;
+              return reply({ ok: false, error: "test failure" }, 500);
+            }
+          }
+          const quick = !background && server.quickAware && !!body.quick && Number(p.cleanPasses || 1) < 2;
+          server.rev++;
+          server.exact = !quick;
+          server.shown = sigOf(p);
+          server.ownMask = false;   // any recompute puts the automatic mask back
+          const name = (background ? "exact-" : quick ? "light-" : "full-") + server.rev;
+          rec.picture = name;
+          const ans = Object.assign({
             ok: true, session_id: body.session_id,
-            auto_fractions: p.autoFractions ? server.autoFractions : { fracFine: p.fracFine, fracMed: p.fracMed, fracLarge: p.fracLarge },
-            comp_jpg_b64: "QQ==", overlay_jpg_b64: "QQ==", stats: {}
-          };
-          if (server.quickAware) ans.quick = !!body.quick && Number(p.cleanPasses || 1) < 2;
+            auto_fractions: fractionsOf(p),
+            comp_jpg_b64: pic(name), overlay_jpg_b64: pic(name), stats: {}
+          }, pictureState());
+          if (server.quickAware) ans.quick = quick;
           if (server.maskShares.length) ans.mask_share = server.maskShares.shift();
           if (smokeAnswer(p)) ans.smoke = smokeAnswer(p);
           if (server.historyAware) ans.history = { undo: server.edits.undo, redo: server.edits.redo };
@@ -187,8 +266,11 @@ function makeEnv(serverOpts = {}) {
         case "/session/mask-edit": {
           if (server.editDelays.length) await waitOrAbort(server.editDelays.shift(), init.signal);
           // (the picture of every answer carries the number of the edit: the test sees which one is on screen)
-          const pic = Buffer.from("edit-" + (++server.editSeq)).toString("base64");
-          const ans = { ok: true, inverted: false, comp_jpg_b64: pic, overlay_jpg_b64: pic };
+          // A mask edit never waits for a background run and does not stop it.
+          const name = "edit-" + (++server.editSeq);
+          server.rev++;
+          rec.picture = name;
+          const ans = Object.assign({ ok: true, inverted: false, comp_jpg_b64: pic(name), overlay_jpg_b64: pic(name) }, pictureState());
           if (server.historyAware) {
             const hist = server.edits;
             if (body.op === "undo" || body.op === "redo") {
@@ -204,7 +286,7 @@ function makeEnv(serverOpts = {}) {
           return reply(ans);
         }
         case "/session/dress-preview":
-          return reply({ ok: true, inverted: false, comp_jpg_b64: "QQ==", overlay_jpg_b64: "QQ==" });
+          return reply(Object.assign({ ok: true, inverted: false, comp_jpg_b64: pic("dress-" + server.rev), overlay_jpg_b64: pic("dress-" + server.rev) }, pictureState()));
         case "/backup/save": {
           if (!server.backupAware) return reply({ detail: "Not Found" }, 404);
           if (server.backupSaveFails) return reply({ ok: false, error: "диск недоступний" }, 500);
@@ -236,6 +318,14 @@ function makeEnv(serverOpts = {}) {
           server.folderOpened++;
           return reply({ ok: true, folder: server.backupFolder, opened: true });
         case "/session/apply": {
+          // followBackground: the background run computes the very frame Apply needs - Apply waits for it. Otherwise
+          // the run gives way and Apply computes the frame itself.
+          if (server.bgAware && body.followBackground === true && bgRuns.size) {
+            rec.followed = true;
+            await Promise.all(Array.from(bgRuns).map((run) => run.finished));
+          } else {
+            stopBackground();
+          }
           await waitOrAbort(server.applyDelay, init.signal);
           const meta = Buffer.from(JSON.stringify({ ok: true, width: W, height: H, channels: 4, bitDepth: 8, hasLayerMask: false, stats: {} }), "utf8");
           const out = new Uint8Array(4 + meta.length + W * H * 4);
@@ -321,17 +411,27 @@ function makeEnv(serverOpts = {}) {
     if (!n) throw new Error("no element #" + id);
     return n;
   };
-  const mouse = (target, type, x = 0) => target.dispatchEvent(new w.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: 5, button: 0 }));
+  // `more`: other fields of the event, e.g. { button: 2 } for the right mouse button, { clientY: 300 }, { ctrlKey: true }
+  const mouse = (target, type, x = 0, more = {}) => {
+    const ev = new w.MouseEvent(type, Object.assign({ bubbles: true, cancelable: true, clientX: x, clientY: 5, button: 0 }, more));
+    target.dispatchEvent(ev);
+    return ev;
+  };
+  const isBackground = (r) => !!(r.body && r.body.background === true);
   const env = {
     w, doc, server, requests, errors, el,
     state: (expr) => run(expr, "test-expression"),
     of: (p) => requests.filter((r) => r.path === p),
-    recomputes: () => requests.filter((r) => r.path === "/session/recompute"),
-    click: (id) => mouse(el(id), "click"),
+    // what a control asked for (a light refresh, or a full recompute with the progress card)...
+    recomputes: () => requests.filter((r) => r.path === "/session/recompute" && !isBackground(r)),
+    // ...and what the window asked for by itself: the exact picture, in the background
+    exacts: () => requests.filter((r) => r.path === "/session/recompute" && isBackground(r)),
+    click: (id, more) => mouse(el(id), "click", 0, more),
     check: (id, on) => { el(id).checked = on; el(id).dispatchEvent(new w.Event("change", { bubbles: true })); },
-    press: (id, x) => mouse(el(id), "mousedown", x),
-    move: (x) => mouse(doc, "mousemove", x),
-    release: () => mouse(doc, "mouseup"),
+    press: (id, x, more) => mouse(el(id), "mousedown", x, more),
+    move: (x, more) => mouse(doc, "mousemove", x, more),
+    release: (more) => mouse(doc, "mouseup", 0, more),
+    mouse,
     // one whole drag of a slider: press, a few moves, release. `value` is in slider units (percent).
     async drag(id, value, stepMs = 15) {
       const max = id === "gSlTurbo" ? 200 : 100;
@@ -372,11 +472,18 @@ function makeEnv(serverOpts = {}) {
     footer: () => (el("footerStatus").classList.contains("visible") ? el("footerStatus").textContent : ""),
     // the picture on screen: "edit-N" after the N-th mask edit the server answered, "" before any
     picture() {
-      const src = String(el("dlgCompImg").src || "");
-      const b64 = src.split("base64,")[1] || "";
-      const text = Buffer.from(b64, "base64").toString("utf8");
+      const text = env.pictureName();
       return text.startsWith("edit-") ? text : "";
     },
+    // ...and whatever it is: "start-1", "light-2", "exact-3", "full-4", "edit-1", "dress-2" (see `pic` above)
+    pictureName() {
+      const src = String(el("dlgCompImg").src || "");
+      const b64 = src.split("base64,")[1] || "";
+      return Buffer.from(b64, "base64").toString("utf8");
+    },
+    // where the photo is in the window and how big: what Ctrl + "+" and a drag with the right button change
+    zoom: () => run("sessState.zoom", "test-expression"),
+    pan: () => run("[sessState.panX, sessState.panY]", "test-expression"),
     async waitFor(cond, ms = 4000) {
       for (let waited = 0; waited < ms; waited += 20) {
         if (cond()) return true;
