@@ -316,8 +316,8 @@ second plugin next to the installed one and lose his presets.
     of the panel into a copy of the plugin folder (`panel("<text in the scenario names>")`,
     `CV_PLUGIN_DIR`).
 - **4.8.0** — the big window: the exact picture comes by itself, the brush works on the cleaned photo,
-  zoom keys, dragging with the right button; the name without the 2; an opaque plugin icon. The cleaning
-  itself and the brush are unchanged from 4.7.0.
+  the pictures are twice as large (the person is sharp), zoom keys, dragging with the right button; the
+  name without the 2; an opaque plugin icon. The cleaning itself and the brush are unchanged from 4.7.0.
   - **The exact picture by itself.** Up to 4.7.0 a slider gave a light (quick) preview, and the real frame
     was computed only by the button «↻ Точний перегляд» or by Apply. Now the panel asks for it by itself:
     `scheduleExactPreview` → after `EXACT_DELAY_MS` (700 ms) in which nothing is touched →
@@ -426,41 +426,81 @@ second plugin next to the installed one and lose his presets.
 
 ## 3. Current state — update this at the end of every session
 
-_Last updated: 2026-11-20, by the agent of the first session, after releasing 4.7.0 and answering one
-question about it._
+_Last updated: 2026-11-21, by the agent of the first session, after releasing 4.8.0._
 
-- **Released:** 4.7.0, tag `cvp2-v4.7.0`, as a pre-release. Direct download:
-  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.7.0/CleanVinylPro2.zip`
-- **Owner's progress:** 4.2.0 to 4.6.0 have been installed and work on his PC (program in
-  `D:\Plugin Photoshop\CleanVinylPro2`, libraries copied from the old program without a download, models in
-  `D:\model AI fotoshop`, LaMa on `CUDAExecutionProvider`, Python 3.12.10). So the `.bat` files, the
-  installer, the GPU, the real models and the panel HAVE run on Windows. He wrote about 4.6.0 with four
-  points (section 1); 4.7.0 answers them.
-  **He has not reported on 4.7.0 yet.**
-  After the release he asked one thing: where to see the plugin in Creative Cloud in order to remove the
-  old one. He got the path, checked against Adobe's help pages: the Creative Cloud desktop app → Stock &
-  Marketplace → Plugins → Manage plugins (left column) → the three dots next to «Чистий Вініл Pro» (the one
-  without the 2) → Uninstall, and Uninstall again; the same list opens from Photoshop with Plugins →
-  Manage Plugins. A plugin installed from a `.ccx` has an orange download icon there and leaves the list
-  when it is uninstalled. The release notes of 4.7.0 were edited to say this. **The manual does not say it
-  yet**: section 6 still has only «у Creative Cloud (Плагіни)» in both lists (step 2 of «ЯК ВИДАЛИТИ», step
-  5 of «ЯК ВИДАЛИТИ СТАРУ ПРОГРАМУ»). Spell the path out there with the next version; the manual is inside
-  the ZIP, so it was left alone after the release. Whether his Creative Cloud shows these names in English
-  or in Ukrainian is not known.
-- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (35 results in
-  1,384 s; 62 scenarios of the panel test and 44 cases of the settings test among them) on
-  2026-11-20, with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4.
-  (Other jobs ran next to it; 4.6.0 took 966 s.) After that run only these changed: one step of the
-  removal instructions in the manual, one scenario of the panel test, `CV_PLUGIN_DIR` in the settings
-  test and `tests/try_defects.py`; the groups `plugin`, `server` and `bat` were run again and passed.
-  Deliberate defects for what is new in 4.7.0 (`tests/try_defects.py`), put in one by one: 17 in the
-  engine and one in `server.py`, all 18 caught (590 s); 11 in the panel (the edge buttons, the one mode),
-  put into a copy of the plugin folder, all 11 caught (52 s). One of the panel defects was let through at
-  first: a built-in preset that an older version had saved with the fast mode was offered to the
-  automatic preset as "fast". The scenario had such a preset only among the user's own, which the
-  automatic preset never offers; now the built-in ones are saved that way too.
-  The runners of earlier versions are gone or replaced (4.6.0: 34 defects, in the history at `50bae15`;
-  4.5.0: 71 and 4.4.0: 41, never committed); their checks are still in `tests/run_checks.py`.
+- **Released:** 4.8.0, tag `cvp2-v4.8.0`, as a pre-release. Direct download:
+  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.8.0/CleanVinylPro2.zip`
+- **Owner's progress:** 4.2.0 to 4.7.0 have been installed and work on his PC (program in
+  `D:\Plugin Photoshop\CleanVinylPro2`, models in `D:\model AI fotoshop`, LaMa on `CUDAExecutionProvider`,
+  Python 3.12.10). So the `.bat` files, the installer, the GPU, the real models and the panel HAVE run on
+  Windows. The old program (`D:\CleanVinylPro`) is removed from his PC. He wrote about 4.7.0 with five
+  points and added a sixth while 4.8.0 was being built (section 1); 4.8.0 answers them.
+  **He has not reported on 4.8.0 yet.**
+  The path to the plugin list of Creative Cloud (Stock & Marketplace → Plugins → Manage plugins → the three
+  dots → Uninstall; the same list opens from Photoshop with Plugins → Manage Plugins) is in section 6 of
+  the manual since 4.8.0. Whether his Creative Cloud shows these names in English or in Ukrainian is not
+  known.
+- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (37 results in
+  1,619 s; 79 scenarios of the panel test and 44 cases of the settings test among them) on
+  2026-11-21, with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4. (A check of two defects ran next
+  to it for its first eleven minutes; with nothing next to it the run took 1,480 s earlier that day.)
+  Deliberate defects for what is new in 4.8.0 (`tests/try_defects.py`), put in one by one: 33 in the
+  engine and the server (14 `exact`, 16 `sharp`, 3 `http`), in a copy of the tree (3,867 s for one
+  pass); 38 in the panel, put into a copy of the plugin folder (612 s). All 71 are caught by the
+  checks as they are now. Not all were at first: the defects that showed a hole were run again after the
+  check was repaired, the others were not repeated (the repairs only added conditions to `exact` and
+  changed one panel scenario).
+  Holes that the defects found while 4.8.0 was built, all closed:
+  - "the zoom keys work without Ctrl" was let through: the scenario pressed zoom-in and then zoom-out and
+    saw that nothing had changed. Each key is tried by itself now.
+  - a run of the engine defects was counted as "caught" although the check process had been killed (a
+    measurement on a 22 MP frame ran next to it and the sandbox ran out of memory). The runner now says
+    CRASHED for a check run that ends without a FAIL line, and counts it as not caught.
+  - the first check of the larger window pictures did not notice "the larger pictures do not show the
+    strokes and the eraser" by itself (the defect was caught only through a side effect in the clothing
+    part): the eraser was tried on clean floor, where erasing shows nothing. Now it is drawn along a row
+    of specks that the search removes, and the brush paints over a mark that the search leaves.
+  - "Apply waits for a background run of other values" was let through after "a slider that is taken stops
+    the run" had been added: the scenario changed the values with a slider, and that alone now stops the
+    run, so there was nothing left for Apply to follow. The scenario changes the values with a button now
+    (a click does not stop the run). A new rule can empty an older scenario: run ALL the defects again
+    after the last change, not only the new ones.
+  - "a background run holds the session while it computes" was caught only through a side effect: the
+    stroke that should have been answered meanwhile came back after the gate of the check had given up
+    (45 s), and that still counted as "meanwhile". `Gate.holding()` now tells whether the run still stood
+    at the gate when the answer came.
+  - "with the user's own mask the frame is computed first and declined afterwards" was not caught: the
+    answer and the session were the same, only a frame was computed for nothing (the second test, after
+    the computation, declined). The check counts the frames now.
+  Read the reason after "<-" of every caught defect: when it names another rule than the one the defect
+  breaks, the check that should have noticed is too weak, even though the defect counts as caught.
+  The runners of earlier versions are gone or replaced (4.7.0: 29 defects, in the history at `c3be3ed`;
+  4.6.0: 34, at `50bae15`; 4.5.0: 71 and 4.4.0: 41, never committed); their checks are still in
+  `tests/run_checks.py`.
+- **Decided by the agent alone for 4.8.0** (he chose "the cleaned photo stays on screen" and "remove the
+  2"; the rest was not asked - change it if he says otherwise):
+  - the exact picture is asked for after 0.7 s of quiet (`EXACT_DELAY_MS`);
+  - a mask he switched on himself stays on through his strokes; a stroke over «ДО» brings the cleaned
+    photo back; the three actions on the whole mask say in words what they did;
+  - Ctrl + 0 (fit) was added to the two keys he asked for;
+  - new layers lose the 2 as well («Чистий вініл (AI)»); the folder, the files, the ids and the port keep it;
+  - with his own mask ("invert + brush") the exact picture does not come by itself; Apply computes it;
+  - the corner label is amber while a quick preview is being refined and green for the exact picture;
+  - a slider that is taken stops the background run at once (Blend and Clothing do not);
+  - the window pictures are 2160 px and not more (section 2 says why); the cleaned backdrop is no sharper
+    than before;
+  - the icon: nothing can be done about Creative Cloud; the plugin icon was made opaque for Photoshop's
+    own list of plugins.
+- **Not run in Photoshop yet (4.8.0):** all of it. In particular:
+  - whether Photoshop passes Ctrl + «+» / «−» / 0 and the right mouse button to the window of the plugin
+    (if not, they do nothing; the wheel, Space + mouse, the middle button and the Hand tool stay);
+  - how long the background recompute takes on his GPU, and whether the percent in the corner label moves;
+  - whether pictures of four times the pixels slow the brush down in Photoshop (two JPEGs are decoded
+    per answer); measured here: the server needs about 20 ms more per answer;
+  - how Photoshop scales a 2160 px picture down in a small window (the window opens at 1020 x 740): it
+    may look grainy there (section 2);
+  - the look of the opaque plugin icon in Photoshop's list of plugins;
+  - the renamed panel: the plugin id is the same, so the settings and presets should stay - not seen.
 - **What the brush of 4.7.0 does on his frames** (stand-in silhouette, section 4; strokes made by script,
   radius in window pixels; "change" = largest / mean difference from the layer without the stroke, in
   levels of 255):
@@ -514,7 +554,7 @@ question about it._
   - nearly the whole backdrop painted over keeps its tone;
   - Ctrl + click on the brush shows the whole layer and repaints nothing;
   - for removing the old program he got steps, not a helper `.bat` (it could not be tried on Windows).
-- **Not run in Photoshop yet (4.7.0):** all of it. In particular:
+- **Not confirmed about 4.7.0** (he wrote only that it works and that the old program is removed):
   - the look and the place of the two edge buttons (36 x 36 icons under the size box of the left column);
   - the soft brush next to the real silhouette: it keeps off whatever the real model calls the person, a
     prop included, and paints over a part of the person that the model misses;
@@ -533,16 +573,18 @@ question about it._
   - of 4.5.0, still unconfirmed: opening the backup folder from the panel, the look of the new buttons,
     the one-time preset moves. (Ctrl+Z works in Photoshop: he confirmed it.)
 - **Merging:** pull request #1 (`arena/33f1ced8-cleanvinylpro-beta` into `main`) is open and deliberately not
-  merged yet: fixes that follow his report on 4.7.0 should come from the session that knows the code. He
+  merged yet: fixes that follow his report on 4.8.0 should come from the session that knows the code. He
   asked what merging into `main` means and was told: the version is already published and can be downloaded;
   merging only marks it on GitHub as the main one and changes nothing on his PC; he should write «зливай»
   when he wants it. Merge it when he writes that or when the session ends (section 6). If `main` already
   contains this file, that has happened. Merging also removes the folder `CleanVinylPro/` from `main`.
 
-### Open questions (ask when he reports on 4.7.0)
+### Open questions (ask when he reports on 4.8.0)
 
-- New with 4.7.0: is the soft edge as soft as he wants (the fade is one brush radius; `BRUSH_SOFT_BAND`)?
-  Is the one mode fast enough on his PC? Did the removal of the old program go through?
+- New with 4.8.0: do Ctrl + «+» / «−» / 0 and the right mouse button work in Photoshop? Is the window
+  sharp enough now, also zoomed in? Did the brush get slower? How long does the exact picture take to come?
+- From 4.7.0, not answered: is the soft edge as soft as he wants (the fade is one brush radius;
+  `BRUSH_SOFT_BAND`)? Is the one mode fast enough on his PC? (The old program is removed: that went through.)
 - Answered after 4.5.0: Ctrl+Z works in Photoshop; the corner on a black backdrop must go completely;
   dark grey counts as dark (the limit is 40 now).
 - Should a light spot at the frame border (a lamp that shines into the frame) be removed by the program?
@@ -563,6 +605,9 @@ question about it._
 - a switch "update nothing until I press a button" for the big window;
 - a softness slider for the brush instead of the two buttons; a helper `.bat` that removes the old program
   (neither was offered to him in words; both came up while 4.7.0 was built);
+- the visible part of the frame at full resolution when the view is zoomed in (named in the release notes
+  of 4.8.0 as the next step if the sharper window is not enough); a switch for the size of the window
+  pictures (not offered in words);
 - a turnkey preset, a wall/floor switch, batch processing.
 
 ### Ideas worth doing when the installer is touched next
@@ -682,14 +727,17 @@ python3 -m venv /tmp/cvenv
 /tmp/cvenv/bin/pip install numpy opencv-python-headless fastapi uvicorn httpx Pillow
 npm install --prefix tests jsdom@24      # for the panel test; the folder is git-ignored
 
-# the checks: the quick run takes about 17 to 23 minutes and ends with "ALL CHECKS PASSED"
+# the checks: the quick run takes about 25 minutes and ends with "ALL CHECKS PASSED"
 /tmp/cvenv/bin/python tests/run_checks.py
 /tmp/cvenv/bin/python tests/run_checks.py install bat    # only the groups named
 /tmp/cvenv/bin/python tests/run_checks.py --full         # more random cases
 
-# the deliberate defects of the latest version: about 11 minutes; it patches engine.py / server.py in place
+# the deliberate defects of the latest version: about 70 minutes for 4.8.0 (each of the 14 `exact` defects
+# takes 3.5 minutes); it patches engine.py / server.py in place - run those in a copy of the tree (below)
 /tmp/cvenv/bin/python tests/try_defects.py               # ends with "N of N defects caught"
-/tmp/cvenv/bin/python tests/try_defects.py panel:        # only the defects of the panel (a minute, on a copy)
+/tmp/cvenv/bin/python tests/try_defects.py sharp: http:  # only the defects whose name or group has these words
+/tmp/cvenv/bin/python tests/try_defects.py panel:        # only the defects of the panel (9 minutes; they go
+                                                         # into a copy of the plugin folder by themselves)
 /tmp/cvenv/bin/python tests/try_defects.py --list
 
 # after ANY change inside CleanVinylPro2: the .ccx first, because it is inside the ZIP
@@ -701,6 +749,20 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   `/tmp`) and wait for the exit; a single blocking command times out. While either runs, do not edit
   anything under `CleanVinylPro2/` or `tests/`, do not build and do not `git add -A`: the checks read the
   files when each group starts, and the defects runner holds a deliberate defect in the working tree.
+- **The engine and server defects are better run in a copy of the tree**: the working tree then never
+  holds a defect, and the docs can be written meanwhile.
+
+  ```bash
+  mkdir -p /tmp/tree && tar cf - --exclude=node_modules --exclude=__pycache__ CleanVinylPro2 tests tools \
+    | (cd /tmp/tree && tar xf -)
+  cd /tmp/tree && PYTHONUNBUFFERED=1 /tmp/cvenv/bin/python tests/try_defects.py sharp: http: exact:
+  ```
+
+  The copy must be made from the final state; throw it away afterwards.
+- **One heavy job at a time.** The sandbox has 3.9 GB of memory and two CPUs. A session on a 22 MP frame of
+  his takes about 2 GB. A check run that is killed for memory ends without a word and without a FAIL
+  line: `try_defects.py` reports that as CRASHED (not caught), and a full run simply stops. Do not start a
+  measurement, a second check run or the panel test next to a running check.
 - The comparisons with v3.2.1 (`process`, `session`, `http`) load the old engine and server from
   `tests/baseline_v321/`. If that folder is missing they are skipped and the group `server` fails.
 - No real AI models here, so what the person-matting model returns is faked (`FakeMatting`). To try something
@@ -725,6 +787,12 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   both, and check the longest line afterwards.
 - **The owner's photos** arrive in `/tmp/arena-coding-uploads/`. They show his clients: never commit them and
   never publish previews made from them. `_local/` is git-ignored for such experiments.
+- `H.make_studio_image` returns the silhouette as float 0..1 at 1024 x 1024, not as uint8: `> 127` selects
+  nothing. A check that measures something inside a zone must fail when the zone is empty: write
+  `if not value >= limit` (a NaN then fails) and test the size of the zone.
+- Two JPEGs of the window hold the same blocks wherever their pictures are the same, so "this part of the
+  cleaned picture IS the picture of the original" can be checked pixel for pixel on the decoded pictures,
+  a few blocks away from anything that differs (`check_sharp`).
 
 ### Working on his photos
 
@@ -910,7 +978,7 @@ Read this twice. The owner lost two days because a download link died.
 
       ```bash
       gh release create cvp2-vX.Y.Z --target "$(git rev-parse HEAD)" --prerelease \
-        --title "Чистий Вініл Pro 2 — версія X.Y.Z" --notes-file notes.md
+        --title "Чистий Вініл Pro — версія X.Y.Z" --notes-file notes.md
       # link for him: https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-vX.Y.Z/CleanVinylPro2.zip
       ```
 
