@@ -2422,6 +2422,32 @@ async function main() {
       expect(env.state("sessState.brushSoft") === true && env.state("sessState.brushSize") === 52, "soft, with the brush size that was saved");
     });
 
+  await scenario("the hair slider: 'Вимк.' until it is moved; one light refresh carries its value, a preset puts it back to 0, Apply carries it", {}, async (env, expect) => {
+    await env.open();
+    const start = env.of("/session/start")[0];
+    expect(start && start.body.params.strayHair === 0, "the window opens with the hair tool off: " + (start && start.body.params.strayHair));
+    expect(env.el("gValHair").textContent === "Вимк.", "at 0 the value of the hair slider reads 'Вимк.': " + env.el("gValHair").textContent);
+    await env.drag("gSlHair", 60);
+    await env.settle(1000);
+    const rs = env.recomputes().filter((r) => r.body.quick === true);
+    expect(rs.length === 1, `one light refresh expected for the hair slider, got ${rs.length}`);
+    if (rs[0]) expect(rs[0].body.params.strayHair === 60, "the refresh must carry strayHair 60, got " + rs[0].body.params.strayHair);
+    expect(env.el("gValHair").textContent === "60%", "the value follows the slider: " + env.el("gValHair").textContent);
+    env.clickPreset("Дальній план");
+    await env.settle(1000);
+    expect(env.state('getSliderVal("gSlHair")') === 0 && env.el("gValHair").textContent === "Вимк.",
+      "a built-in preset leaves the hair tool off: " + env.state('getSliderVal("gSlHair")') + " / " + env.el("gValHair").textContent);
+    const last = env.recomputes().filter((r) => r.body.quick === true).pop();
+    expect(last && last.body.params.strayHair === 0, "the refresh after the preset click carries strayHair 0");
+    await env.drag("gSlHair", 35);
+    await sleep(100);                        // sooner than the refresh would start
+    env.click("dlgBtnApply");
+    await env.settle(900);
+    const a = env.of("/session/apply");
+    expect(a.length === 1 && a[0].body.params && a[0].body.params.strayHair === 35,
+      "Apply must carry the hair slider: " + (a[0] && a[0].body.params && a[0].body.params.strayHair));
+  });
+
   const failed = results.filter((r) => r.problems.length);
   if (!results.length) {
     console.log("plugin preview: no scenario has that text in its name");
@@ -2429,7 +2455,7 @@ async function main() {
   }
   console.log(failed.length
     ? `plugin preview: ${failed.length} of ${results.length} scenarios FAILED`
-    : `plugin preview: ${results.length} scenarios pass (drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes, steps back and forward, preset reset, backup, one mode, soft and hard brush edge, the exact picture by itself, strokes on the cleaned photo, zoom keys, right-button drag)`);
+    : `plugin preview: ${results.length} scenarios pass (drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes, steps back and forward, preset reset, backup, one mode, soft and hard brush edge, the exact picture by itself, strokes on the cleaned photo, zoom keys, right-button drag, the hair slider)`);
   process.exit(failed.length ? 1 : 0);
 }
 

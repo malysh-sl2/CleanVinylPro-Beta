@@ -10,7 +10,9 @@
 //     they follow, once, and never come back after the user deleted them;
 //   - the automatic preset knows the dark framings;
 //   - 4.7.0: the edge of the brush and the eraser (soft unless a file says otherwise) is read and written back; the
-//     speed mode of an older file is not read - the file written back names the one mode that is left.
+//     speed mode of an older file is not read - the file written back names the one mode that is left;
+//   - 4.9.0: the slider of the single hairs ("strayHair") is read, applied and part of what makes the preview out
+//     of date; a preset that does not name it - every built-in one - leaves the tool off.
 //   node tests/plugin_settings.test.js
 const fs = require("fs");
 const path = require("path");
@@ -334,6 +336,58 @@ moveCase("...a deleted dark preset is simply not offered (the server then takes 
   sp && !("dark_wide" in sp.ids) && sp.ids.dark === "lowkey" && Object.keys(sp.ids).length === 7, sp && sp.ids);
 moveCase("a preset that does not say whether smoke is protected: it is not", sceneApi.norm({}).smokeOn === false &&
   sceneApi.norm({ smokeOn: true }).smokeOn === true && sceneApi.norm({ smokeOn: false }).smokeOn === false, sceneApi.norm({}));
+
+// ------------------------------------------------------------------ 4.9.0: the slider of the single hairs
+const sliderTables = src.match(/const ALL_SLIDER_IDS = \[[\s\S]*?\n\];\nconst SLIDER_VAL_MAP = \{[\s\S]*?\n\};\nconst SLIDER_MAX_MAP = .*;\nconst sliderState = \{[\s\S]*?\n\};\n/);
+if (!sliderTables) throw new Error("the slider tables were not found in main.js");
+const hairCode = `
+${sliderTables[0]}
+const sliderDisabled = {};
+const badges = {};
+let seamEnabled = true, smokeEnabled = false, dressSmoothEnabled = false, fracFine = true, fracMed = true, fracLarge = true, cleanPasses = 1;
+const speedMode = "quality";
+function el(id) { return /^(gVal|dlgVal)/.test(id) ? (badges[id] = badges[id] || { textContent: "" }) : null; }
+function updateFractionButtonsUI() {}
+${grab("getSliderMax")}
+${grab("getSliderVal")}
+${grab("clampSliderVal")}
+${grab("setSliderVal")}
+${grab("setSliderDisabled")}
+${grab("readCurrentConfig")}
+${grab("setCleanPassesUI")}
+${grab("normalizedPresetConfig")}
+${grab("applyConfig")}
+${grab("updateSliderVisuals")}
+${grab("previewSettingsSignature")}
+module.exports = {
+  ids: ALL_SLIDER_IDS, map: SLIDER_VAL_MAP, state: sliderState, read: readCurrentConfig, norm: normalizedPresetConfig, apply: applyConfig,
+  sig: previewSettingsSignature, badge: (id) => (badges[id] ? badges[id].textContent : null),
+  set: (id, v) => { setSliderVal(id, v); updateSliderVisuals(); }
+};
+`;
+const modHair = { exports: null };
+new Function("module", hairCode)(modHair);
+const hair = modHair.exports;
+moveCase("the hair slider is one of the sliders: listed, with its own value badge, at 0 until it is moved, sent as 'strayHair'",
+  hair.ids.includes("gSlHair") && hair.map.gSlHair === "gValHair" && hair.state.gSlHair === 0 && hair.read().strayHair === 0,
+  { ids: hair.ids, read: hair.read().strayHair });
+moveCase("a preset that does not name the hair slider leaves the tool off; one that does gives its value, kept within 0..100",
+  hair.norm({}).strayHair === 0 && hair.norm({ strayHair: 55 }).strayHair === 55 && hair.norm({ strayHair: 180 }).strayHair === 100 &&
+  hair.norm({ strayHair: -3 }).strayHair === 0 && hair.norm({ strayHair: "x" }).strayHair === 0, hair.norm({ strayHair: 180 }));
+hair.apply({ strayHair: 40 });
+const hairAt40 = { read: hair.read().strayHair, badge: hair.badge("gValHair") };
+hair.apply({});
+moveCase("a preset puts its value on the hair slider ('40%'); a preset without one puts it back to 0 ('Вимк.')",
+  hairAt40.read === 40 && hairAt40.badge === "40%" && hair.read().strayHair === 0 && hair.badge("gValHair") === "Вимк.",
+  { at40: hairAt40, after: hair.read().strayHair, badge: hair.badge("gValHair") });
+const sigHair0 = hair.sig();
+hair.set("gSlHair", 30);
+const sigHair30 = hair.sig();
+hair.set("gSlHair", 0);
+moveCase("moving the hair slider makes the preview out of date; back at its value it is up to date again",
+  sigHair0 !== sigHair30 && hair.sig() === sigHair0, { sigHair0, sigHair30 });
+moveCase("every built-in preset leaves the hair tool off (in the plugin and on the server)",
+  defaultsNow.every((p) => hair.norm(p.cfg).strayHair === 0) && pluginPresets.every((p) => hair.norm(p.cfg).strayHair === 0), null);
 
 const total = cases.length + newKeys.length + brushKeys.length + moveCases;
 console.log(failed ? `plugin settings migration: ${failed} of ${total} cases FAILED` : `plugin settings migration: ${total} cases pass`);

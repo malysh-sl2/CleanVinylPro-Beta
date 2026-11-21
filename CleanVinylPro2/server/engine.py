@@ -826,7 +826,6 @@ class CleanVinylEngine:
     # brightness of the photo changes (a guided filter - the matte is 1024 pixels wide, the photo five times that).
     TONE_GATE_R = 1.5         # half-size of that window, in pixels of the 1024 matte
     TONE_GATE_EPS = 1.0e-4    # an edge of the photo weaker than about its square root (of 0..1) is not followed
-    TONE_GATE_FLOOR = 10      # of 255: a pixel that is the person to more than 96% takes no shift at all
     TONE_GATE_SURE = 224      # of 255: where the network is this sure of the person, the photo is not asked
     _TONE_GATE_LUT = np.clip(np.rint(255.0 * (1.0 - np.clip((np.arange(256, dtype=np.float32) / 255.0 - 0.30) / 0.40, 0.0, 1.0))), 0, 255).astype(np.uint8)
 
@@ -909,9 +908,6 @@ class CleanVinylEngine:
             b = m_p - a * m_g
             q = cv2.blur(a, k) * g + cv2.blur(b, k)
             q8 = np.clip(np.rint(q[ya - a0:yb - a0] * 255.0), 0, 255).astype(np.uint8)
-            # (the fit leaves a few 255ths on pixels that are plainly the person: they would move by a fraction of
-            #  a level with the backdrop - nothing to see, and yet "the person is never touched" would not hold)
-            q8[q8 < self.TONE_GATE_FLOOR] = 0
             q8[t_rows[ya - a0:yb - a0] >= self.TONE_GATE_SURE] = 0
             view = gate[ya:yb, x0:x1]
             np.maximum(view, q8, out=view)
@@ -1903,14 +1899,15 @@ class CleanVinylEngine:
     #   a line that only runs along the outline; a line shorter than HAIR_MIN_LEN of the head (an eyelash in
     #   profile is about a twentieth); a dark line that grows out of something light (a dark hair grows out of
     #   dark hair - an eyelash on a lit face, a hair in front of a white sleeve do not); a tuft too dense to be
-    #   single hairs; a line that goes on beyond the searched zone (a cable, a pole); gear and smoke.
+    #   single hairs; a line that goes on beyond the searched zone or to the border of the frame (a cable, a
+    #   pole); gear and smoke.
     #   Every size is measured in head widths, and a close-up is searched on a reduced copy, so a hair is the same
     #   few pixels thick whatever the framing.
     # It cannot tell a hair from other thin things that stand clear of a head - a thin earring, a chain, the stem
     # of a flower in the hair. The slider is 0 unless the user moves it, and the eraser brings a thing back.
     HAIR_HEAD_REF = 640.0        # px: the head is this wide at most on the copy that is searched
     HAIR_ZONE_DOWN = 1.8         # head widths below the top of the person: down to here hair is looked for
-    HAIR_REACH = 0.5             # head widths: how far from the person
+    HAIR_REACH = 0.6             # head widths: how far from the person
     HAIR_GUARD = 1.5             # px of the 1024 matte: this close to the outline of the person nothing is taken
     HAIR_KERNEL = 0.03           # head widths: a single hair is thinner than this
     HAIR_LINE = 0.024            # head widths: the response is averaged along this length, in 8 directions
@@ -1928,6 +1925,7 @@ class CleanVinylEngine:
     HAIR_MEAN = 0.80             # ...and over the whole piece the response is this share on average
     HAIR_LIGHT = 1.3             # a light hair on a dark backdrop must be this much stronger than a dark one
     HAIR_ROOT = 0.02             # head widths inside the outline: there the person is compared with the hair
+    HAIR_STEPS = (0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875)   # the slider positions that are always searched too
 
     def _person_solid(self, tight_1024: np.ndarray, w: int, h: int) -> np.ndarray:
         """The person as the network drew it, with the guard strip of the hair search: bool, the size of the frame."""
@@ -2057,22 +2055,30 @@ class CleanVinylEngine:
         kb = max(7, int(round(self.HAIR_KERNEL * head_w)) | 1)
         k_el = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kb, kb))
         kernels = self._line_kernels(max(7, int(round(self.HAIR_LINE * head_w)) | 1))
-        floor = self.HAIR_FLOOR[0] + (self.HAIR_FLOOR[1] - self.HAIR_FLOOR[0]) * s
-        sigmas = self.HAIR_SIGMA[0] + (self.HAIR_SIGMA[1] - self.HAIR_SIGMA[0]) * s
-        min_len = (self.HAIR_MIN_LEN[0] + (self.HAIR_MIN_LEN[1] - self.HAIR_MIN_LEN[0]) * s) * head_w
-        piece_min = max(6.0, 0.2 * min_len)
         fringe = max(2.0, self.HAIR_FRINGE * head_w)
         root_in = max(3.0, self.HAIR_ROOT * head_w)
         stick_out = self.HAIR_STICK_OUT * head_w
         attach = fringe + max(3.0, self.HAIR_ATTACH * head_w)
         gap = 2 * max(1, int(round(self.HAIR_GAP * head_w / 2.0))) + 1
-        # a line that is still there where the searched zone ends goes on beyond it: a cable, a pole, a strap
+        # a line that is still there where the searched zone ends - or at the border of the frame - goes on beyond
+        # it: a cable, a pole, a strap
         leaves = self.HAIR_REACH * head_w - guard - max(4.0, self.HAIR_GAP * head_w)
+        rim = pad + gap
         calm = ~bad & (box_of(fg_mask_u8) < 60)   # the backdrop of the box, outside the protected band
         bad |= dist <= fringe                     # (the fuzz of the outline: after `calm`, which lies outside it)
 
+        def limits(level: float):
+            """(levels above the usual response, spreads of that response, shortest hair) at a slider position 0..1."""
+            return (self.HAIR_FLOOR[0] + (self.HAIR_FLOOR[1] - self.HAIR_FLOOR[0]) * level,
+                    self.HAIR_SIGMA[0] + (self.HAIR_SIGMA[1] - self.HAIR_SIGMA[0]) * level,
+                    (self.HAIR_MIN_LEN[0] + (self.HAIR_MIN_LEN[1] - self.HAIR_MIN_LEN[0]) * level) * head_w)
+
+        # What a lower position of the slider takes, a higher one takes too. A fainter threshold alone does not
+        # give that: followed further, a hair grows together with its neighbours into something that is no single
+        # hair any more, and is dropped. So the search is made for the position asked and for every step below
+        # it, and the finds are put together.
+        levels = sorted({s} | {v for v in self.HAIR_STEPS if v < s})
         keep = np.zeros((bh_, bw_), dtype=np.uint8)
-        hairs = 0
         thr_used = []
         for op, gain in ((cv2.MORPH_BLACKHAT, 1.0), (cv2.MORPH_TOPHAT, self.HAIR_LIGHT)):
             self._checkpoint()
@@ -2097,9 +2103,12 @@ class CleanVinylEngine:
                 continue
             med = float(np.median(vals))
             mad = float(np.median(np.abs(vals.astype(np.float32) - med))) * 1.4826
-            rise = gain * max(16.0 * floor, sigmas * mad)
-            thr = med + rise
-            thr_used.append(round(thr / 16.0, 2))
+
+            def rise_at(level: float) -> float:
+                floor, sigmas, _ = limits(level)
+                return gain * max(16.0 * floor, sigmas * mad)
+
+            thr_used.append(round((med + rise_at(s)) / 16.0, 2))
             # the centre lines: a pixel stays when the response is highest there across the direction of the line
             # (a hair is then one pixel wide however thick or soft it is, and two hairs side by side are two lines)
             padded = cv2.copyMakeBorder(line, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
@@ -2110,95 +2119,113 @@ class CleanVinylEngine:
                           & (line >= padded[1 + dy:bh_ + 1 + dy, 1 + dx:bw_ + 1 + dx])
                           & (line > padded[1 - dy:bh_ + 1 - dy, 1 - dx:bw_ + 1 - dx]))
             del padded, across
-            ridge &= (line > med + self.HAIR_WEAK * rise) & ~bad
-            cy, cx = np.nonzero(ridge)
-            if cy.size == 0:
+            ridge &= (line > med + self.HAIR_WEAK * rise_at(levels[-1])) & ~bad   # (the faintest that any level follows)
+            ay, ax = np.nonzero(ridge)
+            del ridge
+            if ay.size == 0:
                 continue
+            ad = dist[ay, ax]
+            av = line[ay, ax]
             # does the line point away from the person there, or run along the outline? (the direction of the
             # line against the direction in which the distance to the person grows)
-            gx = dist[cy, np.minimum(cx + 1, bw_ - 1)] - dist[cy, np.maximum(cx - 1, 0)]
-            gy = dist[np.minimum(cy + 1, bh_ - 1), cx] - dist[np.maximum(cy - 1, 0), cx]
-            ang = way[cy, cx].astype(np.float32) * np.float32(np.pi / 8.0)
-            outward = np.abs(np.cos(ang) * gx + np.sin(ang) * gy) >= 0.5 * np.sqrt(gx * gx + gy * gy)
-            del gx, gy, ang, way
-            # 1. pieces (centre lines that touch). Each has a stretch that is strong enough to start a hair (the
-            #    rest is that hair followed on while it is fainter, but a piece that is faint nearly all the way
-            #    is a mark on the wall); is not tiny; is no tuft; and leads away from the person (the fuzz of a
-            #    hairdo runs along its outline).
-            n, lbl, st, _ = cv2.connectedComponentsWithStats(cv2.dilate(ridge.view(np.uint8), np.ones((3, 3), np.uint8)), connectivity=8)
-            cid = lbl[cy, cx]
-            cd = dist[cy, cx]
-            cv_ = line[cy, cx]
-            peak = np.zeros(n, dtype=np.int16)
-            np.maximum.at(peak, cid, cv_)
-            total = np.bincount(cid, weights=cv_, minlength=n).astype(np.float32)
-            del line
-            c_min = np.full(n, np.inf, dtype=np.float32)
-            c_max = np.zeros(n, dtype=np.float32)
-            np.minimum.at(c_min, cid, cd)
-            np.maximum.at(c_max, cid, cd)
-            count = np.bincount(cid, minlength=n).astype(np.float32)
-            outw = np.bincount(cid, weights=outward, minlength=n).astype(np.float32)
-            length = np.maximum(st[:, cv2.CC_STAT_WIDTH], st[:, cv2.CC_STAT_HEIGHT]).astype(np.float32) - 2.0
-            ok = ((peak > thr) & (total >= (med + self.HAIR_MEAN * rise) * count)
-                  & (length >= piece_min) & (count <= self.HAIR_TUFT * length)
-                  & ((c_max - c_min) >= self.HAIR_AWAY * length) & (outw >= self.HAIR_OUTWARD * count))
-            ok[0] = False
-            sel = ok[cid]
-            py, px, d, pv = cy[sel], cx[sel], cd[sel], cv_[sel]
-            del cy, cx, cid, cd, cv_, sel, ridge, outward
-            if py.size == 0:
-                continue
-            pieces = np.zeros((bh_, bw_), dtype=np.uint8)
-            pieces[py, px] = 1
-            # 2. hairs: pieces that lie close to each other are one hair; it must begin at the person, lead away
-            #    from it and be long enough - and not be larger than a hair can be
-            joined = cv2.dilate(pieces, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (gap, gap)))
-            n_g, lbl_g = cv2.connectedComponents(joined, connectivity=8)
-            gid = lbl_g[py, px]
-            d_min = np.full(n_g, np.inf, dtype=np.float32)
-            d_max = np.zeros(n_g, dtype=np.float32)
-            np.minimum.at(d_min, gid, d)
-            np.maximum.at(d_max, gid, d)
-            lo_y = np.full(n_g, bh_, dtype=np.int32)
-            hi_y = np.zeros(n_g, dtype=np.int32)
-            lo_x = np.full(n_g, bw_, dtype=np.int32)
-            hi_x = np.zeros(n_g, dtype=np.int32)
-            np.minimum.at(lo_y, gid, py)
-            np.maximum.at(hi_y, gid, py)
-            np.minimum.at(lo_x, gid, px)
-            np.maximum.at(hi_x, gid, px)
-            extent = np.maximum(hi_y - lo_y, hi_x - lo_x).astype(np.float32) + 1.0
-            good = ((d_min <= attach) & (d_max >= stick_out) & (d_max < leaves)
-                    & (extent >= min_len) & (extent <= 1.5 * head_w))
-            good[0] = False
-            if op == cv2.MORPH_BLACKHAT:
-                # 3. a dark hair grows out of something dark. Where the hair meets the person, the person a little
-                #    inside the outline must not be lighter than the hair by more than half of what the hair is
-                #    darker than the backdrop. (A light hair in front of a dark backdrop is not asked: its root is
-                #    as often in the shade as in the light.)
-                for g_i in np.flatnonzero(good):
-                    of_g = np.flatnonzero(gid == g_i)
-                    r_i = of_g[int(np.argmin(d[of_g]))]
-                    ry, rx = int(py[r_i]), int(px[r_i])
-                    gx = float(dist[ry, min(rx + 1, bw_ - 1)] - dist[ry, max(rx - 1, 0)])
-                    gy = float(dist[min(ry + 1, bh_ - 1), rx] - dist[max(ry - 1, 0), rx])
-                    g_n = float(np.hypot(gx, gy))
-                    if g_n < 1e-3:
-                        continue
-                    step = float(d[r_i]) + 0.5 * guard + root_in
-                    iy, ix = int(round(ry - gy / g_n * step)), int(round(rx - gx / g_n * step))
-                    if not (0 <= iy < bh_ and 0 <= ix < bw_):
-                        continue
-                    inside = float(np.median(L[max(0, iy - 2):iy + 3, max(0, ix - 2):ix + 3]))
-                    tone = float(np.median(L[py[of_g], px[of_g]]))
-                    depth = float(np.mean(pv[of_g])) / 16.0
-                    if inside > tone + 0.5 * depth:
-                        good[g_i] = False
-            hairs += int(good.sum())
-            np.maximum(keep, good[lbl_g].astype(np.uint8) * pieces, out=keep)
+            gx = dist[ay, np.minimum(ax + 1, bw_ - 1)] - dist[ay, np.maximum(ax - 1, 0)]
+            gy = dist[np.minimum(ay + 1, bh_ - 1), ax] - dist[np.maximum(ay - 1, 0), ax]
+            ang = way[ay, ax].astype(np.float32) * np.float32(np.pi / 8.0)
+            a_out = np.abs(np.cos(ang) * gx + np.sin(ang) * gy) >= 0.5 * np.sqrt(gx * gx + gy * gy)
+            del gx, gy, ang, way, line
+
+            for level in levels:
+                self._checkpoint()
+                rise = rise_at(level)
+                thr = med + rise
+                min_len = limits(level)[2]
+                piece_min = max(6.0, 0.2 * min_len)
+                use = av > med + self.HAIR_WEAK * rise
+                if not use.any():
+                    continue
+                cy, cx, cd, cv_, outward = ay[use], ax[use], ad[use], av[use], a_out[use]
+                # 1. pieces (centre lines that touch). Each has a stretch that is strong enough to start a hair
+                #    (the rest is that hair followed on while it is fainter, but a piece that is faint nearly all
+                #    the way is a mark on the wall); is not tiny; is no tuft; and leads away from the person (the
+                #    fuzz of a hairdo runs along its outline).
+                lines = np.zeros((bh_, bw_), dtype=np.uint8)
+                lines[cy, cx] = 1
+                n, lbl, st, _ = cv2.connectedComponentsWithStats(cv2.dilate(lines, np.ones((3, 3), np.uint8)), connectivity=8)
+                cid = lbl[cy, cx]
+                peak = np.zeros(n, dtype=np.int16)
+                np.maximum.at(peak, cid, cv_)
+                total = np.bincount(cid, weights=cv_, minlength=n).astype(np.float32)
+                c_min = np.full(n, np.inf, dtype=np.float32)
+                c_max = np.zeros(n, dtype=np.float32)
+                np.minimum.at(c_min, cid, cd)
+                np.maximum.at(c_max, cid, cd)
+                count = np.bincount(cid, minlength=n).astype(np.float32)
+                outw = np.bincount(cid, weights=outward, minlength=n).astype(np.float32)
+                length = np.maximum(st[:, cv2.CC_STAT_WIDTH], st[:, cv2.CC_STAT_HEIGHT]).astype(np.float32) - 2.0
+                ok = ((peak > thr) & (total >= (med + self.HAIR_MEAN * rise) * count)
+                      & (length >= piece_min) & (count <= self.HAIR_TUFT * length)
+                      & ((c_max - c_min) >= self.HAIR_AWAY * length) & (outw >= self.HAIR_OUTWARD * count))
+                ok[0] = False
+                sel = ok[cid]
+                py, px, d, pv = cy[sel], cx[sel], cd[sel], cv_[sel]
+                if py.size == 0:
+                    continue
+                lines[:] = 0
+                lines[py, px] = 1
+                # 2. hairs: pieces that lie close to each other are one hair; it must begin at the person, lead
+                #    away from it and be long enough - and not be larger than a hair can be, nor go on beyond
+                #    the searched zone or the frame
+                n_g, lbl_g = cv2.connectedComponents(cv2.dilate(lines, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (gap, gap))), connectivity=8)
+                gid = lbl_g[py, px]
+                d_min = np.full(n_g, np.inf, dtype=np.float32)
+                d_max = np.zeros(n_g, dtype=np.float32)
+                np.minimum.at(d_min, gid, d)
+                np.maximum.at(d_max, gid, d)
+                lo_y = np.full(n_g, bh_, dtype=np.int32)
+                hi_y = np.zeros(n_g, dtype=np.int32)
+                lo_x = np.full(n_g, bw_, dtype=np.int32)
+                hi_x = np.zeros(n_g, dtype=np.int32)
+                np.minimum.at(lo_y, gid, py)
+                np.maximum.at(hi_y, gid, py)
+                np.minimum.at(lo_x, gid, px)
+                np.maximum.at(hi_x, gid, px)
+                extent = np.maximum(hi_y - lo_y, hi_x - lo_x).astype(np.float32) + 1.0
+                at_border = (((lo_y <= rim) & (y0 == 0)) | ((hi_y >= bh_ - 1 - rim) & (y1 == h))
+                             | ((lo_x <= rim) & (x0 == 0)) | ((hi_x >= bw_ - 1 - rim) & (x1 == w)))
+                good = ((d_min <= attach) & (d_max >= stick_out) & (d_max < leaves) & ~at_border
+                        & (extent >= min_len) & (extent <= 1.5 * head_w))
+                good[0] = False
+                if op == cv2.MORPH_BLACKHAT:
+                    # 3. a dark hair grows out of something dark. Where the hair meets the person, the person a
+                    #    little inside the outline must not be lighter than the hair by more than half of what
+                    #    the hair is darker than the backdrop. (A light hair in front of a dark backdrop is not
+                    #    asked: its root is as often in the shade as in the light.)
+                    for g_i in np.flatnonzero(good):
+                        of_g = np.flatnonzero(gid == g_i)
+                        r_i = of_g[int(np.argmin(d[of_g]))]
+                        ry, rx = int(py[r_i]), int(px[r_i])
+                        gx = float(dist[ry, min(rx + 1, bw_ - 1)] - dist[ry, max(rx - 1, 0)])
+                        gy = float(dist[min(ry + 1, bh_ - 1), rx] - dist[max(ry - 1, 0), rx])
+                        g_n = float(np.hypot(gx, gy))
+                        if g_n < 1e-3:
+                            continue
+                        step = float(d[r_i]) + 0.5 * guard + root_in
+                        iy, ix = int(round(ry - gy / g_n * step)), int(round(rx - gx / g_n * step))
+                        if not (0 <= iy < bh_ and 0 <= ix < bw_):
+                            continue
+                        inside = float(np.median(L[max(0, iy - 2):iy + 3, max(0, ix - 2):ix + 3]))
+                        tone = float(np.median(L[py[of_g], px[of_g]]))
+                        depth = float(np.mean(pv[of_g])) / 16.0
+                        if inside > tone + 0.5 * depth:
+                            good[g_i] = False
+                found = good[gid]
+                keep[py[found], px[found]] = 1
+            del ay, ax, ad, av, a_out
+        hairs = 0
+        if keep.any():
+            hairs = int(cv2.connectedComponents(cv2.dilate(keep, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (gap, gap))), connectivity=8)[0]) - 1
         if info is not None:
-            info.update({"hairs": hairs, "head_px": float(head_px), "scale": float(ws), "min_len": float(min_len / ws),
+            info.update({"hairs": hairs, "head_px": float(head_px), "scale": float(ws), "min_len": float(limits(s)[2] / ws),
                          "thr_dark": thr_used[0] if thr_used else None,
                          "thr_light": thr_used[1] if len(thr_used) > 1 else None})
         if hairs == 0:
