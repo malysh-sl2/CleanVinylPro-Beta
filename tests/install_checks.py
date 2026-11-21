@@ -1,5 +1,5 @@
 """
-Checks of everything around installing Clean Vinyl Pro 2 (used by run_checks.py, groups `folders`, `install`, `bat`).
+Checks of everything around installing Clean Vinyl Pro (used by run_checks.py, groups `folders`, `install`, `bat`).
 
   folders   folders.ini is read the same way by Python and by install_windows.bat; the AI models are found in the
             shared folder (also inside a sub-folder), a missing file is copied from another copy of the program

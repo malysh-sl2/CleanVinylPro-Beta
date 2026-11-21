@@ -5,7 +5,7 @@ setlocal EnableExtensions
 if /i not "%~1"=="--no-elevate" (
     net session >nul 2>&1
     if errorlevel 1 (
-        echo Запитуємо права Адміністратора для встановлення Clean Vinyl Pro 2...
+        echo Запитуємо права Адміністратора для встановлення Clean Vinyl Pro...
         powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList '--no-elevate' -Verb RunAs" >nul 2>&1
         if not errorlevel 1 exit /b 0
     )
@@ -14,7 +14,7 @@ if /i not "%~1"=="--no-elevate" (
 pushd "%~dp0"
 
 echo ==============================================================
-echo   Clean Vinyl Pro 2 v4.7.0 — Встановлення для Windows 11 + RTX 5060 Ti
+echo   Clean Vinyl Pro v4.8.0 — Встановлення для Windows 11 + RTX 5060 Ti
 echo ==============================================================
 echo.
 

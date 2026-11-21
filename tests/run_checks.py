@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Self-checks of the Clean Vinyl Pro 2 server (folder CleanVinylPro2). No AI models, no GPU and no Photoshop needed.
+Self-checks of the Clean Vinyl Pro server (folder CleanVinylPro2; the program was shown as "Pro 2" up to 4.7.0).
+No AI models, no GPU and no Photoshop needed.
 
     python tests/run_checks.py            # quick run (a few minutes)
     python tests/run_checks.py --full     # more random cases
@@ -8,7 +9,7 @@ Self-checks of the Clean Vinyl Pro 2 server (folder CleanVinylPro2). No AI model
 
 Part 1 - what was NOT meant to change still gives the pixels of the original program (folder CleanVinylPro,
 v3.2.1). These comparisons run in the "legacy regime": quality mode, smoke protection off, cyclorama 0, clothing
-off, stains 0, floor-joint pieces judged one by one - the places where Clean Vinyl Pro 2 works differently on
+off, stains 0, floor-joint pieces judged one by one - the places where this program works differently on
 purpose. (In the interactive window also: background blur 0. With the backdrop blurred the layer covers the whole
 backdrop; the window now shows that in two greens and repairs a brush stroke there - see `mask`.)
   convert   fast pixel conversions give the same numbers as the plain NumPy formulas (all 8/16-bit values)
@@ -21,7 +22,7 @@ backdrop; the window now shows that in two greens and repairs a brush stroke the
   white     the "white patch after Apply" bug stays fixed
   gpu       the cuDNN option can never push the models from the GPU onto the CPU
 
-Part 2 - what Clean Vinyl Pro 2 does differently, each with its own measurable promise:
+Part 2 - what this program does differently from v3.2.1, each with its own measurable promise:
   cyc       cyclorama: the wall-floor line goes away, people are not touched, a frame without a corner is not touched
   dress     clothing: wrinkles get weaker; volume, colour, fine texture, denim and everything outside stay
   speed     the two ways of closing defects - the full AI fill (the only mode of the panel since 4.7.0) and the fast
@@ -58,8 +59,9 @@ Part 2 - what Clean Vinyl Pro 2 does differently, each with its own measurable p
             Apply needs; a mask that is the user's own drawing is never replaced by itself
 
 Part 3 - the program around the engine:
-  server    settings migration, binary packets, one version everywhere, and no name / port shared with the
-            original program (both must be able to run side by side)
+  server    settings migration, binary packets, one version everywhere; the name a person reads has no 2 (since
+            4.8.0), layers of older versions are still recognised, the plugin icon is opaque; no id / port /
+            url scheme / task / data folder shared with the original program (both can run side by side)
   plugin    plugin settings migration and the behaviour of the big window (needs Node.js; the window test
             also needs the jsdom package), the .ccx package and the download archive CleanVinylPro2.zip being
             up to date, CRLF line endings of the .bat files
@@ -124,7 +126,7 @@ def _quiet(fn, *a, **k):
 
 
 def _legacy(p: dict) -> dict:
-    """The parameters under which Clean Vinyl Pro 2 must still give the pixels of v3.2.1 (see the header)."""
+    """The parameters under which the engine must still give the pixels of v3.2.1 (see the header)."""
     return dict(p, speedMode="quality", smokeOn=False, cycCurve=0, dressSmooth=False, scuffs=0, seamJoin=False,
                 grainLocal=False, previewQuality=90, gearBody=False, shadowSpots=False, brushSoft=False)
 
@@ -651,7 +653,7 @@ def check_white():
 
 
 # ----------------------------------------------------------------------------------------------------------------------
-# Part 2: what Clean Vinyl Pro 2 does differently
+# Part 2: what this program does differently from v3.2.1
 # ----------------------------------------------------------------------------------------------------------------------
 def _comp(src, out):
     """What Photoshop shows after the result layer is put over the photo (8-bit frames), as float levels."""
@@ -2531,7 +2533,53 @@ def check_server():
     if srv.MODELS_DIR != cvpaths.resolve_models_dir() or "MODELS_DIR = cvpaths.resolve_models_dir()" not in text(root, "server", "server.py"):
         bad.append("server.py does not take the models folder from folders.ini")
 
-    # Clean Vinyl Pro 2 must be able to run next to the original program: nothing they register may coincide
+    # The name. Up to 4.7.0 the program was shown as "Чистий Вініл Pro 2", to tell it from the original program
+    # next to which it was installed. The owner removed the original and asked for the name without the 2
+    # (4.8.0). Only what a person reads was renamed; everything the two programs register stays apart (below).
+    shown_name = "Чистий Вініл Pro"
+    html = text(root, "uxp-plugin", "index.html")
+    main_js = text(root, "uxp-plugin", "main.js")
+    name_problems = [where for where, ok in (
+        ("manifest name", manifest["name"] == shown_name),
+        ("panel label", manifest["entrypoints"][0]["label"]["default"] == shown_name),
+        ("index.html", "Pro 2" not in html and f"<title>{shown_name}</title>" in html),
+        ("main.js strings", not re.search(r'["`][^"`\n]*Вініл (Pro )?2[^"`\n]*["`]', main_js)),
+        (".bat files", not any("Pro 2" in text(root, bat) for bat in os.listdir(root) if bat.endswith(".bat"))),
+        ("the manual", "Pro 2" not in "".join(text(root, manual).splitlines(True)[:3])),
+        ("server banner", "Clean Vinyl Pro 2" not in text(root, "server", "server.py")),
+    ) if not ok]
+    if name_problems:
+        bad.append(f"the name still carries the 2: {name_problems}")
+    # The layers: made under the new names; a document that holds a layer of 4.7.0 or older is still recognised
+    for want in ('const LAYER_NAME_AI = "Чистий вініл (AI)";', 'const LAYER_NAME_SELECTION = "Чистий вініл (Виділення)";',
+                 '"Чистий вініл 2 (AI)", "Чистий вініл 2 (Виділення)"];', "PLUGIN_LAYER_NAMES.includes(l.name)"):
+        if want not in main_js:
+            bad.append(f"layer names: main.js lacks {want!r}")
+    if re.search(r'create(Pixel)?Layer\(\{ name: "', main_js):
+        bad.append("layer names: a layer is created under a name written in place (use LAYER_NAME_AI / LAYER_NAME_SELECTION)")
+
+    # The icon of the plugin (Photoshop: the list of plugins). Adobe asks for a picture without transparency, in
+    # the size the manifest names and twice that, for every theme of the interface.
+    for icon in manifest.get("icons", []):
+        if "all" not in icon.get("theme", []) or icon.get("species") != ["pluginList"] or sorted(icon.get("scale", [])) != [1, 2]:
+            bad.append(f"plugin icon: theme / species / scale of {icon.get('path')}")
+        stem, ext = os.path.splitext(icon["path"])
+        for scale, names in ((1, (icon["path"], f"{stem}@1x{ext}")), (2, (f"{stem}@2x{ext}",))):
+            for name in names:
+                pic = cv2.imread(os.path.join(root, "uxp-plugin", name), cv2.IMREAD_UNCHANGED)
+                if pic is None:
+                    bad.append(f"plugin icon: {name} is missing")
+                elif pic.shape[:2] != (icon["height"] * scale, icon["width"] * scale):
+                    bad.append(f"plugin icon: {name} is {pic.shape[1]}x{pic.shape[0]}, the manifest says {icon['width'] * scale}x{icon['height'] * scale}")
+                elif pic.ndim == 3 and pic.shape[2] == 4 and int(pic[..., 3].min()) < 255:
+                    bad.append(f"plugin icon: {name} has transparent pixels")
+                elif len({tuple(int(v) for v in pic[y, x][:3]) for y in (0, -1) for x in (0, -1)}) != 1:
+                    bad.append(f"plugin icon: the corners of {name} differ (a picture cut out of a rounded square?)")
+    if not manifest.get("icons"):
+        bad.append("plugin icon: the manifest names none")
+
+    # Clean Vinyl Pro (folder CleanVinylPro2) must be able to run next to the original program: nothing they
+    # register may coincide
     port = str(srv.APP_PORT)
     plugin_js = text(root, "uxp-plugin", "main.js")
     launcher = text(root, "server", "setup_launcher.py")
@@ -2556,13 +2604,11 @@ def check_server():
         clashes = [name for name, same in (
             ("plugin id", manifest["id"] == old_manifest["id"]),
             ("panel id", manifest["entrypoints"][0]["id"] == old_manifest["entrypoints"][0]["id"]),
-            ("plugin name", manifest["name"] == old_manifest["name"]),
             ("port", port == old_port),
             ("url scheme", scheme in old_manifest["requiredPermissions"]["launchProcess"]["schemes"]),
             ("scheduled task", f'"{task}"' in old_launcher),
             ("registry key", f"Software\\Classes\\{scheme}\"" in old_launcher),
             ("data folder", 'os.path.join(appdata, "CleanVinylPro2")' not in launcher),
-            ("layer name", "Чистий вініл 2 (AI)" not in plugin_js or '"Чистий вініл (AI)"' in plugin_js),
         ) if same]
         for bat in sorted(f for f in os.listdir(root) if f.endswith(".bat")):
             if old_port in text(root, bat).replace("на " + old_port, ""):
@@ -2574,7 +2620,8 @@ def check_server():
     n = struct.unpack_from("<I", resp.body, 0)[0]
     if json.loads(resp.body[4:4 + n].decode("utf-8")) != {"ok": True, "текст": "ї"} or resp.body[4 + n:] != np.arange(6, dtype=np.uint16).tobytes() + b"\x07\x08":
         bad.append("_binary_response layout")
-    report("server", not bad, f"settings migration, packet parsing, version {srv.APP_VERSION} everywhere, nothing shared with the original program (port {srv.APP_PORT})"
+    report("server", not bad, f"settings migration, packet parsing, version {srv.APP_VERSION} everywhere, the name without the 2, an opaque plugin icon, "
+           f"nothing registered in common with the original program (port {srv.APP_PORT})"
            if not bad else f"wrong: {bad}")
 
 
@@ -2640,10 +2687,21 @@ def _http_quick_round_trip(client, srv, packet, split, bad) -> int:
         r = client.post("/session/recompute", json=dict(session_id=sid, params=p3, preserve_edits=True, background=True, jobId="c")); n += 1
         if r.status_code != 200 or r.json().get("skipped") is not True or r.json().get("exact") is not False or "comp_jpg_b64" in r.json():
             bad.append("/session/recompute with background=true and the user's own mask on screen must answer skipped=true")
+        asked_to_follow = []
+        plain_apply = srv.ENGINE.apply_session
+
+        def watched_apply(*a, **k):  # (what the engine does with it is checked in check_exact)
+            asked_to_follow.append(a[7] if len(a) > 7 else k.get("follow_background", False))
+            return plain_apply(*a, **k)
+
+        srv.ENGINE.apply_session = watched_apply
         r_follow = client.post("/session/apply", json=dict(body, params=p3, followBackground=True)); n += 1
         r_plain = client.post("/session/apply", json=dict(body, params=p3)); n += 1
+        srv.ENGINE.apply_session = plain_apply
         if r_follow.status_code != 200 or r_plain.status_code != 200 or split(r_follow.content)[1] != split(r_plain.content)[1]:
             bad.append("/session/apply with followBackground=true and nothing running must give the layer of a plain Apply")
+        if asked_to_follow != [True, False]:
+            bad.append(f"/session/apply must hand followBackground to the engine, and only when the panel asked for it: {asked_to_follow}")
         client.post("/session/close", json=dict(session_id=sid))
     finally:
         srv.ENGINE = keep
@@ -2883,7 +2941,7 @@ def check_http():
                     co.post("/session/close", json=dict(session_id=so))
                     cn.post("/session/close", json=dict(session_id=sn))
 
-                # ---- what only Clean Vinyl Pro 2 has ----
+                # ---- what v3.2.1 does not have ----
                 n += 1
                 hl = cn.get("/health").json()
                 if hl.get("app") != srv.APP_ID or hl.get("version") != srv.APP_VERSION or hl.get("models_dir") != srv.MODELS_DIR:
@@ -3662,7 +3720,9 @@ def _exact_cases():
             if not self.used and pct >= self.pct:
                 self.used = True
                 self.reached.set()
-                self.go.wait(120)
+                # (the check opens the gate within seconds. The limit matters only when the engine is broken and
+                #  the request that should have been answered meanwhile waits for this very run.)
+                self.go.wait(45)
 
         def open(self):
             self.go.set()
@@ -3954,7 +4014,7 @@ GROUPS = [("convert", check_convert), ("process", check_process), ("stage", chec
 
 def main() -> int:
     t0 = time.perf_counter()
-    print(f"Clean Vinyl Pro 2 self-checks ({'full' if FULL else 'quick'} run); NumPy {np.__version__}, OpenCV {cv2.__version__}; "
+    print(f"Clean Vinyl Pro self-checks ({'full' if FULL else 'quick'} run); NumPy {np.__version__}, OpenCV {cv2.__version__}; "
           f"baseline v3.2.1: {'available' if E_OLD is not None else 'NOT available'}", flush=True)
     for name, fn in GROUPS:
         if ONLY and not any(word in name for word in ONLY):

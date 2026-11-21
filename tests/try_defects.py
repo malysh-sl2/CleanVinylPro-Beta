@@ -12,7 +12,8 @@ the script replaces one exact piece of text in a program file, runs the check gr
 
 A defect of the PANEL (the word "panel" instead of a check group) is put into a copy of the plugin folder, and the
 two tests of the panel are pointed at that copy (CV_PLUGIN_DIR): the settings test, and the scenarios of the
-window test whose names contain the text given with the defect. The program files are not touched by these.
+window test whose names contain the text (or one of the texts) given with the defect. The program files are not
+touched by these.
 They need Node.js and the jsdom package (tests/README.md).
 
 Do NOT edit the program files, build the package or run the checks yourself while this is going: the script
@@ -40,83 +41,131 @@ MAINJS = PLUGIN + "/main.js"
 PANEL_TESTS = ("plugin_settings.test.js", "plugin_preview.test.js")
 
 
-def panel(text):
-    """A defect of the panel: checked by the settings test and by the window scenarios whose names contain `text`."""
-    return ("panel", text)
+def panel(*texts):
+    """A defect of the panel: checked by the settings test and by the window scenarios whose names contain one of `texts`."""
+    return ("panel",) + tuple(texts)
 
 
-# (name, check groups - or panel(<text>), file, exact text, replacement)
+# (name, check groups - or panel(<text>, ...), file, exact text, replacement)
 DEFECTS = [
-    # ---- the edge of the brush and the eraser (4.7.0)
-    ("brush: the soft edge is as narrow as the hard one", "brush", ENGINE,
-     "    BRUSH_SOFT_BAND = 1.0 ", "    BRUSH_SOFT_BAND = 0.2 "),
-    ("brush: the hard edge is as wide as the soft one", "brush", ENGINE,
-     "    BRUSH_HARD_BAND = 0.2 ", "    BRUSH_HARD_BAND = 1.0 "),
-    ("brush: a stroke that names no edge is a hard one", "brush", ENGINE,
-     "                        soft = 1.0 if softness is None else float(np.clip(softness, 0.0, 1.0))",
-     "                        soft = 0.0 if softness is None else float(np.clip(softness, 0.0, 1.0))"),
-    ("brush: the server drops the edge that the panel asked for", "brush", SERVER,
-     "            None if softness is None else float(softness),\n", "            None,\n"),
-    # ---- the person (4.7.0)
-    ("brush: the soft brush paints over the person", "brush", ENGINE,
-     "        return alpha * (1.0 - keep_out * float(np.clip(softness, 0.0, 1.0)))", "        return alpha"),
-    ("brush: the hard brush keeps off the person too", "brush", ENGINE,
-     "        return alpha * (1.0 - keep_out * float(np.clip(softness, 0.0, 1.0)))", "        return alpha * (1.0 - keep_out)"),
-    # ---- what a painted zone is made of (4.7.0)
-    ("brush: the layer is not repainted where the brush went", "brush", ENGINE,
-     "                if brush_soft:\n                    strength_s = self._brush_strength_small(sess)\n",
-     "                if False:\n                    strength_s = self._brush_strength_small(sess)\n"),
-    ("brush: the window does not show what the brush painted", "brush", ENGINE,
-     "            strength = self._brush_strength_small(sess)\n            if np.any(strength):\n",
-     "            strength = self._brush_strength_small(sess)\n            if False:\n"),
-    ("brush: a painted zone gets no grain", "brush", ENGINE,
-     "                    + np.sin(ang)[..., None] * g_b)", "                    + 0.0 * g_b)"),
-    ("brush: the two grains are mixed plainly in the soft edge", "brush", ENGINE,
-     "            dst += (a[..., None] * (fill_b - lp_b) + (np.cos(ang) - 1.0)[..., None] * detail\n                    + np.sin(ang)[..., None] * g_b)",
-     "            dst += (a[..., None] * (fill_b - lp_b) - a[..., None] * detail\n                    + a[..., None] * g_b)"),
-    # ---- the tone near a shadow, and with nothing around (4.7.0)
-    ("brush: a shadow that a stroke touches goes into the tone", "brush", ENGINE,
-     "    BRUSH_ODD_K = 3.0\n", "    BRUSH_ODD_K = 1e9\n"),
-    ("brush: no part of the surroundings is ever 'most'", "brush", ENGINE,
-     "    BRUSH_MOST = (0.45, 0.65)\n", "    BRUSH_MOST = (2.0, 3.0)\n"),
-    ("brush: surroundings of two kinds are taken for uneven ones", "brush", ENGINE,
-     "    BRUSH_SECOND = (0.10, 0.25)\n", "    BRUSH_SECOND = (2.0, 3.0)\n"),
-    ("brush: the tone stays as soon as a stroke touches anything", "brush", ENGINE,
-     "    BRUSH_SECOND = (0.10, 0.25)\n", "    BRUSH_SECOND = (0.0, 0.01)\n"),
-    ("brush: the even part is looked for with the wide band", "brush", ENGINE,
-     "    BRUSH_FIT_TOL = 0.015\n", "    BRUSH_FIT_TOL = 0.04\n"),
-    ("brush: a backdrop painted all over is repainted from the strip that is left", "brush", ENGINE,
-     "    BRUSH_RING_MIN = (0.10, 0.20)\n", "    BRUSH_RING_MIN = (0.0, 0.0)\n"),
-    # ---- "fill" (4.7.0)
-    ("fill: the whole frame counts as painted, as before 4.7.0", "mask", ENGINE,
-     "                if op == \"fill\" and soft_mode:\n", "                if op == \"fill\" and False:\n"),
-    ("fill: a step back leaves the layer on the whole frame", "brush", ENGINE,
-     "        sess[\"fill_all\"] = bool(snap.get(\"fill\", False))\n", ""),
-    # ---- the panel: the two edge buttons (4.7.0)
-    ("panel: every stroke is sent as a soft one, whatever button is on", panel("edge"), MAINJS,
-     "    softness: sessState.brushSoft ? 1 : 0,", "    softness: 1,"),
-    ("panel: a stroke does not say which edge it has", panel("edge"), MAINJS,
-     "    softness: sessState.brushSoft ? 1 : 0,   // the edge of the stroke: 1 soft, 0 hard (a server before 4.7.0 ignores it)\n", ""),
-    ("panel: the window starts with the hard edge", panel("edge"), MAINJS,
-     "  brushSoft: true,\n", "  brushSoft: false,\n"),
-    ("panel: the lower button chooses the soft edge too", panel("edge"), MAINJS,
-     "  el(\"dlgBrushHard\").addEventListener(\"click\", () => setBrushSoft(false));", "  el(\"dlgBrushHard\").addEventListener(\"click\", () => setBrushSoft(true));"),
-    ("panel: the buttons do not show that the hard edge is on", panel("edge"), MAINJS,
-     "classList.toggle(\"active\", !sessState.brushSoft);", "classList.toggle(\"active\", false);"),
-    ("panel: the chosen edge is not written into the settings", panel("edge"), MAINJS,
-     "    brushSoft: sessState.brushSoft,\n", ""),
-    ("panel: a click on an edge button does not save the settings", panel("edge"), MAINJS,
-     "  if (!byUser) return;\n  scheduleSaveSettings();\n  sayInWindow(sessState.brushSoft\n", "  if (!byUser) return;\n  sayInWindow(sessState.brushSoft\n"),
-    ("panel: the edge kept in the settings is not put back", panel("edge"), MAINJS,
-     "  if (typeof s.brushSoft === \"boolean\") setBrushSoft(s.brushSoft, false);\n", ""),
-    ("panel: the trace of a soft stroke is as solid as that of a hard one", panel("edge"), MAINJS,
-     "      dot.style.opacity = sessState.brushSoft ? \"0.2\" : \"0.65\";", "      dot.style.opacity = \"0.65\";"),
-    # ---- the panel: one mode (4.7.0)
-    ("panel: the one mode is the fast one", panel("one mode"), MAINJS,
-     "const speedMode = \"quality\";", "const speedMode = \"fast\";"),
-    ("panel: a preset that an older version saved with 'fast' asks for the fast fill", panel("one mode"), MAINJS,
-     "  const params = normalizedPresetConfig(p.cfg);\n  params.speedMode = speedMode;\n",
-     "  const params = normalizedPresetConfig(p.cfg);\n  params.speedMode = (p.cfg && p.cfg.speedMode) || speedMode;\n"),
+    # ---- the exact picture by itself, the engine (4.8.0)
+    ("exact: a background run does not give way to a request that waits for the frame", "exact", ENGINE,
+     "                    if self._compute_waiters > 0 or self._active_session is not sess:\n                        raise JobSuperseded()\n",
+     "                    if self._active_session is not sess:\n                        raise JobSuperseded()\n"),
+    ("exact: a background run holds the session while it computes (the brush has to wait)", "exact", ENGINE,
+     "                    computed = self._recompute_full(sess, clean_params, progress)\n",
+     "                    with self._session_lock:\n                        computed = self._recompute_full(sess, clean_params, progress)\n"),
+    ("exact: strokes are dropped when the background run puts its frame in place", "exact", ENGINE,
+     "                    return self._recompute_commit(sess, p, computed, True, t0)\n",
+     "                    return self._recompute_commit(sess, p, computed, False, t0)\n"),
+    ("exact: the user's own mask is replaced by a background run", "exact", ENGINE,
+     "                    if refine_only and sess.get(\"mask_detached\"):\n                        return {\"ok\": True, \"session_id\": session_id, \"skipped\": True, **self._picture_state(sess)}\n\n                def give_way():\n",
+     "                    if False:\n                        return {\"ok\": True, \"session_id\": session_id, \"skipped\": True, **self._picture_state(sess)}\n\n                def give_way():\n"),
+    ("exact: ...also a mask that was drawn while the run was computing", "exact", ENGINE,
+     "                    if refine_only and sess.get(\"mask_detached\"):\n                        # the mask became the user's own drawing while the frame was being computed\n",
+     "                    if False:\n                        # the mask became the user's own drawing while the frame was being computed\n"),
+    ("exact: Apply stops the background run it was told to wait for", "exact", ENGINE,
+     "            with self._compute_turn(ask_way=not follow_background, follower=follower), self._session_lock:\n",
+     "            with self._compute_turn(ask_way=True, follower=follower), self._session_lock:\n"),
+    ("exact: Apply that waited for a background run starts its progress bar again", "exact", ENGINE,
+     "                elif followed:\n", "                elif False:\n"),
+    ("exact: a quick picture is reported as the exact one", "exact", ENGINE,
+     "        return {\"rev\": int(sess.get(\"rev\", 0)), \"exact\": not bool(sess.get(\"base_stale\"))}\n",
+     "        return {\"rev\": int(sess.get(\"rev\", 0)), \"exact\": True}\n"),
+    ("exact: a mask edit does not get the next number", "exact", ENGINE,
+     "\"history\": self._edit_history_counts(sess), **self._picture_state(sess, changed=True)}\n",
+     "\"history\": self._edit_history_counts(sess), **self._picture_state(sess)}\n"),
+    # ---- ...the server (4.8.0)
+    ("http: the server does not pass 'background' on (every exact request makes the window wait)", "http", SERVER,
+     "        background = bool(body.get(\"background\", False))\n", "        background = False\n"),
+    ("http: the server does not pass 'followBackground' on", "http", SERVER,
+     "        follow_background = bool(body.get(\"followBackground\", False))\n", "        follow_background = False\n"),
+    # ---- ...the panel (4.8.0)
+    ("panel: no exact picture is asked for after a light refresh", panel("exact"), MAINJS,
+     "  if (sessState.open && sessState.id === sid) scheduleExactPreview();\n  else updatePreviewBadge();\n  return done;\n",
+     "  updatePreviewBadge();\n  return done;\n"),
+    ("panel: the exact picture is asked for at once, without the quiet moment", panel("exact"), MAINJS,
+     "const EXACT_DELAY_MS = 700;\n", "const EXACT_DELAY_MS = 0;\n"),
+    ("panel: the exact request is an ordinary recompute (the window waits for it)", panel("exact"), MAINJS,
+     "      body: JSON.stringify({ session_id: sid, params, preserve_edits: true, background: true, jobId })\n",
+     "      body: JSON.stringify({ session_id: sid, params, preserve_edits: true, jobId })\n"),
+    ("panel: an older picture replaces a newer one", panel("exact"), MAINJS,
+     "    if (d.rev < sessState.picRev) return false;\n", ""),
+    ("panel: the exact picture is asked for while a slider is held", panel("exact"), MAINJS,
+     "  const busy = activeDragSliderId || sessState.isDrawing || sessState.recomputing || sessState.previewTimer;\n",
+     "  const busy = sessState.isDrawing || sessState.recomputing || sessState.previewTimer;\n"),
+    ("panel: the exact picture is asked for while a stroke is being drawn", panel("exact"), MAINJS,
+     "  const busy = activeDragSliderId || sessState.isDrawing || sessState.recomputing || sessState.previewTimer;\n",
+     "  const busy = activeDragSliderId || sessState.recomputing || sessState.previewTimer;\n"),
+    ("panel: the corner label calls a quick picture the clean photo", panel("exact"), MAINJS,
+     "    badge.textContent = kind === \"exact\" ? \"ПІСЛЯ · чисте фото\" : \"ПІСЛЯ · швидкий перегляд\" + refining;\n",
+     "    badge.textContent = \"ПІСЛЯ · чисте фото\";\n"),
+    ("panel: a failed exact request is tried again and again", panel("exact"), MAINJS,
+     "    sessState.exactError = failed;\n", ""),
+    ("panel: an exact request the server declined is asked again and again", panel("own drawing"), MAINJS,
+     "    sessState.exactHold = true;\n", ""),
+    ("panel: with 2 passes the sliders start nothing, as before 4.8.0", panel("2 passes"), MAINJS,
+     "  return !lightPreviewAvailable();  // new values and no light way (2 passes): the exact picture is the only one\n",
+     "  return false;\n"),
+    ("panel: a server before 4.8.0 is asked for background recomputes", panel("before 4.8.0"), MAINJS,
+     "      sessState.bgUnsupported = typeof res.exact !== \"boolean\";\n", "      sessState.bgUnsupported = false;\n"),
+    ("panel: Apply never asks to wait for the running background recompute", panel("Застосувати"), MAINJS,
+     "  const followBackground = exactJobs.size > 0 && sessState.exactSig === previewSettingsSignature();\n",
+     "  const followBackground = false;\n"),
+    ("panel: Apply waits for a background recompute of other values", panel("Застосувати"), MAINJS,
+     "  const followBackground = exactJobs.size > 0 && sessState.exactSig === previewSettingsSignature();\n",
+     "  const followBackground = exactJobs.size > 0;\n"),
+    ("panel: a closed window leaves its exact timer running", panel("closing the window"), MAINJS,
+     "    sessState.scanAborted = true;\n    cancelPreviewTimer();\n    cancelExactTimer();\n    stopExactPolling();\n",
+     "    sessState.scanAborted = true;\n    cancelPreviewTimer();\n"),
+    # ---- strokes on the cleaned photo (4.8.0)
+    ("panel: a stroke switches the mask on, as before 4.8.0", panel("cleaned photo"), MAINJS,
+     "      if (sessState.view === \"original\") setView(\"result\");\n", "      if (sessState.view !== \"mask\") setView(\"mask\");\n"),
+    ("panel: the key B switches the mask on", panel("cleaned photo"), MAINJS,
+     "      setActiveTool(\"brush\");\n    } else if (e.key === \"e\"", "      setActiveTool(\"brush\");\n      if (sessState.id) setView(\"mask\");\n    } else if (e.key === \"e\""),
+    ("panel: the inversion switches the mask on", panel("cleaned photo"), MAINJS,
+     "    const d = await sendMaskEditOp(\"invert\");\n", "    setView(\"mask\");\n    const d = await sendMaskEditOp(\"invert\");\n"),
+    ("panel: the trace of a stroke is not shown over the cleaned photo", panel("cleaned photo"), MAINJS,
+     "    dots.style.display = showOrig ? \"none\" : \"block\";\n", "    dots.style.display = showMask ? \"block\" : \"none\";\n"),
+    ("panel: a stroke over the original leaves the original on screen", panel("cleaned photo"), MAINJS,
+     "      if (sessState.view === \"original\") setView(\"result\");\n", ""),
+    # ---- zoom keys, the right mouse button (4.8.0)
+    ("panel: Ctrl + '+' zooms out and Ctrl + '-' zooms in", panel("Ctrl + '+'"), MAINJS,
+     "        else zoomBy(zoomKey === \"in\" ? ZOOM_KEY_STEP : 1 / ZOOM_KEY_STEP);\n", "        else zoomBy(zoomKey === \"in\" ? 1 / ZOOM_KEY_STEP : ZOOM_KEY_STEP);\n"),
+    ("panel: Ctrl + 0 does not fit the photo", panel("Ctrl + '+'"), MAINJS,
+     "        if (zoomKey === \"fit\") resetZoomFit();\n        else zoomBy(", "        if (zoomKey === \"fit\") return;\n        else zoomBy("),
+    ("panel: the zoom keys work without Ctrl", panel("Ctrl + '+'"), MAINJS,
+     "    if (!typing && (e.ctrlKey || e.metaKey) && !e.altKey) {\n", "    if (!typing && !e.altKey) {\n"),
+    ("panel: the zoom keys are taken from a text field", panel("Ctrl + '+'"), MAINJS,
+     "    if (!typing && (e.ctrlKey || e.metaKey) && !e.altKey) {\n", "    if ((e.ctrlKey || e.metaKey) && !e.altKey) {\n"),
+    ("panel: a key that says only its number is not a zoom key", panel("Ctrl + '+'"), MAINJS,
+     " || k === \"subtract\" || n === 189 || n === 109 || n === 173) return \"out\";\n", " || k === \"subtract\") return \"out\";\n"),
+    ("panel: zooming with the keys lets the middle of the view drift", panel("Ctrl + '+'"), MAINJS,
+     "  sessState.panX = cx - (cx - sessState.panX) * ratio;\n  sessState.panY = cy - (cy - sessState.panY) * ratio;\n", ""),
+    ("panel: the keys zoom past the limits", panel("Ctrl + '+'"), MAINJS,
+     "  const nextZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, oldZoom * factor));\n", "  const nextZoom = oldZoom * factor;\n"),
+    ("panel: the right mouse button does not drag the photo", panel("right mouse"), MAINJS,
+     "    if (e.button === 1 || e.button === 2 || sessState.spaceDown || sessState.tool === \"pan\") {\n",
+     "    if (e.button === 1 || sessState.spaceDown || sessState.tool === \"pan\") {\n"),
+    ("panel: the menu of the right button opens over the photo", panel("right mouse"), MAINJS,
+     "    if (!sessState.open) return;\n    e.preventDefault();\n    if (sessState.isPanning && sessState.panButton === 2 &&",
+     "    if (!sessState.open) return;\n    if (sessState.isPanning && sessState.panButton === 2 &&"),
+    ("panel: a menu event at the press ends the drag at once", panel("right mouse"), MAINJS,
+     "(sessState.panMoved || Date.now() - sessState.panStartedMs > 250)", "true"),
+    ("panel: a menu event never ends the drag (a host without 'mouseup' for the right button)", panel("right mouse"), MAINJS,
+     "(sessState.panMoved || Date.now() - sessState.panStartedMs > 250)", "false"),
+    ("panel: the right button of a host that sends pointer events only is ignored", panel("right mouse"), MAINJS,
+     "    if (!sessState.open || e.button !== 2 || sessState.isPanning) return;\n    startPan(e);\n", "    return;\n"),
+    # ---- the name without the 2 (4.8.0)
+    ("panel: a new layer keeps the 2 in its name", panel("the name has no 2"), MAINJS,
+     "const LAYER_NAME_AI = \"Чистий вініл (AI)\";\n", "const LAYER_NAME_AI = \"Чистий вініл 2 (AI)\";\n"),
+    ("panel: a layer made by 4.7.0 is no longer found by 'До / Після'", panel("the name has no 2"), MAINJS,
+     "const PLUGIN_LAYER_NAMES = [LAYER_NAME_AI, LAYER_NAME_SELECTION, \"Чистий вініл 2 (AI)\", \"Чистий вініл 2 (Виділення)\"];\n",
+     "const PLUGIN_LAYER_NAMES = [LAYER_NAME_AI, LAYER_NAME_SELECTION];\n"),
+    ("panel: the step of the History panel keeps the 2", panel("the name has no 2"), MAINJS,
+     "        name: \"Чистий Вініл Pro\"\n", "        name: \"Чистий Вініл Pro 2\"\n"),
+    ("panel: the big window keeps the 2 in its title", panel("the name has no 2"), MAINJS,
+     "      title: \"Чистий Вініл Pro\",\n", "      title: \"Чистий Вініл Pro 2\",\n"),
 ]
 
 
@@ -133,11 +182,11 @@ def _plugin_copy(tmp):
     return copy
 
 
-def _run_panel_tests(plugin_dir, text):
-    """(exit code, output) of the settings test and of the window scenarios named `text`, on the plugin in plugin_dir."""
+def _run_panel_tests(plugin_dir, texts):
+    """(exit code, output) of the settings test and of the window scenarios named by `texts`, on the plugin in plugin_dir."""
     env = dict(os.environ, CV_PLUGIN_DIR=plugin_dir)
     code, out = 0, ""
-    for test, args in ((PANEL_TESTS[0], []), (PANEL_TESTS[1], [text])):
+    for test, args in ((PANEL_TESTS[0], []), (PANEL_TESTS[1], list(texts))):
         try:
             r = subprocess.run(["node", os.path.join(ROOT, "tests", test)] + args, env=env,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
@@ -156,18 +205,18 @@ def main() -> int:
         for name, groups, rel, _, _ in chosen:
             print(f"{_label(groups):8s} {name}   [{rel}]")
         return 0
-    for text in sorted({d[1][1] for d in chosen if not isinstance(d[1], str)}):
+    for texts in sorted({d[1][1:] for d in chosen if not isinstance(d[1], str)}):
         # a defect of the panel counts as caught only if the same tests pass without it, on such a copy
         tmp = tempfile.mkdtemp(prefix="cv_panel_")
         try:
-            code, out = _run_panel_tests(_plugin_copy(tmp), text)
+            code, out = _run_panel_tests(_plugin_copy(tmp), texts)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
         if code is None:
             print(f"the panel tests cannot run here ({out[:200]}). Nothing was changed.")
             return 2
         if code != 0:
-            print(f"the panel tests ('{text}') fail without any defect - nothing can be told. Nothing was changed.\n{out[-600:]}")
+            print(f"the panel tests {texts} fail without any defect - nothing can be told. Nothing was changed.\n{out[-600:]}")
             return 2
     texts = {}
     for name, _, rel, old, _ in chosen:  # nothing is touched unless the whole list fits
@@ -201,7 +250,7 @@ def main() -> int:
                     copy = _plugin_copy(tmp)
                     with open(os.path.join(copy, os.path.relpath(rel, PLUGIN)), "w", encoding="utf-8", newline="") as f:
                         f.write(texts[rel].replace(old, new))
-                    code, out = _run_panel_tests(copy, groups[1])
+                    code, out = _run_panel_tests(copy, groups[1:])
                 finally:
                     shutil.rmtree(tmp, ignore_errors=True)
             caught = bool(code)

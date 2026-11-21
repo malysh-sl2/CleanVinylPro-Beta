@@ -4,7 +4,7 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 
 echo ==============================================================
-echo   Clean Vinyl Pro 2 — Діагностика та ремонт NVIDIA GPU (CUDA)
+echo   Clean Vinyl Pro — Діагностика та ремонт NVIDIA GPU (CUDA)
 echo ==============================================================
 echo.
 
@@ -14,7 +14,7 @@ if not exist "server\.venv\Scripts\python.exe" (
     exit /b 1
 )
 
-echo [0/4] Зупиняємо фоновий сервер Clean Vinyl Pro 2 на порту 18746 (якщо запущено)...
+echo [0/4] Зупиняємо фоновий сервер Clean Vinyl Pro на порту 18746 (якщо запущено)...
 :: лише процес python, який сам слухає цей порт (жодних сторонніх програм і не стару Clean Vinyl Pro на 18745)
 for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr /R /C:"127\.0\.0\.1:18746 .*LISTENING" /C:"0\.0\.0\.0:18746 .*LISTENING"') do (
     if not "%%p"=="0" (

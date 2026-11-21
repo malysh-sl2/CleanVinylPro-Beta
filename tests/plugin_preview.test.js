@@ -25,7 +25,9 @@
 //     background, without the progress card and without any button; a newer picture is never replaced by an older
 //     one; a change of the settings goes first; Apply waits for a run that computes the very frame it needs;
 //   - the brush and the eraser are used on the cleaned photo: the mask never switches on by itself;
-//   - Ctrl + "+" / Ctrl + "-" / Ctrl + 0 zoom as in Photoshop; the right mouse button drags the photo.
+//   - Ctrl + "+" / Ctrl + "-" / Ctrl + 0 zoom as in Photoshop; the right mouse button drags the photo;
+//   - the name without the 2 (4.8.0): what Photoshop is told - the window, the history step, the layer; layers
+//     made by an older version are still found by the "До / Після" button of the panel.
 //
 //   node tests/plugin_preview.test.js
 //   node tests/plugin_preview.test.js "preset click" remembered     (only the scenarios whose name has one of the texts)
@@ -350,11 +352,15 @@ function makeEnv(serverOpts = {}) {
   };
 
   const layer = { id: 99, opacity: 100, visible: true, move: async () => {} };
-  const psDoc = { id: 7, width: W, height: H, mode: "RGBColorMode", layers: [], createPixelLayer: async () => layer, createLayer: async () => layer };
+  // what Photoshop is told by name: the layers that are made, the steps of the History panel, the commands
+  const ps = { layersMade: [], history: [], commands: [], modal: null };
+  const makeLayer = async (opts) => { ps.layersMade.push(opts && opts.name); return layer; };
+  const psDoc = { id: 7, width: W, height: H, mode: "RGBColorMode", layers: [], createPixelLayer: makeLayer, createLayer: makeLayer };
+  const hostControl = { suspendHistory: async (opts) => { ps.history.push(opts && opts.name); return 1; }, resumeHistory: async () => {} };
   const stubs = {
     photoshop: {
       app: { documents: [psDoc], activeDocument: psDoc },
-      core: { executeAsModal: async (fn) => fn({ hostControl: { suspendHistory: async () => 1, resumeHistory: async () => {} } }) },
+      core: { executeAsModal: async (fn, opts) => { ps.commands.push(opts && opts.commandName); return fn({ hostControl }); } },
       imaging: {
         getPixels: async () => ({ imageData: { width: W, height: H, components: 3, colorProfile: "sRGB", getData: async () => new Uint8Array(W * H * 3), dispose() {} } }),
         createImageDataFromBuffer: async () => ({ dispose() {} }),
@@ -393,7 +399,7 @@ function makeEnv(serverOpts = {}) {
   // The big window: UXP's modal dialog is replaced by a promise that ends on close()
   const dlg = doc.getElementById("retouchModal");
   let closeModal = null;
-  dlg.uxpShowModal = () => new Promise((resolve) => { closeModal = resolve; });
+  dlg.uxpShowModal = (opts) => { ps.modal = opts || null; return new Promise((resolve) => { closeModal = resolve; }); };
   dlg.close = (v) => { const r = closeModal; closeModal = null; if (r) r(v); };
 
   doc.querySelectorAll(".cv-slider").forEach((n) => {
@@ -428,7 +434,7 @@ function makeEnv(serverOpts = {}) {
   };
   const isBackground = (r) => !!(r.body && r.body.background === true);
   const env = {
-    w, doc, server, requests, errors, el,
+    w, doc, server, requests, errors, el, ps, psDoc,
     state: (expr) => run(expr, "test-expression"),
     of: (p) => requests.filter((r) => r.path === p),
     // what a control asked for (a light refresh, or a full recompute with the progress card)...
@@ -1276,6 +1282,49 @@ async function main() {
     env.release();
     env.doc.body.dispatchEvent(new env.w.KeyboardEvent("keyup", { bubbles: true, code: "Space", key: " " }));
     expect(env.pan()[0] === 35 && env.edits().length === 1, "Space + mouse drags and does not draw: " + env.pan());
+  });
+
+  // ---------------------------------------------------------------- the name (4.8.0: without the 2)
+  await scenario("the name has no 2: the panel, the window, the history step, the new layer; a layer made by 4.7.0 is still found", {}, async (env, expect) => {
+    const name = "Чистий Вініл Pro";
+    expect(env.doc.title === name, "the title of the panel: " + env.doc.title);
+    expect(env.doc.querySelector(".brand-title").textContent === name, "the name on the panel: " + env.doc.querySelector(".brand-title").textContent);
+    await env.open();
+    expect(env.ps.modal && env.ps.modal.title === name, "the title of the big window: " + (env.ps.modal && env.ps.modal.title));
+    env.click("dlgBtnApply");
+    await env.waitFor(() => env.ps.layersMade.length === 1, 3000);
+    await env.waitFor(() => env.state("isBusy") === false);
+    expect(env.ps.layersMade.join() === "Чистий вініл (AI)", "the layer must be made under the name without the 2: " + env.ps.layersMade.join());
+    expect(env.ps.history.join() === name, "the step of the History panel: " + env.ps.history.join());
+    const with2 = env.ps.commands.concat(env.ps.history, env.ps.layersMade).filter((text) => /ініл (Pro )?2/.test(String(text)));
+    expect(with2.length === 0 && env.ps.commands.length >= 2, "nothing Photoshop is told may carry the 2: " + with2.join(" | "));
+
+    // "До / Після" of the panel finds the layer of this plugin by its name - the new one and the one of 4.7.0
+    const tryLayers = async (layers) => {
+      env.psDoc.layers = layers;
+      env.state("lastCreatedLayerId = null");
+      env.click("btnCompare");
+      await sleep(40);
+    };
+    const made47 = { id: 5, name: "Чистий вініл 2 (AI)", visible: true };
+    await tryLayers([{ id: 1, name: "Фон", visible: true }, made47]);
+    expect(made47.visible === false, "a layer made by 4.7.0 must still be found and hidden by 'До / Після'; " + env.footer());
+    env.click("btnCompare");
+    await sleep(40);
+    expect(made47.visible === true, "...and shown again");
+    const made48 = { id: 6, name: "Чистий вініл (AI)", visible: true };
+    await tryLayers([made48]);
+    expect(made48.visible === false, "a layer with the new name is found; " + env.footer());
+    const inGroup = { id: 9, name: "Чистий вініл 2 (Виділення)", visible: true };
+    await tryLayers([{ id: 8, name: "Група 1", visible: true, layers: [inGroup] }]);
+    expect(inGroup.visible === false, "a 'selection' layer of 4.7.0 inside a group is found; " + env.footer());
+    const selection48 = { id: 10, name: "Чистий вініл (Виділення)", visible: true };
+    await tryLayers([selection48]);
+    expect(selection48.visible === false, "a 'selection' layer with the new name is found; " + env.footer());
+    const foreign = { id: 11, name: "Чистий вініл 3 (AI)", visible: true };
+    await tryLayers([foreign, { id: 12, name: "Фон", visible: true }]);
+    expect(foreign.visible === true, "a layer of another name is left alone");
+    expect(env.footer().includes("«Чистий вініл (AI)» ще не створено"), "...and the panel names the layer it looks for: " + env.footer());
   });
 
   // ---------------------------------------------------------------- the three views of the photo
@@ -2313,7 +2362,7 @@ async function main() {
   }
   console.log(failed.length
     ? `plugin preview: ${failed.length} of ${results.length} scenarios FAILED`
-    : `plugin preview: ${results.length} scenarios pass (drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes, steps back and forward, preset reset, backup, one mode, soft and hard brush edge)`);
+    : `plugin preview: ${results.length} scenarios pass (drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes, steps back and forward, preset reset, backup, one mode, soft and hard brush edge, the exact picture by itself, strokes on the cleaned photo, zoom keys, right-button drag)`);
   process.exit(failed.length ? 1 : 0);
 }
 

@@ -31,7 +31,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo Зупиняємо попередній фоновий сервер Clean Vinyl Pro 2 (якщо працював)...
+echo Зупиняємо попередній фоновий сервер Clean Vinyl Pro (якщо працював)...
 for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr /R /C:"127\.0\.0\.1:18746 .*LISTENING" /C:"0\.0\.0\.0:18746 .*LISTENING"') do (
     if not "%%p"=="0" (
         tasklist /FI "PID eq %%p" /NH 2>nul | findstr /I "python" >nul 2>&1
@@ -40,7 +40,7 @@ for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr /R /C:"127\.0\.0\.1:18
 )
 timeout /t 1 /nobreak >nul
 
-echo Запускаємо оновлений AI GPU сервер Clean Vinyl Pro 2 v4.7.0...
+echo Запускаємо оновлений AI GPU сервер Clean Vinyl Pro v4.8.0...
 echo (Ви можете згорнути це вікно, але не закривайте його під час роботи у Photoshop)
 echo.
 "server\.venv\Scripts\python.exe" "server\server.py"

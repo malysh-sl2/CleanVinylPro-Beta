@@ -38,10 +38,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: 1. Справжня HTTP-перевірка чи вже працює саме сервер Clean Vinyl Pro 2 v4.7.0 на порту 18746
-"server\.venv\Scripts\python.exe" -c "import json, sys, urllib.request; r=urllib.request.urlopen('http://127.0.0.1:18746/health', timeout=2); d=json.loads(r.read().decode('utf-8')); sys.exit(0 if d.get('ok') and d.get('app')=='cleanvinylpro2' and d.get('version')=='4.7.0' else 1)" >nul 2>&1
+:: 1. Справжня HTTP-перевірка чи вже працює саме сервер Clean Vinyl Pro v4.8.0 на порту 18746
+"server\.venv\Scripts\python.exe" -c "import json, sys, urllib.request; r=urllib.request.urlopen('http://127.0.0.1:18746/health', timeout=2); d=json.loads(r.read().decode('utf-8')); sys.exit(0 if d.get('ok') and d.get('app')=='cleanvinylpro2' and d.get('version')=='4.8.0' else 1)" >nul 2>&1
 if not errorlevel 1 (
-    echo [OK] AI GPU сервер Clean Vinyl Pro 2 v4.7.0 вже запущено на http://127.0.0.1:18746
+    echo [OK] AI GPU сервер Clean Vinyl Pro v4.8.0 вже запущено на http://127.0.0.1:18746
     timeout /t 1 /nobreak >nul
     popd
     if /i "%~1"=="--no-elevate" exit 0
@@ -53,12 +53,12 @@ if not errorlevel 1 (
 ::    (стара програма Clean Vinyl Pro може працювати поруч - її процес сюди не рахується)
 powershell -NoProfile -Command "$root = (Get-Location).Path.TrimEnd('\') + '\server\.venv\'; $p = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'python*' -and $_.ExecutablePath -and $_.ExecutablePath.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase) -and $_.CommandLine -like '*server.py*' }; if ($p) { exit 0 } else { exit 1 }" >nul 2>&1
 if not errorlevel 1 (
-    echo Сервер Clean Vinyl Pro 2 вже запускається, чекаємо готовності порту 18746...
+    echo Сервер Clean Vinyl Pro вже запускається, чекаємо готовності порту 18746...
     for /l %%i in (1,1,10) do (
         timeout /t 1 /nobreak >nul
-        "server\.venv\Scripts\python.exe" -c "import json, sys, urllib.request; r=urllib.request.urlopen('http://127.0.0.1:18746/health', timeout=2); d=json.loads(r.read().decode('utf-8')); sys.exit(0 if d.get('ok') and d.get('app')=='cleanvinylpro2' and d.get('version')=='4.7.0' else 1)" >nul 2>&1
+        "server\.venv\Scripts\python.exe" -c "import json, sys, urllib.request; r=urllib.request.urlopen('http://127.0.0.1:18746/health', timeout=2); d=json.loads(r.read().decode('utf-8')); sys.exit(0 if d.get('ok') and d.get('app')=='cleanvinylpro2' and d.get('version')=='4.8.0' else 1)" >nul 2>&1
         if not errorlevel 1 (
-            echo [OK] AI GPU сервер Clean Vinyl Pro 2 v4.7.0 готовий!
+            echo [OK] AI GPU сервер Clean Vinyl Pro v4.8.0 готовий!
             popd
             if /i "%~1"=="--no-elevate" exit 0
             if /i "%~1"=="--direct" exit 0
@@ -83,7 +83,7 @@ if "%FOUND_OLD%"=="1" (
     timeout /t 1 /nobreak >nul
 )
 
-echo Запуск AI GPU сервера Clean Vinyl Pro 2 v4.7.0...
+echo Запуск AI GPU сервера Clean Vinyl Pro v4.8.0...
 echo (Ви можете згорнути це вікно, але не закривайте його під час роботи у Photoshop)
 echo.
 "server\.venv\Scripts\python.exe" "server\server.py"

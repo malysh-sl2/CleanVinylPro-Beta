@@ -37,7 +37,7 @@ ZIP_PATH = os.path.join(REPO_ROOT, ZIP_NAME)
 ICON_PATH = os.path.join(REPO_ROOT, APP_FOLDER, "uxp-plugin", "icons", "plugin@2x.png")
 MANIFEST_IN_ZIP = APP_FOLDER + "/uxp-plugin/manifest.json"
 DEFAULT_PORT = 18746
-DEFAULT_NAME = "Чистий Вініл Pro 2"
+DEFAULT_NAME = "Чистий Вініл Pro"
 
 PAGE = """<!doctype html>
 <html lang="uk">

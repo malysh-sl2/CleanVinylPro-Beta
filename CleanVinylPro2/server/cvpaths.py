@@ -1,5 +1,5 @@
 """
-Where the heavy, shared things of Clean Vinyl Pro 2 live on this computer.
+Where the heavy, shared things of Clean Vinyl Pro live on this computer.
 
 The file folders.ini (next to install_windows.bat) names three folders:
 
@@ -224,7 +224,7 @@ def models_problem(root: str = None) -> str:
 # Other copies of the program on this PC (their models and libraries can be re-used instead of a download)
 # ----------------------------------------------------------------------------------------------------------------------
 def _remembered_install_paths() -> list:
-    """Folders written by setup_launcher.py of Clean Vinyl Pro 2 and of the original Clean Vinyl Pro."""
+    """Folders written by setup_launcher.py of this program and of the original Clean Vinyl Pro (v3.2.1)."""
     out = []
     if os.name == "nt":
         base = os.environ.get("APPDATA") or os.path.expanduser("~")

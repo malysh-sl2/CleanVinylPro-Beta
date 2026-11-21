@@ -66,7 +66,7 @@ def _register_elevated_task(root_dir: str, start_bat: str) -> bool:
   <Actions Context="Author">
     <Exec>
       <Command>cmd.exe</Command>
-      <Arguments>/c start "Clean Vinyl Pro 2 GPU Server" /min cmd.exe /c ""{_xml_esc(start_bat)}" --no-elevate"</Arguments>
+      <Arguments>/c start "Clean Vinyl Pro GPU Server" /min cmd.exe /c ""{_xml_esc(start_bat)}" --no-elevate"</Arguments>
       <WorkingDirectory>{_xml_esc(root_dir)}</WorkingDirectory>
     </Exec>
   </Actions>
@@ -144,7 +144,7 @@ def main():
 
         cmd = f'wscript.exe "{vbs_path}"'
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\cleanvinyl2") as k:
-            winreg.SetValueEx(k, "", 0, winreg.REG_SZ, "URL:Clean Vinyl Pro 2 GPU Server")
+            winreg.SetValueEx(k, "", 0, winreg.REG_SZ, "URL:Clean Vinyl Pro GPU Server")
             winreg.SetValueEx(k, "URL Protocol", 0, winreg.REG_SZ, "")
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\cleanvinyl2\shell\open\command") as k:
             winreg.SetValueEx(k, "", 0, winreg.REG_SZ, cmd)

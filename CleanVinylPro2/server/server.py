@@ -62,7 +62,7 @@ from engine import CleanVinylEngine, DEFAULT_IDLE_UNLOAD_SEC
 
 APP_ID = "cleanvinylpro2"  # tells this program apart from the original Clean Vinyl Pro (port 18745)
 APP_PORT = 18746
-APP_VERSION = "4.7.0"
+APP_VERSION = "4.8.0"
 # Settings written by plugin builds older than this schema still carry the former 30 s idle-unload default
 SETTINGS_SCHEMA_IDLE_120 = 5
 LEGACY_IDLE_UNLOAD_SEC = 30.0
@@ -79,7 +79,7 @@ async def lifespan(_app: FastAPI):
     eng = get_engine()
     idle_str = "вимкнено" if (eng and eng.idle_unload_sec <= 0) else f"{int(eng.idle_unload_sec)} с" if eng else f"{int(DEFAULT_IDLE_UNLOAD_SEC)} с"
     print("======================================================", flush=True)
-    print(f"  Clean Vinyl Pro 2 v{APP_VERSION} — Локальний AI GPU сервер", flush=True)
+    print(f"  Clean Vinyl Pro v{APP_VERSION} — Локальний AI GPU сервер", flush=True)
     print(f"  Адреса: http://127.0.0.1:{APP_PORT}", flush=True)
     print(f"  Автовивантаження моделей з GPU/ОЗУ: {idle_str}", flush=True)
     print(f"  AI-моделі: {MODELS_DIR}", flush=True)
@@ -89,7 +89,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Clean Vinyl Pro 2 Local GPU Server", version=APP_VERSION, lifespan=lifespan)
+app = FastAPI(title="Clean Vinyl Pro Local GPU Server", version=APP_VERSION, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

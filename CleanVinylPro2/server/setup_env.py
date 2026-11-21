@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Installer logic of Clean Vinyl Pro 2. install_windows.bat finds a Python and starts this file; fix_gpu_cuda.bat
+Installer logic of Clean Vinyl Pro. install_windows.bat finds a Python and starts this file; fix_gpu_cuda.bat
 starts it with the word "gpu". Only the standard library is used: nothing is installed yet when it runs.
 
     python setup_env.py install   everything below
@@ -13,7 +13,7 @@ What "install" does
      or a second copy of the program, then installs in seconds and downloads nothing.
      The libraries are taken, in this order:
        already in the shared folder  ->  copied from another copy of the program found on this PC (the original
-       Clean Vinyl Pro, an earlier folder of Clean Vinyl Pro 2)  ->  downloaded with pip.
+       Clean Vinyl Pro v3.2.1, an earlier folder of this program)  ->  downloaded with pip.
      If Python itself was moved or re-installed, the environments are re-linked to it and keep their libraries.
      Without LIBS_DIR everything lives in server/.venv, as in the earlier versions.
   2. AI models. They are used straight from MODELS_DIR. A missing file is copied from another copy of the program
@@ -690,7 +690,7 @@ def is_full(env_dir: str) -> bool:
 
 def thin_module(shared_site: str, shared_python: str) -> str:
     return f'''{THIN_MARK}
-# Written by setup_env.py of Clean Vinyl Pro 2. Do not edit: install_windows.bat writes this file again.
+# Written by setup_env.py of Clean Vinyl Pro. Do not edit: install_windows.bat writes this file again.
 # Python runs it at every start (see {THIN_NAME}.pth next to it).
 #
 # This small environment has no libraries of its own. It takes them from the shared folder named below, so every
@@ -707,7 +707,7 @@ if os.path.isdir(SHARED_SITE_PACKAGES):
     os.environ["CLEANVINYL_ENV_PYTHON"] = SHARED_PYTHON
 else:
     sys.stderr.write(
-        "\\n[Clean Vinyl Pro 2] Не знайдено спільну папку бібліотек Python:\\n    " + SHARED_SITE_PACKAGES + "\\n"
+        "\\n[Clean Vinyl Pro] Не знайдено спільну папку бібліотек Python:\\n    " + SHARED_SITE_PACKAGES + "\\n"
         "Якщо диск від'єднано - під'єднайте його. Якщо папку перенесли або видалили - виправте рядок LIBS_DIR\\n"
         "у файлі folders.ini і запустіть install_windows.bat.\\n\\n"
     )
@@ -970,7 +970,7 @@ def _base_info(base: str) -> dict:
 def cmd_install(root: str, skip_gpu: bool, skip_launcher: bool) -> int:
     base = base_python()
     base_info = _base_info(base)
-    say(f"  Clean Vinyl Pro 2 v{program_version()}")
+    say(f"  Clean Vinyl Pro v{program_version()}")
     say(f"  Python {'.'.join(str(v) for v in base_info['version'])}: {base}")
     wanted = cvpaths.read_settings(root).get("PYTHON_DIR", "")
     if not wanted or os.path.normcase(os.path.abspath(wanted)) != os.path.normcase(os.path.dirname(base)):
@@ -1051,7 +1051,7 @@ def cmd_info(root: str) -> int:
     settings = cvpaths.read_settings(root)
     base = base_python()
     local = os.path.join(root, "server", ".venv")
-    say(f"  Clean Vinyl Pro 2 v{program_version()}   папка програми: {root}")
+    say(f"  Clean Vinyl Pro v{program_version()}   папка програми: {root}")
     say(f"  {cvpaths.SETTINGS_NAME}: " + ", ".join(f"{k}={settings[k] or '(порожньо)'}" for k in cvpaths.KEYS))
     say(f"  Python, яким запущено: {base}")
     kind = "немає" if not os.path.isdir(local) else ("вказує на спільні бібліотеки" if is_thin(local) else
