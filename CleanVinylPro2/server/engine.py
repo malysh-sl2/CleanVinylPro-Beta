@@ -1900,7 +1900,7 @@ class CleanVinylEngine:
     #   profile is about a twentieth); a dark line that grows out of something light (a dark hair grows out of
     #   dark hair - an eyelash on a lit face, a hair in front of a white sleeve do not); a tuft too dense to be
     #   single hairs; a line that goes on beyond the searched zone or to the border of the frame (a cable, a
-    #   pole); gear and smoke.
+    #   pole) - also when it is crossed by a hair or fades for a stretch on the way; gear and smoke.
     #   Every size is measured in head widths, and a close-up is searched on a reduced copy, so a hair is the same
     #   few pixels thick whatever the framing.
     # It cannot tell a hair from other thin things that stand clear of a head - a thin earring, a chain, the stem
@@ -1925,6 +1925,8 @@ class CleanVinylEngine:
     HAIR_MEAN = 0.80             # ...and over the whole piece the response is this share on average
     HAIR_LIGHT = 1.3             # a light hair on a dark backdrop must be this much stronger than a dark one
     HAIR_ROOT = 0.02             # head widths inside the outline: there the person is compared with the hair
+    HAIR_TAIL = 0.12             # head widths: the last stretch of a hair, which tells where it points
+    HAIR_GOES_ON = 0.6           # a line is found on this share of the way from there to the end of the zone: no hair
     HAIR_STEPS = (0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875)   # the slider positions that are always searched too
 
     def _person_solid(self, tight_1024: np.ndarray, w: int, h: int) -> np.ndarray:
@@ -2041,7 +2043,8 @@ class CleanVinylEngine:
                 return flagged
             return cv2.morphologyEx(flagged, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
 
-        bad = (solid > 0) | (box_of(near_s * np.uint8(255), cv2.INTER_NEAREST) < 128)
+        beyond = box_of(near_s * np.uint8(255), cv2.INTER_NEAREST) < 128   # outside the searched zone
+        bad = (solid > 0) | beyond
         bad |= box_of(wide_only(stand_s, 75)) > 127
         bad |= box_of(smoke_s) > 65
         pad = max(3, int(round(min(14, int(0.012 * min(h, w))) * ws)))
@@ -2066,6 +2069,56 @@ class CleanVinylEngine:
         rim = pad + gap
         calm = ~bad & (box_of(fg_mask_u8) < 60)   # the backdrop of the box, outside the protected band
         bad |= dist <= fringe                     # (the fuzz of the outline: after `calm`, which lies outside it)
+
+        tail = max(8.0, self.HAIR_TAIL * head_w)
+
+        def goes_on(gy: np.ndarray, gx: np.ndarray, gd: np.ndarray, ridge: np.ndarray) -> bool:
+            """
+            Does the line with the centre pixels (gy, gx) - gd: their distance to the person - go on beyond its
+            far end? `ridge`: every centre line of this pass, whatever became of its piece.
+            The pieces of a long line are judged one by one before they are put together, and a piece that fails
+            (it runs into a knot of crossing hairs, or it is faint for a stretch) is gone: what is left next to
+            the head then ends in the open like a hair. So the line is followed from its far end, straight on in
+            the direction of its last stretch, to where the searched zone or the frame ends. A hair ends in the
+            open: nothing is found there, or the few pixels of what crosses the way. A line that goes on is found
+            there most of the way, or at least over the last stretch before the end.
+            """
+            f = int(np.argmax(gd))
+            fy, fx = float(gy[f]), float(gx[f])
+            last = (gy - fy) ** 2 + (gx - fx) ** 2 <= tail * tail
+            if int(last.sum()) < 6:
+                return False
+            pts = np.stack([gy[last] - fy, gx[last] - fx], axis=1).astype(np.float32)
+            mid = pts.mean(axis=0)
+            vt = np.linalg.svd(pts - mid, full_matrices=False)[2]
+            uy, ux = float(vt[0, 0]), float(vt[0, 1])
+            if uy * float(mid[0]) + ux * float(mid[1]) > 0:   # (it points from the middle of the stretch to the far end)
+                uy, ux = -uy, -ux
+            y, x, hits = fy, fx, []
+            while True:
+                y, x = y + uy, x + ux
+                iy, ix = int(round(y)), int(round(x))
+                if not (0 <= iy < bh_ and 0 <= ix < bw_):
+                    del hits[max(0, len(hits) - pad):]       # (the strip along the border of the frame is not searched)
+                    break
+                if beyond[iy, ix]:
+                    break                                    # the end of the searched zone
+                if solid[iy, ix]:
+                    return False                             # it leads back into the person
+                hit = False
+                for o in (0, 1, -1, 2, -2, 3, -3):           # (the line may lie a little to the side: it is kept in the middle)
+                    jy, jx = int(round(y - ux * o)), int(round(x + uy * o))
+                    if 0 <= jy < bh_ and 0 <= jx < bw_ and ridge[jy, jx]:
+                        hit = True
+                        y, x = y - 0.5 * ux * o, x + 0.5 * uy * o
+                        break
+                hits.append(hit)
+            if len(hits) < gap:
+                return False
+            # found most of the way - or over the last stretch before the end, whatever lies between (a knot of
+            # other hairs hides a line for longer than it is wide)
+            return (sum(hits) >= self.HAIR_GOES_ON * len(hits)
+                    or sum(hits[-int(tail):]) >= self.HAIR_GOES_ON * min(len(hits), int(tail)))
 
         def limits(level: float):
             """(levels above the usual response, spreads of that response, shortest hair) at a slider position 0..1."""
@@ -2218,6 +2271,11 @@ class CleanVinylEngine:
                         depth = float(np.mean(pv[of_g])) / 16.0
                         if inside > tone + 0.5 * depth:
                             good[g_i] = False
+                # 4. ...and the line does not go on beyond its far end (see goes_on)
+                for g_i in np.flatnonzero(good):
+                    of_g = gid == g_i
+                    if goes_on(py[of_g], px[of_g], d[of_g], lbl):
+                        good[g_i] = False
                 found = good[gid]
                 keep[py[found], px[found]] = 1
             del ay, ax, ad, av, a_out

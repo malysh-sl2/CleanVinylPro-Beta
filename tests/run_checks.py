@@ -70,9 +70,12 @@ Part 2 - what this program does differently from v3.2.1, each with its own measu
   line      a joint of the vinyl that the corner tool takes for the corner: its thin dark line goes with the step,
             with the seam tool on and off; a joint or a corner without such a line: nothing is taken out
   hair      the slider of the single hairs: hairs that stick out of the hairdo are repaired, also inside the
-            protected band; the fuzz of the outline, an eyelash, a dark line that grows out of the lit face, a
-            line that touches nobody and the person stay; dark and light hairs, a close-up; at 0 nothing is looked
-            for; in the big window a light refresh and a full recompute give the frame of that slider value
+            protected band, from the wall as the photo has it; what stays: the fuzz of the outline, a hair that
+            runs along it, an eyelash, a dark line that grows out of the lit face, a line that touches nobody, a
+            wisp of crossing hairs, a thread at the clothes, a cable (also one crossed by hairs) and the person;
+            the lower the slider, the longer a hair must be, and a higher position never takes less; dark and
+            light hairs, a close-up; at 0 nothing is looked for; in the big window a light refresh and a full
+            recompute give the frame of that slider value
 
 Part 3 - the program around the engine:
   server    settings migration, binary packets, one version everywhere; the name a person reads has no 2 (since
@@ -4669,6 +4672,8 @@ def _hair_frame(w=1500, h=2000, zoom=1.0, wall=150.0, hair=26.0, skin=188.0, lin
       "lash"   a short dark line on the lit face (an eyelash in profile);
       "face"   a long line of the same kind that grows out of the lit face;
       "apart"  such a line that touches nobody;
+      "tuft"   a wisp: six faint hairs that cross each other;
+      "low"    a thread that sticks out of the clothes, three head widths below the top of the head;
       "cable"  such a line that starts at the hairdo and goes on to the border of the frame.
     zoom: the size of the head (1 = about 300 px wide in a frame 1500 px wide). spot: a spot of light on the wall
     behind the head, so many levels at its middle. skip: the names that are not drawn (the same frame without them).
@@ -4698,14 +4703,16 @@ def _hair_frame(w=1500, h=2000, zoom=1.0, wall=150.0, hair=26.0, skin=188.0, lin
     person[min(h, cy + int(240 * s)):] = (40, 40, 46)
     marks = {}
 
-    def draw(name, pts, width=None):
+    def draw(name, pts, width=None, tone=None):
         if name in skip:
             return
         m = np.zeros((h, w), np.uint8)
         cv2.polylines(m, [np.round(np.array(pts, np.float32)).astype(np.int32)], False, 255,
                       max(1, int(round((thick if width is None else width) * zoom))), lineType=cv2.LINE_AA)
+        if not (m > 128).any():
+            return   # (the thing lies outside this frame)
         a = (m.astype(np.float32) / 255.0)[..., None]
-        img[:] = img * (1 - a) + line * a
+        img[:] = img * (1 - a) + (line if tone is None else tone) * a
         marks[name] = np.maximum(marks.get(name, 0), (m > 128).astype(np.uint8))
 
     def ray(angle, r0, r1, bend=0.0, n=14):
@@ -4721,7 +4728,7 @@ def _hair_frame(w=1500, h=2000, zoom=1.0, wall=150.0, hair=26.0, skin=188.0, lin
     draw("short", ray(25, -4 * s, 36 * s))
     draw("along", ray(-60, -4 * s, 28 * s, n=5)
          + [(cx + (rx + 28 * s) * np.sin(a), cy - (ry + 28 * s) * np.cos(a)) for a in np.deg2rad(np.linspace(-58.0, -28.0, 16))])
-    for angle in (62, 70, 78, 86, 94, 102):   # along the outline, 5..11 px from it
+    for angle in (62, 70, 78, 86):   # along the outline, 5..11 px from it
         d = (5 + (angle % 7)) * s
         draw("fringe", [(cx + (rx + d) * np.sin(a), cy - (ry + d) * np.cos(a)) for a in np.deg2rad(np.linspace(angle - 4.0, angle + 4.0, 8))], width=1)
     ex, ey = cx - rx * np.cos(np.deg2rad(8)), cy - ry * np.sin(np.deg2rad(8))
@@ -4729,6 +4736,16 @@ def _hair_frame(w=1500, h=2000, zoom=1.0, wall=150.0, hair=26.0, skin=188.0, lin
     fx, fy = cx - rx * np.cos(np.deg2rad(-20)), cy - ry * np.sin(np.deg2rad(-20))
     draw("face", [(fx + 3 * s, fy), (fx - 80 * s, fy + 14 * s)])
     draw("apart", ray(55, 60 * s, 125 * s, n=4))
+    # a wisp: six faint hairs that cross each other like a lattice, three leaning one way and three the other
+    # (faint: drawn as strongly as the single hairs, such a patch is a thing to the map of the gear)
+    for angle, lean in ((99, 1), (104, 1), (109, 1), (107, -1), (112, -1), (117, -1)):
+        root = ray(angle, -4 * s, 0, n=2)[0]
+        out_dir = np.deg2rad(angle + 32 * lean)
+        draw("tuft", [root, (root[0] + 74 * s * np.sin(out_dir), root[1] - 74 * s * np.cos(out_dir))], tone=wall + 0.2 * (line - wall))
+    # a thread that sticks out of the clothes, three head widths below the top of the head
+    low_y = cy - ry + 6.0 * rx
+    low_x = cx + 120 * s + 210 * s * (low_y - cy - 150 * s) / max(1.0, h + 400 * s - cy - 150 * s)
+    draw("low", [(low_x - 4 * s, low_y), (low_x + 70 * s, low_y - 24 * s)])
     k0 = (cx + rx * np.sin(np.deg2rad(125)), cy - ry * np.cos(np.deg2rad(125)))
     draw("cable", [(k0[0] - 3 * s, k0[1]), (w - 1, k0[1] + 0.10 * (w - 1 - k0[0]))])
 
@@ -4754,7 +4771,9 @@ def check_hair():
     bad, notes = [], []
     p = dict(H.STD, spots=0, scuffs=0, seamOn=False, blur=0, cycCurve=0, smokeOn=False)
 
-    def judged(tag, frame, marks, sil_full, out, st, taken=0.30, stay=("fringe", "along", "lash", "face", "apart", "cable")):
+    STAY = ("fringe", "along", "lash", "face", "apart", "tuft", "low", "cable")
+
+    def judged(tag, frame, marks, sil_full, out, st, taken=0.30, stay=STAY):
         comp = _comp(frame, out)
         dist = cv2.distanceTransform((sil_full == 0).astype(np.uint8), cv2.DIST_L2, 5)
         head_w = float((sil_full[: int(np.nonzero(sil_full.any(axis=1))[0][0] + 0.08 * frame.shape[0])] > 0).sum(axis=1).max())
@@ -4790,6 +4809,24 @@ def check_hair():
             bad.append(f"{tag}: the frame was changed away from the hairs (by {changed[away].max():.2f} levels)")
         return kept
 
+    def with_fill_source(eng_, frame_, params):
+        """process(), and what the inpainting was given: (layer, stats, {"src": the picture, "mask": what to fill})."""
+        seen = {}
+
+        def spy(fn):
+            def call(img, mask, *a, **k):
+                if "src" not in seen and img.shape[:2] == frame_.shape[:2]:
+                    seen["src"], seen["mask"] = img.copy(), mask.copy()
+                return fn(img, mask, *a, **k)
+            return call
+
+        eng_._run_fast_inpaint, eng_._run_lama_tiles = spy(eng_._run_fast_inpaint), spy(eng_._run_lama_tiles)
+        try:
+            out_, st_ = _quiet(eng_.process, frame_, 8, params)
+        finally:
+            del eng_.__dict__["_run_fast_inpaint"], eng_.__dict__["_run_lama_tiles"]
+        return out_, st_, seen
+
     frame, sil, marks, sil_full = _hair_frame()
     eng = H.make_engine(E, sil)
     for mode in ("fast", "quality"):
@@ -4797,26 +4834,46 @@ def check_hair():
         out_z, st_z = _quiet(eng.process, frame, 8, dict(p, speedMode=mode, strayHair=0))
         if st0.get("hair_px") or st_z.get("hair_px") or int(out0[..., 3].max()) != 0 or not np.array_equal(out0, out_z):
             bad.append(f"{mode}: with the slider at 0 nothing may be looked for (hair_px {st0.get('hair_px')}, layer {int(out0[..., 3].max())})")
-        out, st = _quiet(eng.process, frame, 8, dict(p, speedMode=mode, strayHair=100))
+        out, st, fill = with_fill_source(eng, frame, dict(p, speedMode=mode, strayHair=100))
         kept = judged(f"{mode}, slider 100", frame, marks, sil_full, out, st)
+        # A hair is repaired inside the protected band, so the network must be shown the wall around it as the
+        # photo has it. (Elsewhere the band is painted over with an average of the backdrop further away, to
+        # keep the colours of the person out of a repair that ends before the band: next to a head that average
+        # is not the tone of the wall right there.)
+        if "src" not in fill:
+            bad.append(f"{mode}: no repair was asked for")
+        else:
+            off_person = cv2.distanceTransform((sil_full == 0).astype(np.uint8), cv2.DIST_L2, 5) > 8
+            around = (cv2.dilate((fill["mask"] > 0).astype(np.uint8), np.ones((49, 49), np.uint8)) > 0) & off_person & (fill["mask"] == 0)
+            differs = np.abs(fill["src"].astype(np.int16) - frame[..., :3].astype(np.int16)).max(axis=2)[around]
+            if differs.size == 0 or int(differs.max()) > 0:
+                bad.append(f"{mode}: around the hairs the repair is shown something else than the photo "
+                           f"({100.0 * float((differs > 0).mean()) if differs.size else 0:.0f}% of the surroundings, up to {int(differs.max()) if differs.size else 0} levels)")
         if mode == "fast":
             notes.append(f"hairs that stick out of the hairdo: {100 * kept['out']:.0f}% of their contrast left; the fuzz of the outline {100 * kept['fringe']:.0f}%, "
                          f"a hair that turns to run along the outline {100 * kept['along']:.0f}%, "
                          f"an eyelash {100 * kept['lash']:.0f}%, a line out of the lit face {100 * kept['face']:.0f}%, a line that touches nobody {100 * kept['apart']:.0f}%, "
-                         f"a cable that goes on to the frame border {100 * kept['cable']:.0f}%")
+                         f"a thread at the clothes {100 * kept['low']:.0f}%, a cable that goes on to the frame border {100 * kept['cable']:.0f}%")
             short100 = kept["short"]
     # a hair of a tenth of the head goes at 100 (above) and stays at 30: the lower the slider, the longer a hair must be
     out, st = _quiet(eng.process, frame, 8, dict(p, speedMode="fast", strayHair=30))
-    k30 = judged("slider 30", frame, marks, sil_full, out, st, stay=("short", "fringe", "along", "lash", "face", "apart", "cable"))
+    k30 = judged("slider 30", frame, marks, sil_full, out, st, stay=("short",) + STAY)
     notes.append(f"a hair a tenth of the head long: {100 * short100:.0f}% left at 100, {100 * k30['short']:.0f}% at 30")
+    # A wisp - hairs that cross each other - is no single hair. (Judged without the cable: next to it the map of
+    # the gear takes the wisp for a part of the same thing, and the search does not look there at all.)
+    fw, sw_, mw, fullw = _hair_frame(skip=("cable",))
+    ow, stw = _quiet(H.make_engine(E, sw_).process, fw, 8, dict(p, speedMode="fast", strayHair=100))
+    kw_ = judged("a wisp", fw, mw, fullw, ow, stw)
+    notes.append(f"a wisp of crossing hairs {100 * kw_['tuft']:.0f}%")
     # the slider: what a lower position takes, a higher one takes too
     px = [int(_quiet(eng.process, frame, 8, dict(p, speedMode="fast", strayHair=v))[1].get("hair_px") or 0) for v in (25, 50, 75, 100)]
     if sorted(px) != px or px[-1] == 0:
         bad.append(f"marked pixels at 25 / 50 / 75 / 100 of the slider: {px}")
     # Light hairs in front of a dark wall (a light line that grows out of the lit face is a hair there: only a
-    # dark hair is asked what it grows out of); a close-up, with thicker hairs.
-    for tag, kw, taken, stay in (("light hairs on a dark wall", dict(wall=34.0, hair=92.0, line=150.0, seed=10), 0.35, ("fringe", "along", "lash", "apart", "cable")),
-                                 ("close-up", dict(zoom=3.2, seed=11), 0.35, ("fringe", "along", "lash", "face", "apart", "cable"))):
+    # dark hair is asked what it grows out of); a close-up, with thicker hairs - there the wisp reaches the cable,
+    # and the piece of the cable between the head and that knot ends in the open like a hair.
+    for tag, kw, taken, stay in (("light hairs on a dark wall", dict(wall=34.0, hair=92.0, line=150.0, seed=10), 0.35, tuple(n for n in STAY if n != "face")),
+                                 ("close-up", dict(zoom=3.2, seed=11), 0.35, STAY)):
         f2, s2, m2, full2 = _hair_frame(**kw)
         o2, st2 = _quiet(H.make_engine(E, s2).process, f2, 8, dict(p, speedMode="fast", strayHair=100))
         k2 = judged(tag, f2, m2, full2, o2, st2, taken=taken, stay=stay)
