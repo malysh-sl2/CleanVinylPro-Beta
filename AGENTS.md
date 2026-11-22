@@ -704,9 +704,11 @@ second plugin next to the installed one and lose his presets.
     about 0.68 s instead of 0.51 s (2 CPUs).
   - Checks: `check_smoke` covers every rule above with drawn thin smoke (soft billows of two levels, no
     wisps), a soft line across the wall, the seam at 100 %, the corner with and without thin smoke over
-    it and the window answers; the random walks of `stage`, `quick` and `session` toggle `smokeFaint`;
-    the window test has 4 new scenarios (96; its stand-in server mirrors the rules, `smokeOld` plays a
-    server before 4.11.0). `tests/try_defects.py` holds the deliberate defects of 4.11.0.
+    it and the window answers; the random walks of `stage`, `quick` and `session` toggle `smokeFaint`
+    (they did NOT notice a `_clean_signature` without the key - `check_smoke` asks for that itself: Apply
+    that brings the word back must compute the real frame anew); the window test has 4 new scenarios
+    (96; its stand-in server mirrors the rules, `smokeOld` plays a server before 4.11.0).
+    `tests/try_defects.py` holds the 30 deliberate defects of 4.11.0 (23 in the engine, 7 in the panel).
 
 ## 3. Current state — update this at the end of every session
 
@@ -732,35 +734,83 @@ _Last updated: by the agent of the first session, after releasing 4.11.0 (the an
   the manual since 4.8.0. Whether his Creative Cloud shows these names in English or in Ukrainian is not
   known.
 - **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (42 results in
-  2,644 s; 92 scenarios of the panel test and 54 cases of the settings test among them) on
-  2026-11-22, with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4, with nothing running next to it.
-  Deliberate defects for what is new in 4.10.0 (`tests/try_defects.py`), put in one by one: 54 (19 in the
-  engine and the server - `fallback` 14, `fastwin` 4, `http` 1 - and 35 in the panel). All are caught
-  by the checks as they are now, each by the check of the rule it breaks. They ran in a copy of the tree:
-  the 19 of the engine and the server in 745 s, the 35 of the panel in 164 s, both after the last change
-  of the files they touch.
-  Holes found while 4.10.0 was built, all closed:
-  - "all processors but one" could not be told from "one thread" here: the sandbox has two processors.
-    `check_fallback` now tells the engine of eight (`os.cpu_count` replaced for the call) and asks for 7;
-  - nothing looked at what `_create_cpu_session` does with the number: the check now calls it with a
-    stand-in for `ort.SessionOptions` / `ort.InferenceSession` and reads `intra_op_num_threads`;
-  - "the processor fails as well" was tried only with a processor session that fails at once; a version
-    that went back to the GPU and skipped the tile would have passed. There is a session now that fails
-    after its first tile (`BrokenLater`), and the check counts how often the GPU was asked;
-  - the warning "the fill ran on the processor" was written into the note field of the window, where the
-    note of the automatic preset replaced it a moment later, and behind the "preview is out of date"
-    text it never showed. The scenario found it; the warning has its own field (`sessState.cpuWarn`);
-  - the first way of keeping the trace of a stroke that waits for the server left it on screen when that
-    stroke was the last one; the scenario with three strokes found it (`maskEditsWaiting`).
-  Holes found while earlier versions were built are told in the history of this file (4.9.0: at
-  `78a08b8`; 4.8.0: at `0f4cb46`). Their lessons stay rules: read the reason after "<-" of every caught
-  defect - when it names another rule than the one the defect breaks, the check that should have noticed
-  is too weak; read the NUMBERS in that reason; a new rule can empty an older scenario, so run ALL the
-  defects again after the last change; and a defect that changes nothing visible does not belong in the
-  list.
-  The runners of earlier versions are gone or replaced (4.9.0: 35 defects, in the history at `78a08b8`;
+  1,567 s; 96 scenarios of the panel test and 54 cases of the settings test among them) on
+  2026-11-22 (the clock of the sandbox), with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4, with
+  nothing running next to it. (One sentence of the manual and the archive were changed while that run
+  was at the group `dark`; the two groups that read them, `server` and `plugin`, came after it.)
+  Deliberate defects for what is new in 4.11.0 (`tests/try_defects.py`), put in one by one: 30 (23 in the
+  engine, all checked by the group `smoke`, and 7 in the panel). All are caught by the checks as they
+  are now, each by the check of the rule it breaks. They ran in a copy of the tree after the last
+  change of the engine, the panel and the checks: 29 in one run of 1,739 s, the thirtieth
+  (`SMOKE_PIECE_GAP`) by itself in 78 s.
+  Holes found while 4.11.0 was built, all closed:
+  - "under 40 % only the wisps count" was asked with the thin cloud of the check, which the threshold
+    of 40 % (0.60) never reaches: a soft search that also ran under 40 % passed. There is a strong soft
+    cloud without wisps now (95 % of it is smoke at 40 %, nothing at 39 %);
+  - `_clean_signature` without the new key passed the random walks of `quick` and `session`: a step
+    that changes this one key, with the protection on and no other change before the next Apply, hardly
+    ever comes up. `check_smoke` asks for it itself now (Apply that brings the word back must compute
+    the real frame anew). A new key of the signature needs its own question, not the walk;
+  - "every step up reaches thinner smoke" was first asked of a cloud that 80 % already takes to 92 %,
+    with three points of room. Two defects that only made the search MORE sensitive (the light not
+    taken out, the mirrored border) were then "caught" by that rule before their own check was read.
+    It is asked of a thinner cloud now (74 % at 80, 86 % at 95), and the two are caught by the line
+    across the wall;
+  - limits of `check_smoke` had been set on a frame where 12 % was false smoke (the light that a line
+    crosses); when that was cured they failed. They are set on what is drawn into the frame now.
+  Added without having seen a hole: a thin arc among the shapes that must NOT count as a line, so that
+  the condition "fills its box" has a shape of its own.
+  Not in the list, because no check here can tell: which smoke map the corner finder and the seam
+  search get (on every frame of the checks the gate of the cove decides).
+  Holes found while earlier versions were built are told in the history of this file (4.10.0: at
+  `64700aa`; 4.9.0: at `78a08b8`; 4.8.0: at `0f4cb46`). Their lessons stay rules: read the reason after
+  "<-" of every caught defect - when it names another rule than the one the defect breaks, the check
+  that should have noticed is too weak (the runner shows only the FIRST failed rule: put the defect in
+  by hand and read the whole list when in doubt); read the NUMBERS in that reason; a new rule can empty
+  an older scenario, so run ALL the defects again after the last change; and a defect that changes
+  nothing visible does not belong in the list.
+  The runners of earlier versions are gone or replaced (4.10.0: 54 defects, in the history at `64700aa`;
+  4.9.0: 35, at `78a08b8`;
   4.8.0: 71, at `0f4cb46`; 4.7.0: 29, at `c3be3ed`; 4.6.0: 34, at `50bae15`; 4.5.0: 71 and 4.4.0: 41,
   never committed); their checks are still in `tests/run_checks.py`.
+- **What 4.11.0 gives on his frames:** the tables are in section 2, «4.11.0» («Measured»): the share of
+  each of his seven frames that is taken for smoke at 60 / 80 / 95 / 98 / 100 %, the curls of drawn smoke
+  that survive the cleaning, the corner of frame 1 with the tick on. All of it with DRAWN smoke, GrabCut
+  silhouettes and the stand-in fill. How to draw such smoke again: section 4, «Traps already paid for»
+  («Drawn smoke»); the probe scripts were not kept.
+- **Decided by the agent alone for 4.11.0** (no option card was shown; he had described the fault and
+  the wish in one sentence; change it if he says otherwise):
+  - the tick is his word at EVERY value of the slider (before, only 95-100 % meant "trust me"), and the
+    slider now means "how thin a smoke to keep". Nothing was changed in the presets: «Зйомка з димом»
+    keeps the protection on at 95 % (with «Циклорама» 0 - the corner tool is off in that preset anyway),
+    every other preset keeps it off with the slider at 80 % (the dark ones 70, «Делікатний» 85) - that
+    is the value the tick at the top of the window then works with;
+  - the usual value stays 80 %; under 40 % only wisps count; 100 % keeps everything soft, the floor too,
+    although that is 13-32 % of a frame without smoke (the manual says so);
+  - the floor next to the feet keeps the rule of 4.4.0 (dirt is cleaned) at every value under 100 %:
+    thin smoke that lies on the floor only is therefore lost unless he goes to 100 %;
+  - a line is never smoke, and under THIN smoke the corner tool works although it smooths the smoke
+    next to the line (40-80 % of the curls stay). The other way round (the smoke wins, the line stays)
+    keeps 98-99 % of the smoke; he was told in the manual and in the reply that «Циклорама 0 %» gives
+    that, and asked to say which he prefers;
+  - the note in the corner always names the share of the frame and both directions of the slider, also
+    when everything is fine - it is the only way he can see what the program took for smoke. A picture
+    of the protected zone in the window (as the mask view shows the cleaned zone) was NOT built; it is
+    the natural next step if the words are not enough;
+  - `smokeAuto: true` is still sent, so a server before 4.11.0 behaves as it did.
+- **Not run in Photoshop yet (4.11.0):** all of it. In particular:
+  - REAL SMOKE. Not one frame with smoke was ever available. Whether the soft search finds his smoke,
+    whether 80 % is a sensible usual value for it and whether the floor rule cuts his smoke off at the
+    floor line (a straight edge of "kept / cleaned" at 70 % of the frame height would be the sign) can
+    only be seen on a frame of his;
+  - how much false smoke there is next to the person with the real silhouette: the matting network
+    draws hair and veils differently than GrabCut, and a soft half-transparent edge is soft structure;
+  - the fill: with the smoke map larger than before, the real LaMa gets other holes to fill next to
+    smoke. Not looked at;
+  - which line «інколи залишається» for him. One cause was found on his frame 1 and removed (the tick
+    with the slider at 95-100 %); whether he ever had the tick on is not known;
+  - the look of the longer smoke notes in the corner of the photo and of the two rewritten tooltips
+    (drawn only in jsdom).
 - **What was measured for 4.10.0** (stand-in networks, the two processors of the sandbox, frame
   `0Q5A3411` at the working size 720 x 1080; an indication of the server's share only - what Photoshop
   needs to take the answer and to show two JPEGs cannot be measured here):
@@ -796,22 +846,26 @@ _Last updated: by the agent of the first session, after releasing 4.11.0 (the an
   - a mouse release at (0, 0) counts as "no place";
   - the server's own time for a stroke was left as it is (above), and so was the mask picture that
     travels with every answer: both are named in the reply as the next steps if the brush is still slow.
-- **Not run in Photoshop yet (4.10.0):** all of it. In particular:
-  - whether the brush is fast for him now. The assumption is that Photoshop needed long to take and show
-    two JPEGs of 2160 x 3240 per answer, and that a background run started after every stroke; neither
-    was seen;
+- **Not confirmed about 4.10.0** (it runs on his PC - report of 2026-11-22: the brush is fast and draws a
+  line; «Останній розрахунок: 30 с · AI-заливка: 121 пл. за 15 с (відеокарта)», so the GPU works and one
+  computation of a frame takes half a minute there):
+  - WHY the brush was slow before. The assumption was that Photoshop needed long to take and show two
+    JPEGs of 2160 x 3240 per answer, and that a background run started after every stroke; the cure
+    worked, the cause was never seen;
   - whether Photoshop really drops mouse moves while the window is busy (read from «робе точки або
     тянути поленьку»), and whether `mouseup` carries the place of the pointer there. If it does not, the
     end point is simply not added and a stroke is what it was in 4.9.0;
   - the GPU: whether an error such as "out of memory" leaves the GPU session usable for the next run (if
     not, every run falls back and the warning shows every time - visible now, and a restart of the
     server cures it as before); how fast LaMa is on his processor with all cores but one; that the
-    second copy of a model fits into his RAM;
+    second copy of a model fits into his RAM. He asked what a "GPU failure" is and how to check for one
+    (reply #19: nothing to check - the time line says «(відеокарта)»; «(процесор)» and the ⚠ note in the
+    corner of the photo mean that the card refused);
   - **whether a GPU error is what made his previews take 60-400 s at all.** It is the one cause found in
-    the code that gives such times; nothing from his PC confirms it. The time line («Останній
-    розрахунок… (відеокарта|процесор)») was built so that his next screenshot answers it;
-  - the look of the new checkbox, the time line and the longer footer text in the panel (drawn only in
-    jsdom).
+    the code that gives such times; nothing from his PC confirms it, and his one time line shows the
+    video card at work. The warning never came up in what he wrote;
+  - whether he has seen the checkbox «Детальний перегляд» and the footer text after «Застосувати» (he
+    quoted the time line, so the settings were open).
 - **What 4.9.0 gives on his frames** (stand-in networks, section 4: the same engine code as on his PC,
   but another silhouette and another fill - an indication, not a proof):
   - `0Q5A3417` (automatic preset «Темний дальній план»): the thin line right of the dress is gone
@@ -956,7 +1010,7 @@ _Last updated: by the agent of the first session, after releasing 4.11.0 (the an
   - of 4.5.0, still unconfirmed: opening the backup folder from the panel, the look of the new buttons,
     the one-time preset moves. (Ctrl+Z works in Photoshop: he confirmed it.)
 - **Merging:** pull request #1 (`arena/33f1ced8-cleanvinylpro-beta` into `main`) is open and deliberately not
-  merged yet: fixes that follow his report on 4.10.0 should come from the session that knows the code. He
+  merged yet: fixes that follow his report on 4.11.0 should come from the session that knows the code. He
   asked what merging into `main` means and was told: the version is already published and can be downloaded;
   merging only marks it on GitHub as the main one and changes nothing on his PC; he should write «зливай»
   when he wants it. Merge it when he writes that or when the session ends (section 6). If `main` already
@@ -1079,6 +1133,12 @@ _Last updated: by the agent of the first session, after releasing 4.11.0 (the an
   taken for smoke (5.7 % of the frame at 60 %, 7.8 at 80, 16 at 98); curls weaker than about 0.7 levels
   are kept only in part below 95 %; at 100 % 13-32 % of a frame WITHOUT smoke is protected, so dust
   stays there.
+- With the tick OFF nothing new is looked for (4.11.0): the note «Схоже, у кадрі є дим…» at the opening
+  of the window still comes from the search by wisps alone (`found`), so THIN smoke is cleaned without a
+  word when the tick is off - as in every version before. The soft search was not used for that note on
+  purpose: it marks 0-2 % of most of his frames without smoke and 8 % of `0Q5A3417` at 80 %, and a note
+  that cries smoke on frames without any would be ignored soon. A series with smoke needs the preset
+  «Зйомка з димом» with «Авто…» unticked (the manual says so; the reply repeated it).
 - Smoke and the wall-floor corner (4.11.0). Under THIN smoke the corner tool works: the line goes and
   the smoke in the zone of the cove keeps 40-80 % of its curls (the cove estimates its correction from
   the picture with the smoke in it). Under THICK smoke nothing is touched and the line stays; where the
@@ -1086,8 +1146,14 @@ _Last updated: by the agent of the first session, after releasing 4.11.0 (the an
   soft edge of the map (on dense smoke drawn over frame 1 the column profile across the line was steeper
   after the tool than before: 1.1-1.3 against 0.56 levels/px). Not looked into. A cove that takes only
   what is constant ALONG the line would keep the smoke and remove the line; not built.
-- Thin smoke that lies on the floor only (nothing of it above 70 % of the frame height) is protected
-  only at 100 %: below that it cannot be told from footprints.
+- Smoke that lies on the floor only (nothing of it above 70 % of the frame height) is protected only at
+  100 %, unless it holds a cloud of wisps big enough to prove smoke alone (`SMOKE_MIN_CLOUD`): below
+  100 % it cannot be told from footprints. This is also a CHANGE for the preset «Зйомка з димом»
+  (slider 95 %): 4.10.0 kept every wisp at 95 %, small patches on the floor too (smoke or dirt alike);
+  4.11.0 keeps a patch on the floor only when it hangs together with smoke above the line. Low fog of
+  medium density that hugs the floor is the case that can lose by it; the manual and the tooltip send
+  him to 100 % for smoke on the floor. If he reports it, moving the preset to 100 % is NOT the cure
+  (13-32 % of a frame without smoke would keep its dust): the floor rule would need a better cue.
 - 8-bit frames: the tone stages round without dithering. On a backdrop without noise (his black JPEG: 96 %
   of neighbouring pixels are equal) the one-level contour lines of a gradient change their course where
   the corner tool or the stain stage worked. It shows only when the darks are stretched about thirty times;
@@ -1183,10 +1249,11 @@ npm install --prefix tests jsdom@24      # for the panel test; the folder is git
 /tmp/cvenv/bin/python tests/run_checks.py install bat    # only the groups named
 /tmp/cvenv/bin/python tests/run_checks.py --full         # more random cases
 
-# the deliberate defects of the latest version: about 15 minutes for 4.10.0 (12.5 for the 19 of the engine and
-# the server, 3 for the 35 of the panel); it patches engine.py in place - run those in a copy of the tree (below)
+# the deliberate defects of the latest version: about 30 minutes for 4.11.0 (29 for the 23 of the engine - each
+# runs the group smoke, 75 s - and 1 for the 7 of the panel); it patches engine.py in place - run those in a
+# copy of the tree (below)
 /tmp/cvenv/bin/python tests/try_defects.py               # ends with "N of N defects caught"
-/tmp/cvenv/bin/python tests/try_defects.py fallback: fastwin:   # only the defects whose name or group has these words
+/tmp/cvenv/bin/python tests/try_defects.py "called a line" "the slider"   # only the defects whose name or group has these words
 /tmp/cvenv/bin/python tests/try_defects.py panel:        # only the defects of the panel (they go into a copy
                                                          # of the plugin folder by themselves)
 /tmp/cvenv/bin/python tests/try_defects.py --list
