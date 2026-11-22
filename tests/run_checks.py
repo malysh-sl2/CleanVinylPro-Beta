@@ -2559,10 +2559,20 @@ def check_fallback():
         eng._create_cpu_session = cpu_session
         return eng, made
 
+    # (the machine of this run may have two processors, where "all but one" is the single thread of before: the
+    #  engine is told of eight)
+    real_count = os.cpu_count
     for name, refuse in (("the 3rd tile", {3}), ("every tile", set(range(1, 500)))):
         gpu = Refusing(refuse)
         eng, made = engine_with(gpu)
-        out, st = _quiet(eng.process, img, 8, p)
+        os.cpu_count = lambda: 8
+        try:
+            out, st = _quiet(eng.process, img, 8, p)
+            if made and (made[0][0] != 7 or eng._fallback_threads() != 7):
+                bad.append(f"the GPU refuses {name}: of 8 processors the session for this run must get 7 threads, it got {made[0][0]} "
+                           f"(_fallback_threads says {eng._fallback_threads()})")
+        finally:
+            os.cpu_count = real_count
         first_bad = min(refuse)
         t = st.get("timing") or {}
         if not np.array_equal(out, ref):
@@ -2572,8 +2582,6 @@ def check_fallback():
         if len(made) != 1 or made[0][1].calls != tiles - (first_bad - 1) or gpu.calls != first_bad - 1 or gpu.asked != first_bad:
             bad.append(f"the GPU refuses {name}: the processor must finish this run alone - sessions made {len(made)}, tiles filled by the processor "
                        f"{made[0][1].calls if made else None} of {tiles}, by the GPU {gpu.calls}, GPU asked {gpu.asked} times")
-        if made and made[0][0] != eng._fallback_threads():
-            bad.append(f"the processor's session for such a run: {made[0][0]} thread(s), expected {eng._fallback_threads()}")
         if t.get("fill_ep") != CPU or "simulated" not in str((t.get("fallback") or {}).get("lama")) or t.get("fill_tiles") != tiles \
                 or "simulated" not in str(eng.cpu_fallback.get("lama")) or "LaMa" not in eng.gpu_error:
             bad.append(f"the GPU refuses {name}: the answer must say 'processor' and why - it says {t}; engine: {eng.cpu_fallback}")
@@ -2595,6 +2603,26 @@ def check_fallback():
         if "processor fails too" not in str(exc) or len(made) != 1:
             bad.append(f"the GPU and the processor both fail: {exc!r}, processor sessions {len(made)}")
 
+    # the session of the processor really gets the threads it is given
+    class Options:
+        pass
+
+    seen, ort = [], E.ort
+    kept = {k: getattr(ort, k, None) for k in ("SessionOptions", "InferenceSession")}
+    ort.SessionOptions = Options
+    ort.InferenceSession = lambda path, sess_options=None, providers=None: seen.append((path, sess_options, providers)) or "session"
+    try:
+        made_s = H.make_engine(E, sil)._create_cpu_session("model.onnx", threads=7)
+    finally:
+        for k, v in kept.items():
+            if v is None:
+                delattr(ort, k)
+            else:
+                setattr(ort, k, v)
+    if made_s != ("session", CPU) or len(seen) != 1 or seen[0][2] != [CPU] or getattr(seen[0][1], "intra_op_num_threads", None) != 7:
+        bad.append(f"_create_cpu_session(threads=7): the session must be made for the processor with 7 threads - "
+                   f"{getattr(seen[0][1], 'intra_op_num_threads', None) if seen else None} thread(s), providers {seen[0][2] if seen else None}")
+
     # the silhouette network: the same rule
     class RefusingMatting(H.FakeMatting):
         asked, refuse = 0, {1}
@@ -2613,15 +2641,21 @@ def check_fallback():
         return made_m[-1][1], CPU
 
     eng.matting_sess, eng._create_cpu_session = gpu_m, cpu_matting
-    out, st = _quiet(eng.process, img, 8, p)
-    if not np.array_equal(out, ref) or eng.matting_sess is not gpu_m or len(made_m) != 1 or "simulated" not in str(eng.cpu_fallback.get("matting")):
+    os.cpu_count = lambda: 8
+    try:
+        out, st = _quiet(eng.process, img, 8, p)
+    finally:
+        os.cpu_count = real_count
+    if not np.array_equal(out, ref) or eng.matting_sess is not gpu_m or len(made_m) != 1 or "simulated" not in str(eng.cpu_fallback.get("matting")) \
+            or made_m[0][0] != 7 or "simulated" not in str((st.get("timing") or {}).get("fallback", {}).get("matting")):
         bad.append(f"the GPU refuses the silhouette: same result {np.array_equal(out, ref)}, GPU session kept {eng.matting_sess is gpu_m}, "
-                   f"processor sessions {len(made_m)}, engine says {eng.cpu_fallback}")
+                   f"processor sessions {len(made_m)} with {made_m[0][0] if made_m else None} thread(s) (7 expected), engine says {eng.cpu_fallback}, "
+                   f"the answer says {st.get('timing')}")
     out, st = _quiet(eng.process, img, 8, p)
     if not np.array_equal(out, ref) or gpu_m.asked < 2 or len(made_m) != 1 or eng.cpu_fallback != {}:
         bad.append(f"the frame after a silhouette fallback must go to the GPU again: asked {gpu_m.asked}, engine says {eng.cpu_fallback}")
-    report("fallback", not bad, f"a GPU error costs one run: the processor finishes it ({tiles} tiles, same pixels, {E.CleanVinylEngine._fallback_threads()} "
-           f"thread(s)), the answer says where the fill ran and why, the next run is on the GPU again; fill and silhouette" if not bad
+    report("fallback", not bad, f"a GPU error costs one run: the processor finishes it ({tiles} tiles, same pixels, all processors but one - 7 threads "
+           f"of 8), the answer says where the fill ran and why, the next run is on the GPU again; fill and silhouette" if not bad
            else "wrong:\n  " + "\n  ".join(bad))
 
 

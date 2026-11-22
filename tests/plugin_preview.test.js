@@ -438,8 +438,10 @@ function makeEnv(serverOpts = {}) {
     return n;
   };
   // `more`: other fields of the event, e.g. { button: 2 } for the right mouse button, { clientY: 300 }, { ctrlKey: true }
+  let pointerAt = { clientX: 0, clientY: 5 };   // where the pointer was at the last press or move
   const mouse = (target, type, x = 0, more = {}) => {
     const ev = new w.MouseEvent(type, Object.assign({ bubbles: true, cancelable: true, clientX: x, clientY: 5, button: 0 }, more));
+    if (type === "mousedown" || type === "mousemove") pointerAt = { clientX: ev.clientX, clientY: ev.clientY };
     target.dispatchEvent(ev);
     return ev;
   };
@@ -456,7 +458,9 @@ function makeEnv(serverOpts = {}) {
     check: (id, on) => { el(id).checked = on; el(id).dispatchEvent(new w.Event("change", { bubbles: true })); },
     press: (id, x, more) => mouse(el(id), "mousedown", x, more),
     move: (x, more) => mouse(doc, "mousemove", x, more),
-    release: (more) => mouse(doc, "mouseup", 0, more),
+    // (a mouse button is released where the pointer is - unless the scenario says another place: the moves in
+    //  between did not arrive)
+    release: (more) => mouse(doc, "mouseup", pointerAt.clientX, Object.assign({ clientY: pointerAt.clientY }, more)),
     mouse,
     // one whole drag of a slider: press, a few moves, release. `value` is in slider units (percent).
     async drag(id, value, stepMs = 15) {
@@ -2534,6 +2538,86 @@ async function main() {
     const pts = env.edits()[0].body.points;
     expect(pts.length === 3 || pts.length === 2, "the server gets the points of the events themselves, not the filled-in ones: " + pts.length);
     expect(dots().length === 0, "the trace goes when the server has answered");
+  });
+
+  await scenario("a stroke begun before the answer to the last one keeps its trace", { detail: false, editDelays: [400, 300, 20], previewSize: [400, 600] }, async (env, expect) => {
+    await env.open();
+    const dots = () => Array.from(env.el("dlgStrokeDots").children).map((d) => [parseFloat(d.style.left), parseFloat(d.style.top), parseFloat(d.style.width)]);
+    Object.defineProperty(env.el("dlgStage"), "offsetWidth", { value: 400, configurable: true });
+    Object.defineProperty(env.el("dlgStage"), "offsetHeight", { value: 600, configurable: true });
+    // stroke 1, in the upper part of the photo
+    env.press("dlgViewport", 60, { clientY: 100 });
+    env.move(200, { clientY: 100 });
+    env.release();
+    const n1 = dots().length;
+    expect(n1 >= 4, "the trace of the first stroke: " + n1 + " dots");
+    // stroke 2 is begun at once, lower down: the answer to stroke 1 is still on its way
+    env.press("dlgViewport", 60, { clientY: 400 });
+    env.move(160, { clientY: 400 });
+    const n2 = dots().length - n1;
+    expect(n2 >= 3, "the trace of the second stroke: " + n2 + " dots");
+    await env.waitFor(() => env.edits().length === 1 && env.edits()[0].done, 2000);
+    await sleep(40);
+    let d = dots();
+    expect(d.length === n2, `the answer to stroke 1 takes away its own trace only: ${d.length} dots left, stroke 2 had ${n2}`);
+    expect(d.every((p) => Math.abs(p[1] + p[2] / 2 - 400) <= 1.5), "what is left is the trace of stroke 2 (the lower one)");
+    // ...and stroke 2 goes on as one line: no restart after the answer
+    env.move(340, { clientY: 400 });
+    d = dots();
+    const diam = d.length ? d[0][2] : 0;
+    let widest = 0;
+    for (let i = 1; i < d.length; i++) widest = Math.max(widest, Math.hypot(d[i][0] - d[i - 1][0], d[i][1] - d[i - 1][1]));
+    expect(d.length > n2 && widest <= Math.max(3, 0.3 * diam) + 1.5, `stroke 2 stays one line after the answer to stroke 1: widest gap ${widest.toFixed(1)} px of ${d.length} dots`);
+    env.release();
+    const n2all = dots().length;
+    // stroke 3 is made while stroke 2 waits for its answer: the answer to stroke 2 leaves the trace of stroke 3
+    env.press("dlgViewport", 60, { clientY: 500 });
+    env.move(200, { clientY: 500 });
+    env.release();
+    const n3 = dots().length - n2all;
+    await env.waitFor(() => env.edits().length >= 2 && env.edits()[1].done, 2000);
+    await sleep(10);
+    d = dots();
+    expect(n3 >= 4 && d.length === n3 && d.every((p) => Math.abs(p[1] + p[2] / 2 - 500) <= 1.5), `a stroke that waits for the server keeps its trace: ${d.length} dots left, stroke 3 had ${n3}`);
+    await env.waitFor(() => env.edits().length === 3 && env.edits()[2].done, 2000);
+    await sleep(40);
+    expect(dots().length === 0, "all answers are in: no trace is left, got " + dots().length);
+    expect(env.edits().map((r) => r.body.points.length).join() === "2,3,2", "three strokes reached the server, in order: " + env.edits().map((r) => r.body.points.length).join());
+  });
+
+  await scenario("a stroke ends where the mouse button was released, also when no move arrived", { detail: false, editDelays: [200], previewSize: [400, 600] }, async (env, expect) => {
+    await env.open();
+    const dots = () => Array.from(env.el("dlgStrokeDots").children).map((d) => [parseFloat(d.style.left), parseFloat(d.style.top), parseFloat(d.style.width)]);
+    Object.defineProperty(env.el("dlgStage"), "offsetWidth", { value: 400, configurable: true });
+    Object.defineProperty(env.el("dlgStage"), "offsetHeight", { value: 600, configurable: true });
+    // a quick stroke while the window was busy: the press, then the release 320 px away - no move in between
+    env.press("dlgViewport", 40, { clientY: 300 });
+    env.release({ clientX: 360, clientY: 330 });
+    const d = dots();
+    expect(d.length >= 8, `the trace runs to the place of the release: ${d.length} dots`);
+    await env.waitFor(() => env.edits().length === 1 && env.edits()[0].done, 2000);
+    let pts = env.edits()[0].body.points;
+    expect(pts.length === 2 && Math.abs(pts[0].x - 0.1) < 0.01 && Math.abs(pts[1].x - 0.9) < 0.01 && Math.abs(pts[1].y - 0.55) < 0.01,
+      "the stroke is a line from the press to the release, not a dot: " + JSON.stringify(pts));
+    // a plain click stays one point
+    env.press("dlgViewport", 200, { clientY: 300 });
+    env.release();
+    await env.waitFor(() => env.edits().length === 2 && env.edits()[1].done, 2000);
+    pts = env.edits()[1].body.points;
+    expect(pts.length === 1, "a click is one point: " + JSON.stringify(pts));
+    // the release is where the last move was: no point twice
+    env.press("dlgViewport", 100, { clientY: 300 });
+    env.move(180, { clientY: 300 });
+    env.release();
+    await env.waitFor(() => env.edits().length === 3 && env.edits()[2].done, 2000);
+    pts = env.edits()[2].body.points;
+    expect(pts.length === 2, "press, one move, release at the same place: two points, got " + pts.length);
+    // a release that brings no place (0, 0) adds nothing: never a line to the corner of the photo
+    env.press("dlgViewport", 300, { clientY: 400 });
+    env.release({ clientX: 0, clientY: 0 });
+    await env.waitFor(() => env.edits().length === 4 && env.edits()[3].done, 2000);
+    pts = env.edits()[3].body.points;
+    expect(pts.length === 1 && Math.abs(pts[0].x - 0.75) < 0.01, "a release without a place adds no point: " + JSON.stringify(pts));
   });
 
   await scenario("the AI fill ran on the processor although a video card is there: the window and the panel say so", {

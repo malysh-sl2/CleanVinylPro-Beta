@@ -6,7 +6,7 @@ const uxpShell = uxp.shell;
 const CANDIDATE_URLS = ["http://127.0.0.1:18746", "http://localhost:18746"];
 // The same number as in manifest.json and server.py. A server of another version still answers (for example the
 // previous one that was left running after an update) - the panel then says how to restart it.
-const PLUGIN_VERSION = "4.9.0";
+const PLUGIN_VERSION = "4.10.0";
 let SERVER_URL = CANDIDATE_URLS[0];
 
 const DEFAULT_PRESETS = [
@@ -208,6 +208,8 @@ let sessState = {
   lastDotX: -1,
   lastDotY: -1,
   strokePoints: [],
+  strokeNo: 0,      // counts the strokes of this window: every dot of the trace knows the stroke it belongs to
+  strokeDots: [],   // the dots on screen: { node, stroke }
   scanAborted: false,
   isApplying: false,
   recomputing: false,
@@ -1968,13 +1970,28 @@ function setBrushSoft(soft, byUser = true) {
     : "Край пензля і гумки: жорсткий — мазок закінчується біля кола курсора; такий пензель перемальовує все, по чому пройде.");
 }
 
-function clearStrokeDots() {
+// Takes the trace of the strokes away. `upTo` (optional): only the strokes up to this number - the ones whose
+// result is in the picture now. A stroke that is being drawn, or that is still on its way to the server, keeps its
+// trace: until 4.9.0 the answer to one stroke wiped the trace of the next, which then looked as if it had not taken.
+function clearStrokeDots(upTo = null) {
   const d = el("dlgStrokeDots");
-  if (d) d.innerHTML = "";
-  sessState.lastDotX = -1;
-  sessState.lastDotY = -1;
-  const cur = el("dlgBrushCursor");
-  if (cur && !sessState.isDrawing) cur.style.display = "none";
+  if (upTo === null) {
+    if (d) d.innerHTML = "";
+    sessState.strokeDots = [];
+  } else {
+    const keep = [];
+    sessState.strokeDots.forEach((it) => {
+      if (it.stroke > upTo) keep.push(it);
+      else if (d && it.node && it.node.parentNode === d) d.removeChild(it.node);
+    });
+    sessState.strokeDots = keep;
+  }
+  if (!sessState.isDrawing) {
+    sessState.lastDotX = -1;
+    sessState.lastDotY = -1;
+    const cur = el("dlgBrushCursor");
+    if (cur) cur.style.display = "none";
+  }
 }
 
 function renderBrushCursorAndDot(hoverPt, addDot = false) {
@@ -2015,7 +2032,7 @@ function renderBrushCursorAndDot(hoverPt, addDot = false) {
       const gap = Math.sqrt((toX - fromX) * (toX - fromX) + (toY - fromY) * (toY - fromY));
       const stepPx = Math.max(STROKE_DOT_MIN_PX, diam * STROKE_DOT_STEP);
       const n = first ? 1 : Math.max(1, Math.min(STROKE_DOTS_PER_MOVE, Math.ceil(gap / stepPx)));
-      for (let i = 1; i <= n && box.childNodes.length < STROKE_DOTS_MAX; i++) {
+      for (let i = 1; i <= n && sessState.strokeDots.length < STROKE_DOTS_MAX; i++) {
         const dot = document.createElement("div");
         dot.className = "stroke-dot";
         dot.style.width = diam + "px";
@@ -2027,6 +2044,7 @@ function renderBrushCursorAndDot(hoverPt, addDot = false) {
         // the hard brush leaves the solid trace it always had)
         dot.style.opacity = sessState.brushSoft ? "0.2" : "0.65";
         box.appendChild(dot);
+        sessState.strokeDots.push({ node: dot, stroke: sessState.strokeNo });
       }
       sessState.lastDotX = hoverPt.x;
       sessState.lastDotY = hoverPt.y;
@@ -2067,12 +2085,15 @@ function sendMaskEditOp(op, points = null) {
     dressSmooth: dressSmoothEnabled,
     dressStrength: getSliderVal("gSlDress")
   };
-  const run = () => postMaskEdit(body);
+  // The strokes whose trace may go when this answer is shown: all that were finished before this request. (Requests
+  // are answered in the order they were made, so every one of those strokes is in the picture by then.)
+  const tracesUpTo = sessState.isDrawing ? sessState.strokeNo - 1 : sessState.strokeNo;
+  const run = () => postMaskEdit(body, tracesUpTo);
   maskEditQueue = maskEditQueue.then(run, run);
   return maskEditQueue;
 }
 
-async function postMaskEdit(body) {
+async function postMaskEdit(body, tracesUpTo = null) {
   let d = null;
   if (sessState.id === body.session_id) {
     try {
@@ -2090,7 +2111,7 @@ async function postMaskEdit(body) {
       if (d.history) setEditHistory(d.history);
     }
   }
-  clearStrokeDots();
+  clearStrokeDots(tracesUpTo);
   // (a stroke changes nothing about the frame itself; but if the picture under it is still a quick preview, its
   //  exact version is due - and was put off while the brush was busy)
   if (sessState.id === body.session_id) scheduleExactPreview();
@@ -3747,7 +3768,7 @@ function initEvents() {
     }
   });
 
-  document.addEventListener("mouseup", async () => {
+  document.addEventListener("mouseup", async (e) => {
     const finishedSliderId = activeDragSliderId;
     activeDragSliderId = null;
 
@@ -3779,6 +3800,16 @@ function initEvents() {
       setActiveTool(sessState.tool);
     }
     if (sessState.isDrawing) {
+      // The stroke ends where the button was released. Usually the last move was at that very place; but when the
+      // window was busy (showing the picture of the stroke before), the moves of a quick stroke may not have come
+      // at all - and the stroke was then a dot at the place of the press, or stopped short.
+      const hasPlace = e && Number.isFinite(e.clientX) && Number.isFinite(e.clientY) && !(e.clientX === 0 && e.clientY === 0);
+      const end = hasPlace ? getNormalizedStagePoint(e.clientX, e.clientY) : null;
+      const last = sessState.strokePoints[sessState.strokePoints.length - 1];
+      if (end && last && (Math.abs(end.x - last.x) > 1e-4 || Math.abs(end.y - last.y) > 1e-4)) {
+        sessState.strokePoints.push({ x: end.x, y: end.y, norm: true });
+        renderBrushCursorAndDot(end, true);
+      }
       sessState.isDrawing = false;
       const pts = sessState.strokePoints.slice();
       sessState.strokePoints = [];
@@ -4125,6 +4156,7 @@ function initEvents() {
       // is released) or the mask. Only "До" is left: nothing a stroke does can be seen on the original.
       if (sessState.view === "original") setView("result");
       sessState.isDrawing = true;
+      sessState.strokeNo += 1;
       sessState.lastDotX = -1;
       sessState.lastDotY = -1;
       sessState.strokePoints = [{ x: pt.x, y: pt.y, norm: true }];

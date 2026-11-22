@@ -5086,6 +5086,9 @@ class CleanVinylEngine:
     # by "preview_w" / "preview_h" and merely draws a picture with more pixels into the same box.
     # "previewLong" of the start request overrules the size; at or below the working size (the checks against
     # v3.2.1 ask for 1080) the working pictures themselves are sent, as before.
+    # Since 4.10.0 the panel ASKS for 1080 unless "Детальний перегляд" is ticked: on the owner's computer the large
+    # pictures made the brush slow (every answer to a stroke carried 3.2 times the bytes; the server itself needs
+    # about the same time for either size). DISPLAY_LONG is what a request without the key gets.
     # (Comments written before 4.8.0 say "the window pictures" and "window pixels" for the WORKING size: the
     # brush radius, the band widths, the margins and the masks are all in working pixels.)
     DISPLAY_LONG = 2160
