@@ -17,6 +17,10 @@
 //   - the backup of the settings: saved through the server, listed, restored after a second click, with a copy of
 //     what was there before;
 //   - a dark backdrop takes the dark preset of its framing;
+//   - the fast window (4.10.0, the default): pictures of the working size are asked for, nothing is computed by
+//     itself after a quick preview or a stroke, the button and Apply compute the real frame; "Детальний перегляд"
+//     brings the exact picture by itself back and is kept with the settings; the trace of a stroke is one line
+//     however far the pointer jumps; the window says when the AI fill ran on the processor;
 //   - one mode: there is no speed button, and every request asks for the full AI fill, whatever settings and
 //     presets of an older version say;
 //   - the edge of the brush and the eraser: soft unless the user chose the hard one; the choice travels with every
@@ -165,7 +169,7 @@ function makeEnv(serverOpts = {}) {
       switch (u.pathname) {
         case "/health":
           if (!server.online) throw new TypeError("Failed to fetch");
-          return reply({ ok: true, status: "ready", app: "cleanvinylpro2", version: server.version, install_dir: "C:\\CleanVinylPro2", gpu: "Test GPU", provider: "CUDAExecutionProvider", models_loaded: true });
+          return reply(Object.assign({ ok: true, status: "ready", app: "cleanvinylpro2", version: server.version, install_dir: "C:\\CleanVinylPro2", gpu: "Test GPU", provider: "CUDAExecutionProvider", models_loaded: true }, server.healthExtra || {}));
         case "/presets":
           return reply(method === "GET" ? { presets: [], source: "defaults" } : { ok: true });
         case "/settings":
@@ -196,7 +200,7 @@ function makeEnv(serverOpts = {}) {
             ok: true, session_id: "sess-1", width: W, height: H,
             preview_w: server.previewSize ? server.previewSize[0] : W, preview_h: server.previewSize ? server.previewSize[1] : H,
             auto_fractions: fractionsOf(used),
-            orig_jpg_b64: "QQ==", comp_jpg_b64: pic("start-1"), overlay_jpg_b64: pic("start-1"), stats: {}
+            orig_jpg_b64: "QQ==", comp_jpg_b64: pic("start-1"), overlay_jpg_b64: pic("start-1"), stats: server.stats || {}
           }, pictureState());
           const smoke = smokeAnswer(used);
           if (smoke) {
@@ -260,7 +264,7 @@ function makeEnv(serverOpts = {}) {
           const ans = Object.assign({
             ok: true, session_id: body.session_id,
             auto_fractions: fractionsOf(p),
-            comp_jpg_b64: pic(name), overlay_jpg_b64: pic(name), stats: {}
+            comp_jpg_b64: pic(name), overlay_jpg_b64: pic(name), stats: server.stats || {}
           }, pictureState());
           if (server.quickAware) ans.quick = quick;
           if (server.maskShares.length) ans.mask_share = server.maskShares.shift();
@@ -552,6 +556,11 @@ async function scenario(name, serverOpts, fn) {
   running = rec;
   try {
     await sleep(60); // bootstrap of the panel (health check, presets)
+    // The scenarios written for 4.8.0 expect the exact picture by itself and the larger window pictures. Since
+    // 4.10.0 that is the "detailed preview", a checkbox that is off unless the user ticks it: those scenarios run
+    // with it ticked. A scenario of the fast window (the default) says { detail: false } and gets the panel just
+    // as it starts.
+    if (!serverOpts || serverOpts.detail !== false) env.state("setDetailPreview(true, false)");
     await fn(env, expect);
     if (env.errors.length) rec.problems.push("script errors: " + env.errors.join(" | "));
   } catch (err) {
@@ -2422,6 +2431,135 @@ async function main() {
       expect(env.state("sessState.brushSoft") === true && env.state("sessState.brushSize") === 52, "soft, with the brush size that was saved");
     });
 
+  // ------------------------------------------------------------------ 4.10.0: speed first
+  await scenario("the fast window (as the panel starts): small pictures are asked for, a slider gives one light refresh and nothing computes by itself", { detail: false, bgDelay: 300 }, async (env, expect) => {
+    expect(env.state("detailPreview") === false && env.el("gChkDetail").checked === false, "a fresh installation: 'Детальний перегляд' is off");
+    expect(env.el("gBtnRecompute").textContent.includes("Перерахувати зараз") && env.el("gBtnRecompute").textContent.includes("точний перегляд"),
+      "the button says what it is for: " + env.el("gBtnRecompute").textContent);
+    await env.open();
+    const start = env.of("/session/start")[0];
+    expect(start && start.body.params.previewLong === 1080, "the window must ask for pictures of the working size (previewLong 1080), got " + (start && start.body.params.previewLong));
+    expect(env.modeBadge() === "ПІСЛЯ · чисте фото", "the window opens with the real frame: " + env.modeBadge());
+    await env.drag("gSlSpots", 95);
+    await env.waitFor(() => env.recomputes().length === 1 && env.recomputes()[0].done, 2500);
+    await sleep(1300);                                    // (the exact picture by itself would be asked for after 0.7 s)
+    expect(env.recomputes().length === 1 && env.recomputes()[0].body.quick === true, "one light refresh after the release, got " + env.recomputes().length);
+    expect(env.exacts().length === 0, "nothing may be computed in the background, got " + env.exacts().length);
+    expect(env.modeBadge() === "ПІСЛЯ · швидкий перегляд", "the corner says 'quick preview' and nothing about refining: " + env.modeBadge());
+    expect(env.badge() === "", "nothing to complain about: " + env.badge());
+    // a stroke: answered, and still nothing in the background
+    env.press("dlgViewport", 100); env.move(120); env.release();
+    await env.waitFor(() => env.edits().length === 1 && env.edits()[0].done, 1500);
+    await sleep(1100);
+    expect(env.exacts().length === 0, "a stroke must not start a background run either, got " + env.exacts().length);
+    // the button: the real frame, with the progress card
+    env.click("gBtnRecompute");
+    await env.waitFor(() => env.recomputes().length === 2 && env.recomputes()[1].done, 2500);
+    await sleep(60);
+    const full = env.recomputes()[1];
+    expect(full && full.body.quick === undefined && full.body.params.spots === 95, "the button asks for the real frame with the values on the controls");
+    expect(env.modeBadge() === "ПІСЛЯ · чисте фото" && env.exacts().length === 0, "after the button the picture is the real frame: " + env.modeBadge());
+    // Apply after a quick preview carries the values, so the server computes the real frame itself
+    await env.drag("gSlSpots", 60);
+    await env.waitFor(() => env.recomputes().length === 3 && env.recomputes()[2].done, 2500);
+    env.click("dlgBtnApply");
+    await env.waitFor(() => env.of("/session/apply").length === 1, 2000);
+    const ap = env.of("/session/apply")[0];
+    expect(ap && ap.body.params && ap.body.params.spots === 60, "Apply must carry the values of the controls: " + JSON.stringify(ap && ap.body.params && ap.body.params.spots));
+    expect(env.exacts().length === 0, "and still no background run");
+  });
+
+  await scenario("the fast window with 2 passes: nothing starts by itself, the badge names the button", { detail: false, bgDelay: 300 }, async (env, expect) => {
+    await env.open();
+    env.click("gPass2");
+    await sleep(1400);
+    expect(env.exacts().length === 0 && env.recomputes().length === 0, `2 passes have no light way and nothing may start by itself: ${env.exacts().length} / ${env.recomputes().length}`);
+    expect(env.badge().includes("Перерахувати зараз"), "the badge must name the button: " + env.badge());
+  });
+
+  await scenario("'Детальний перегляд': ticked - the exact picture comes by itself and larger pictures are asked for; unticked - a background run stops; kept with the settings", { detail: false, bgDelay: 1500 }, async (env, expect) => {
+    await env.open();
+    await env.drag("gSlSpots", 95);
+    await env.waitFor(() => env.recomputes().length === 1 && env.recomputes()[0].done, 2500);
+    await sleep(900);
+    expect(env.exacts().length === 0, "unticked: nothing in the background");
+    env.check("gChkDetail", true);
+    expect(env.state("detailPreview") === true && env.hint().includes("Детальний перегляд увімкнено"), "the window says what the tick does: " + env.hint());
+    expect(env.el("gBtnRecompute").textContent.includes("не обов’язково"), "the button is optional now: " + env.el("gBtnRecompute").textContent);
+    await env.waitFor(() => env.exacts().length === 1, 1500);
+    expect(env.exacts().length === 1, "ticked while a quick preview is on screen: its exact picture is asked for by itself");
+    expect(env.modeBadge().includes("уточнюється"), "the corner says that it is being refined: " + env.modeBadge());
+    env.check("gChkDetail", false);                        // while that run is on its way
+    await sleep(120);
+    expect(env.of("/session/stop-background").length === 1, "unticking stops the background run, got " + env.of("/session/stop-background").length);
+    expect(env.modeBadge() === "ПІСЛЯ · швидкий перегляд" && env.hint().includes("вимкнено"), `quick preview again: '${env.modeBadge()}' / '${env.hint()}'`);
+    await sleep(1700);
+    expect(env.exacts().length === 1, "and no new one starts, got " + env.exacts().length);
+    env.check("gChkDetail", true);
+    const saved = () => env.of("/settings").filter((r) => r.method === "POST" && r.body && r.body.detailPreview === true).length > 0;
+    await env.waitFor(saved, 2500);
+    expect(saved(), "the tick must be written into the settings");
+  });
+
+  await scenario("'Детальний перегляд' from the settings: the window asks for the larger pictures", {
+    detail: false, disk: { "user_settings.json": { schemaVersion: 5, detailPreview: true, presetMoves: ["cyc65", "smokeOff", "lowkeySpots80", "lowkeyCyc65"] } }
+  }, async (env, expect) => {
+    expect(env.state("detailPreview") === true && env.el("gChkDetail").checked === true, "the settings must bring the tick back");
+    await env.open();
+    const start = env.of("/session/start")[0];
+    expect(start && start.body.params.previewLong === 2160, "the larger pictures (previewLong 2160), got " + (start && start.body.params.previewLong));
+  });
+
+  await scenario("the trace of a stroke is one line however far the pointer jumps between two events", { detail: false, editDelays: [400], previewSize: [400, 600] }, async (env, expect) => {
+    await env.open();
+    const dots = () => Array.from(env.el("dlgStrokeDots").children).map((d) => [parseFloat(d.style.left), parseFloat(d.style.top), parseFloat(d.style.width)]);
+    // (the simulated browser lays nothing out: the photo is given the size its rectangle has, 400 x 600)
+    Object.defineProperty(env.el("dlgStage"), "offsetWidth", { value: 400, configurable: true });
+    Object.defineProperty(env.el("dlgStage"), "offsetHeight", { value: 600, configurable: true });
+    env.press("dlgViewport", 40, { clientY: 300 });
+    env.move(360, { clientY: 330 });                       // one event, 320 px away
+    const d = dots();
+    const diam = d.length ? d[0][2] : 0;
+    let widest = 0;
+    for (let i = 1; i < d.length; i++) widest = Math.max(widest, Math.hypot(d[i][0] - d[i - 1][0], d[i][1] - d[i - 1][1]));
+    expect(d.length >= 8, `the gap of 320 px must be filled with dots, got ${d.length}`);
+    expect(diam > 0 && widest <= Math.max(3, 0.3 * diam) + 1.5, `no two neighbouring dots further apart than 0.3 of the brush (${(0.3 * diam).toFixed(1)} px): widest gap ${widest.toFixed(1)} px`);
+    expect(d.length > 0 && Math.abs(d[d.length - 1][0] + diam / 2 - 360) <= 1.5 && Math.abs(d[0][0] + diam / 2 - 40) <= 1.5, "the trace runs from the press to the pointer");
+    const n1 = d.length;
+    env.move(361, { clientY: 330 });                       // a move of one pixel adds nothing
+    expect(dots().length === n1, "a move of one pixel must not add dots");
+    env.release();
+    await env.waitFor(() => env.edits().length === 1 && env.edits()[0].done, 2000);
+    await sleep(30);
+    const pts = env.edits()[0].body.points;
+    expect(pts.length === 3 || pts.length === 2, "the server gets the points of the events themselves, not the filled-in ones: " + pts.length);
+    expect(dots().length === 0, "the trace goes when the server has answered");
+  });
+
+  await scenario("the AI fill ran on the processor although a video card is there: the window and the panel say so", {
+    detail: false,
+    stats: { elapsed_ms: 84200, timing: { fill_tiles: 132, fill_s: 71.4, fill_ep: "CPUExecutionProvider", fallback: { lama: "CUDA out of memory" } } },
+    healthExtra: { cpu_fallback: { lama: "CUDA out of memory" } }
+  }, async (env, expect) => {
+    const banner = env.el("statusBannerText").textContent;
+    expect(banner.includes("на процесорі") && banner.includes("CUDA out of memory") && banner.includes("restart_gpu_server.bat"), "the panel must warn: " + banner);
+    await env.open();
+    expect(env.badge().includes("на процесорі") && env.badge().includes("CUDA out of memory"), "the corner of the photo must warn: " + env.badge());
+    const line = env.el("gTimeLine");
+    expect(line.textContent.includes("84 с") && line.textContent.includes("132") && line.textContent.includes("71 с") && line.textContent.includes("процесор") && line.classList.contains("warn"),
+      "the settings must say what the computation took and where the fill ran: " + line.textContent);
+  });
+
+  await scenario("the AI fill ran on the video card: the time is shown, nothing warns", {
+    detail: false, stats: { elapsed_ms: 9300, timing: { fill_tiles: 90, fill_s: 6.25, fill_ep: "CUDAExecutionProvider", fallback: {} } }
+  }, async (env, expect) => {
+    await env.open();
+    const line = env.el("gTimeLine");
+    expect(line.textContent.includes("9,3 с") && line.textContent.includes("90") && line.textContent.includes("6,3 с") && line.textContent.includes("відеокарта") && !line.classList.contains("warn"),
+      "the line of the settings: " + line.textContent);
+    expect(!env.badge().includes("процесор"), "no warning: " + env.badge());
+  });
+
   await scenario("the hair slider: 'Вимк.' until it is moved; one light refresh carries its value, a preset puts it back to 0, Apply carries it", {}, async (env, expect) => {
     await env.open();
     const start = env.of("/session/start")[0];
@@ -2455,7 +2593,7 @@ async function main() {
   }
   console.log(failed.length
     ? `plugin preview: ${failed.length} of ${results.length} scenarios FAILED`
-    : `plugin preview: ${results.length} scenarios pass (drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes, steps back and forward, preset reset, backup, one mode, soft and hard brush edge, the exact picture by itself, strokes on the cleaned photo, zoom keys, right-button drag, the hair slider)`);
+    : `plugin preview: ${results.length} scenarios pass (the fast window; drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes, steps back and forward, preset reset, backup, one mode, soft and hard brush edge, the exact picture by itself, strokes on the cleaned photo, zoom keys, right-button drag, the hair slider)`);
   process.exit(failed.length ? 1 : 0);
 }
 

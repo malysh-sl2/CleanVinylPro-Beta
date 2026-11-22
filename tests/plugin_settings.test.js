@@ -43,7 +43,14 @@ const speedMode = "quality";
 let activePresetId = "std", makeMaskDefault = false, fracAuto = true, fracAutoUser = true, autoPreset = true;
 let deletedDefaultIds = [], knownDefaultIds = [], presetsList = [], appliedPresetMoves = [];
 const sessState = { brushSize: 24, brushSoft: true };
+let detailPreview = false;
 function sayInWindow() {}
+function updateRecomputeButton() {}
+function scheduleExactPreview() {}
+function cancelExactTimer() {}
+function stopBackgroundRun() {}
+function updatePreviewBadge() {}
+function updateModeBadge() {}
 const pills = [30, 120, 300, 0].map((sec) => ({ dataset: { sec: String(sec) }, active: sec === 120 }));
 pills.forEach((p) => (p.classList = { toggle: (cls, on) => (p.active = on) }));
 function el(id) { return id === "gIdlePills" ? { querySelectorAll: () => pills } : null; }
@@ -52,6 +59,7 @@ function readCurrentConfig() { return {}; }
 function applyConfig() {}
 ${grab("setIdleUnloadSec")}
 ${grab("setAutoPreset")}
+${grab("setDetailPreview")}
 ${grab("updateBrushEdgeUI")}
 ${grab("setBrushSoft")}
 ${grab("buildSettingsSnapshot")}
@@ -60,6 +68,7 @@ module.exports = function run(snapshot) {
   idleUnloadSec = DEFAULT_IDLE_UNLOAD_SEC;
   settingsMigrated = false;
   fracAuto = fracAutoUser = autoPreset = true;
+  detailPreview = false;
   sessState.brushSoft = true;
   pills.forEach((p) => (p.active = Number(p.dataset.sec) === 120));
   applySettingsSnapshot(snapshot);
@@ -117,6 +126,22 @@ for (const [name, snapshot, expAutoPreset, expUser, expNow] of newKeys) {
     console.log("FAIL " + name + " -> " + JSON.stringify(r.saved));
   }
 }
+// 4.10.0: "Детальний перегляд" is off unless the settings say that the user ticked it
+// [name, saved file, expected in the file written back: detailPreview]
+const detailKeys = [
+  ["nothing saved yet: the fast window", {}, false],
+  ["a file of 4.9.0 (no word of it): the fast window", { schemaVersion: 5, brushSoft: true, autoPreset: true }, false],
+  ["the detailed preview was ticked", { schemaVersion: 5, detailPreview: true }, true],
+  ["the detailed preview was unticked", { schemaVersion: 5, detailPreview: false }, false],
+  ["a broken value is ignored", { schemaVersion: 5, detailPreview: "yes" }, false]
+];
+for (const [name, snapshot, expDetail] of detailKeys) {
+  const r = run(snapshot);
+  if (r.saved.detailPreview !== expDetail) {
+    failed++;
+    console.log("FAIL " + name + " -> " + JSON.stringify(r.saved));
+  }
+}
 // [name, saved file, expected in the file written back: brushSoft, speedMode]
 const brushKeys = [
   ["nothing saved yet: the soft edge", {}, true],
@@ -146,6 +171,8 @@ let idleUnloadSec = 120, settingsMigrated = false, smokeEnabled = true;
 const DEFAULT_IDLE_UNLOAD_SEC = 120, LEGACY_IDLE_UNLOAD_SEC = 30, SETTINGS_SCHEMA_VERSION = 5;
 let deletedDefaultIds = [], knownDefaultIds = [], presetsList = [], appliedPresetMoves = [];
 const sessState = { brushSize: 24 };
+let detailPreview = false;
+function setDetailPreview(on) { detailPreview = !!on; }
 const sliders = {};
 function el() { return null; }
 function getSliderVal(id) { return sliders[id] ?? 0; }
@@ -389,6 +416,6 @@ moveCase("moving the hair slider makes the preview out of date; back at its valu
 moveCase("every built-in preset leaves the hair tool off (in the plugin and on the server)",
   defaultsNow.every((p) => hair.norm(p.cfg).strayHair === 0) && pluginPresets.every((p) => hair.norm(p.cfg).strayHair === 0), null);
 
-const total = cases.length + newKeys.length + brushKeys.length + moveCases;
+const total = cases.length + newKeys.length + detailKeys.length + brushKeys.length + moveCases;
 console.log(failed ? `plugin settings migration: ${failed} of ${total} cases FAILED` : `plugin settings migration: ${total} cases pass`);
 process.exit(failed ? 1 : 0);

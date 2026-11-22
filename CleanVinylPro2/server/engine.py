@@ -191,6 +191,12 @@ class CleanVinylEngine:
         self.provider_name = "CPUExecutionProvider"
         self.gpu_name = "CPU"
         self.gpu_error = ""
+        # What the processor had to compute in its last run although a GPU session exists: "lama" / "matting" ->
+        # the error the GPU gave. Empty again as soon as the GPU has done a whole run. (See _lama_on_cpu.)
+        self.cpu_fallback = {}
+        self._lama_cpu_sess = None       # the processor's sessions for such a run, made when first needed
+        self._matting_cpu_sess = None
+        self._fill_log = {"tiles": 0, "s": 0.0, "ep": ""}   # the AI fill of the process() call that is running
         self.matting_kind = None
         self.mat_path = None
         self.lama_path = None
@@ -327,6 +333,8 @@ class CleanVinylEngine:
             had_any = self.is_loaded or (clear_session and self._active_session is not None)
             self.matting_sess = None
             self.lama_sess = None
+            self._lama_cpu_sess = None
+            self._matting_cpu_sess = None
             if clear_session:
                 self._active_session = None
         if had_any:
@@ -391,12 +399,12 @@ class CleanVinylEngine:
             except Exception:
                 pass
 
-    def _create_cpu_session(self, model_path: str):
+    def _create_cpu_session(self, model_path: str, threads: int = 1):
         so_cpu = ort.SessionOptions()
         so_cpu.log_severity_level = 3
         so_cpu.enable_cpu_mem_arena = False
         so_cpu.enable_mem_pattern = False
-        so_cpu.intra_op_num_threads = 1
+        so_cpu.intra_op_num_threads = max(1, int(threads))
         so_cpu.inter_op_num_threads = 1
         sess = ort.InferenceSession(model_path, sess_options=so_cpu, providers=["CPUExecutionProvider"])
         return sess, "CPUExecutionProvider"
@@ -600,15 +608,21 @@ class CleanVinylEngine:
         try:
             raw_res = self.matting_sess.run(None, {in_info.name: inp})[0]
         except Exception as exc:
-            print(f"[Engine][УВАГА] Помилка GPU при маскуванні, перемикаємося на CPU: {exc}", flush=True)
+            # (this frame goes to the processor; the GPU session stays and is tried again next time: _lama_on_cpu)
+            print(f"[Engine][УВАГА] Помилка GPU при маскуванні, цей кадр рахує процесор: {exc}", flush=True)
             self.gpu_error = f"GPU fallback (маскування): {exc}"
-            self.matting_sess, _ = self._create_cpu_session(self.mat_path)
-            in_info = self.matting_sess.get_inputs()[0]
+            self.cpu_fallback["matting"] = str(exc)[:300]
+            if self._matting_cpu_sess is None:
+                self._matting_cpu_sess, _ = self._create_cpu_session(self.mat_path, threads=self._fallback_threads())
+            cpu_sess = self._matting_cpu_sess
+            in_info = cpu_sess.get_inputs()[0]
             if "float16" in in_info.type:
                 inp = inp.astype(np.float16)
             else:
                 inp = inp.astype(np.float32)
-            raw_res = self.matting_sess.run(None, {in_info.name: inp})[0]
+            raw_res = cpu_sess.run(None, {in_info.name: inp})[0]
+        else:
+            self.cpu_fallback.pop("matting", None)
 
         out = np.squeeze(raw_res).astype(np.float32)
         del raw_res, inp
@@ -2310,6 +2324,26 @@ class CleanVinylEngine:
     # ------------------------------------------------------------------
     # 5. Tile LaMa Inpainting (GPU / CPU) + Hybrid Fast Inpaint
     # ------------------------------------------------------------------
+    @staticmethod
+    def _fallback_threads() -> int:
+        return max(1, (os.cpu_count() or 2) - 1)
+
+    def _lama_on_cpu(self, exc):
+        """
+        The GPU refused a tile: out of video memory while Photoshop holds it, a driver hiccup. The rest of THIS run
+        goes to the processor; the GPU session stays where it is, and the next run tries it again.
+        Up to 4.9.0 the processor took over for good (until the models were loaded anew): every later fill then
+        ran on ONE thread of the processor, many times slower, and nothing on screen said so - the panel went on
+        naming the video card. "A preview takes 60 to 400 seconds" is what that looks like.
+        Returns (the session to go on with, the names of its inputs).
+        """
+        print(f"[Engine][УВАГА] Помилка GPU при заливці LaMa, цей розрахунок закінчує процесор: {exc}", flush=True)
+        self.gpu_error = f"GPU fallback (LaMa): {exc}"
+        self.cpu_fallback["lama"] = str(exc)[:300]
+        if self._lama_cpu_sess is None:
+            self._lama_cpu_sess, _ = self._create_cpu_session(self.lama_path, threads=self._fallback_threads())
+        return self._lama_cpu_sess, [i.name for i in self._lama_cpu_sess.get_inputs()]
+
     def _run_lama_tiles(
         self,
         img_rgb_u8: np.ndarray,
@@ -2351,6 +2385,9 @@ class CleanVinylEngine:
 
         total_tiles = len(active_tiles)
         tiles_run = 0
+        sess_now = self.lama_sess          # after an error of the GPU: the processor's session, for the rest of this run
+        ep_now = "CPU"
+        t_fill = time.perf_counter()
         if total_tiles > 0:
             ep_now = self.lama_sess.get_providers()[0] if self.lama_sess.get_providers() else "CPU"
             print(f"[Engine] Заливка LaMa: {total_tiles} тайлів ({ep_now})...", flush=True)
@@ -2371,13 +2408,12 @@ class CleanVinylEngine:
             inp_img = (patch_in.astype(np.float32) / 255.0).transpose(2, 0, 1)[None, ...]
             inp_msk = (mask_in > 0).astype(np.float32)[None, None, ...]
             try:
-                pred = self.lama_sess.run(None, {in_names[0]: inp_img, in_names[1]: inp_msk})[0][0]
+                pred = sess_now.run(None, {in_names[0]: inp_img, in_names[1]: inp_msk})[0][0]
             except Exception as exc:
-                print(f"[Engine][УВАГА] Помилка GPU при заливці LaMa, перемикаємося на CPU: {exc}", flush=True)
-                self.gpu_error = f"GPU fallback (LaMa): {exc}"
-                self.lama_sess, _ = self._create_cpu_session(self.lama_path)
-                in_names = [i.name for i in self.lama_sess.get_inputs()]
-                pred = self.lama_sess.run(None, {in_names[0]: inp_img, in_names[1]: inp_msk})[0][0]
+                if sess_now is not self.lama_sess:
+                    raise                  # the processor's session failed as well: nothing is left to try
+                sess_now, in_names = self._lama_on_cpu(exc)
+                pred = sess_now.run(None, {in_names[0]: inp_img, in_names[1]: inp_msk})[0][0]
 
             pred_hwc = pred.transpose(1, 2, 0)[:ph, :pw]
             pred_rgb = np.clip(pred_hwc / self.lama_out_scale, 0.0, 1.0)
@@ -2391,6 +2427,17 @@ class CleanVinylEngine:
                 progress_cb(tile_pct, f"AI-заливка дефектів: {tiles_run}/{total_tiles}...")
             if total_tiles >= 6 and (tiles_run % 5 == 0 or tiles_run == total_tiles):
                 print(f"  LaMa: {tiles_run}/{total_tiles}", flush=True)
+
+        if tiles_run > 0:
+            on_cpu = sess_now is not self.lama_sess
+            took = time.perf_counter() - t_fill
+            if not on_cpu:
+                self.cpu_fallback.pop("lama", None)   # the GPU did the whole run: an earlier fallback is over
+            log = self._fill_log
+            log["tiles"] += tiles_run
+            log["s"] += took
+            log["ep"] = "CPUExecutionProvider" if on_cpu else ep_now
+            print(f"[Engine] Заливка LaMa: {tiles_run} тайлів за {took:.1f} с ({log['ep']}, {took / tiles_run:.2f} с на тайл)", flush=True)
 
         # Normalize where LaMa ran (same arithmetic as before, but without boolean fancy-indexing over the whole frame)
         lut_div = np.arange(256, dtype=np.float32) / 255.0
@@ -4576,6 +4623,7 @@ class CleanVinylEngine:
                 small_specks_healed = 0
                 lama_f32 = None
                 tiles_run = 0
+                self._fill_log = {"tiles": 0, "s": 0.0, "ep": ""}
                 # the person with the guard strip of the hair search: there the source of a hair repair is painted over
                 hair_solid = (self._person_solid(tight_1024, w, h)
                               if (near_mask is not None and tight_1024 is not None and hit_heal is None and do_inpaint) else None)
@@ -4988,6 +5036,12 @@ class CleanVinylEngine:
                 stats["corner_hair"] = 0 if corner_line is None else len(corner_line.get("hair") or ())
             if hair_eff > 0:
                 stats["hair_px"] = hair_px  # pixels marked as single hairs (only said when the tool is on)
+            if self._fill_log["tiles"] > 0:
+                # the AI fill of this call: tiles, seconds, where it ran, and - when a GPU is there and the
+                # processor did it all the same - why (the window says so: see _lama_on_cpu)
+                stats["timing"] = {"fill_tiles": int(self._fill_log["tiles"]), "fill_s": round(float(self._fill_log["s"]), 2),
+                                   "fill_ep": self._fill_log["ep"], "fallback": dict(self.cpu_fallback)}
+                self._fill_log = {"tiles": 0, "s": 0.0, "ep": ""}
             return out_rgba, stats
         finally:
             self._end_job()
@@ -6312,7 +6366,9 @@ class CleanVinylEngine:
                 orig_small_bgr = cv2.cvtColor(cv2.resize(orig_rgb_u8, (pw, ph), interpolation=cv2.INTER_AREA), cv2.COLOR_RGB2BGR)
                 # ...and the photo at the size of the pictures the window is sent (see DISPLAY_LONG)
                 orig_disp_bgr = None
-                disp_size = self._display_size(w, h, pw, ph, p.get("previewLong"))
+                # (asked for by the window itself, not by a preset: with the automatic preset `p` holds the values
+                #  of the preset that suits the frame, and those never carry it)
+                disp_size = self._display_size(w, h, pw, ph, (params or {}).get("previewLong", p.get("previewLong")))
                 if disp_size is not None:
                     orig_disp_bgr = cv2.cvtColor(cv2.resize(orig_rgb_u8, disp_size, interpolation=cv2.INTER_AREA), cv2.COLOR_RGB2BGR)
                 clean_small_bgr, auto_mask_small, repair_mask_small = self._session_proxies(

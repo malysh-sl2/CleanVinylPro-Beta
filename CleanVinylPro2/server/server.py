@@ -297,6 +297,8 @@ def health():
         "gpu": eng.gpu_name,
         "provider": eng.provider_name,
         "gpu_error": eng.gpu_error,
+        # what the processor computed in its last run although a GPU session exists ("lama" / "matting" -> why)
+        "cpu_fallback": dict(getattr(eng, "cpu_fallback", {}) or {}),
         "matting_model": eng.matting_kind,
         "models_loaded": eng.is_loaded,
         "idle_unload_sec": eng.idle_unload_sec,

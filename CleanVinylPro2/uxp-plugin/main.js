@@ -100,6 +100,21 @@ let fracLarge = true;
 let fracAuto = true;      // the AUTO button of the fractions as it is right now
 let fracAutoUser = true;  // ...and as the user left it (a preset that names its fractions switches AUTO off for a while)
 let autoPreset = true;    // pick the preset that suits the frame every time the big window opens
+// "Detailed preview" (a checkbox in the settings of the big window). Off - the way the window worked up to 4.7.0
+// and the default again since 4.10.0: the window gets pictures of the working size (in a large window the person
+// looks a little soft; the layer is not affected) and after a change it shows the quick preview; the real frame is
+// computed by "Застосувати" or by the button "↻ Перерахувати зараз". On - what 4.8.0 brought: pictures twice as
+// detailed and the exact picture by itself, in the background. On the owner's PC that made the brush slow (every
+// answer 1.7 MB instead of 0.5) and kept the computer busy for one to seven minutes after every change.
+let detailPreview = false;
+const PREVIEW_LONG_FAST = 1080;     // "previewLong" of the start request: the working pictures themselves
+const PREVIEW_LONG_DETAIL = 2160;
+// The trace of a stroke (renderBrushCursorAndDot): the gap between two mouse events is filled with dots this far
+// apart (a share of the brush diameter, at least so many pixels); so many per event and per stroke at most.
+const STROKE_DOT_STEP = 0.3;
+const STROKE_DOT_MIN_PX = 3;
+const STROKE_DOTS_PER_MOVE = 120;
+const STROKE_DOTS_MAX = 1500;
 let dressSmoothEnabled = false;
 let cleanPasses = 1;
 // How the found defects are closed. One way is left: the full AI fill (what used to be the mode "✦ Якісний").
@@ -226,6 +241,8 @@ let sessState = {
   presetNote: null,        // a preset was just clicked: say what it changed when the refresh comes back
   smokeNote: false,        // a smoke control was just used: say what the server saw of smoke when the refresh comes back
   note: "",                // short message in the corner of the photo (which preset was picked and why)
+  cpuWarn: "",             // ...and the warning that the AI fill ran on the processor (it goes before the note)
+  cpuWarnTimer: null,
   noteTimer: null
 };
 let pendingApplyPayload = null;
@@ -690,6 +707,75 @@ function setAutoPreset(on) {
   if (el("dlgChkAutoPreset")) el("dlgChkAutoPreset").checked = autoPreset;
 }
 
+// The button of the exact picture says what it is for: with the detailed preview the same picture comes by itself.
+function updateRecomputeButton() {
+  const btn = el("gBtnRecompute");
+  if (!btn) return;
+  btn.textContent = detailPreview ? "↻ Перерахувати зараз (не обов’язково)" : "↻ Перерахувати зараз (точний перегляд)";
+  btn.setAttribute("data-tip", detailPreview
+    ? "Необов’язкова кнопка: з «Детальним переглядом» перегляд і так перераховується сам після кожної зміни — спершу швидко, а потім точно, для всього кадру. Кнопка робить той самий точний розрахунок негайно, з вікном прогресу."
+    : "Точний перегляд — програма рахує справжній кадр для всього фото, з вікном прогресу. Після зміни повзунка вікно показує швидкий перегляд; ця кнопка потрібна, якщо хочете побачити точний результат ще до «Застосувати». «Застосувати» і так рахує точний кадр.");
+}
+
+// "Детальний перегляд" on / off (see detailPreview). The exact picture by itself starts or stops at once; the size
+// of the window pictures is fixed when the window opens, so that part shows from the next opening.
+function setDetailPreview(on, announce = true) {
+  detailPreview = !!on;
+  if (el("gChkDetail")) el("gChkDetail").checked = detailPreview;
+  updateRecomputeButton();
+  if (sessState.open && sessState.id) {
+    if (detailPreview) {
+      scheduleExactPreview();
+    } else {
+      cancelExactTimer();
+      stopBackgroundRun();  // a run that is on its way is of no use any more: the computer is free at once
+      updatePreviewBadge();
+      updateModeBadge();
+    }
+  }
+  if (announce) {
+    sayInWindow(detailPreview
+      ? "✓ Детальний перегляд увімкнено: точний кадр рахується сам після кожної зміни — це повільніше. Чіткіше фото у вікні — з наступного відкриття вікна."
+      : "Детальний перегляд вимкнено: вікно працює швидко. Точний кадр рахує «Застосувати» або кнопка «↻ Перерахувати зараз». М’якше фото у вікні — з наступного відкриття вікна.");
+  }
+}
+
+function secondsText(s) {
+  const v = Math.max(0, Number(s) || 0);
+  return (v < 10 ? v.toFixed(1).replace(".", ",") : String(Math.round(v))) + " с";
+}
+
+function cpuFallbackText(why) {
+  return "⚠ AI-модель щойно рахувала на процесорі, а не на відеокарті — це в багато разів повільніше. Причина: " +
+    String(why).slice(0, 160) + ". Якщо повторюється — закрийте програми, що займають відеопам’ять, або перезапустіть сервер (restart_gpu_server.bat).";
+}
+
+// What the last computation of the frame took: a line in the settings of the big window. When a video card is there
+// and the AI fill ran on the processor all the same (the card refused a tile - see _lama_on_cpu of the engine), the
+// window says so in the corner of the photo: that is what "a preview takes minutes" usually is.
+function noteComputeStats(stats) {
+  const t = stats && stats.timing;
+  if (!t || !t.fill_tiles) return;
+  const onCpu = String(t.fill_ep || "").includes("CPU");
+  const why = t.fallback && (t.fallback.lama || t.fallback.matting);
+  const line = el("gTimeLine");
+  if (line) {
+    const whole = typeof stats.elapsed_ms === "number" ? `Останній розрахунок: ${secondsText(stats.elapsed_ms / 1000)} · ` : "";
+    line.textContent = `${whole}AI-заливка: ${t.fill_tiles} пл. за ${secondsText(t.fill_s)} (${onCpu ? "процесор" : "відеокарта"})`;
+    line.classList.toggle("warn", onCpu);
+  }
+  if (why) {
+    sessState.cpuWarn = cpuFallbackText(why);
+    if (sessState.cpuWarnTimer) clearTimeout(sessState.cpuWarnTimer);
+    sessState.cpuWarnTimer = setTimeout(() => {
+      sessState.cpuWarnTimer = null;
+      sessState.cpuWarn = "";
+      updatePreviewBadge();
+    }, 20000);
+    updatePreviewBadge();
+  }
+}
+
 function updateSliderVisuals() {
   ALL_SLIDER_IDS.forEach((id) => {
     const v = setSliderVal(id, getSliderVal(id));
@@ -763,6 +849,7 @@ function buildSettingsSnapshot() {
     fracAuto: fracAutoUser,   // the user's own choice...
     fracAutoNow: fracAuto,    // ...and what the active preset made of it
     autoPreset,
+    detailPreview,
     brushSize: sessState.brushSize,
     brushSoft: sessState.brushSoft,
     deletedDefaultIds: Array.from(new Set(deletedDefaultIds)),
@@ -798,6 +885,7 @@ function applySettingsSnapshot(s) {
     fracAuto = typeof s.fracAutoNow === "boolean" ? s.fracAutoNow : s.fracAuto;
   }
   if (typeof s.autoPreset === "boolean") setAutoPreset(s.autoPreset);
+  if (typeof s.detailPreview === "boolean") setDetailPreview(s.detailPreview, false);
   if (typeof s.brushSize === "number" && s.brushSize >= 4) sessState.brushSize = Math.round(s.brushSize);
   if (typeof s.brushSoft === "boolean") setBrushSoft(s.brushSoft, false);
   if (s.activePresetId && presetsList.some((p) => p.id === s.activePresetId)) activePresetId = s.activePresetId;
@@ -1152,6 +1240,9 @@ async function probeHealthSilent() {
             );
           } else if (isCpu && info.gpu_error) {
             showBanner("Сервер працює на CPU: " + info.gpu_error, "info");
+          } else if (info.cpu_fallback && (info.cpu_fallback.lama || info.cpu_fallback.matting)) {
+            // a video card is there, and the last run went to the processor all the same
+            showBanner(cpuFallbackText(info.cpu_fallback.lama || info.cpu_fallback.matting), "info");
           } else {
             hideBanner();
           }
@@ -1908,22 +1999,37 @@ function renderBrushCursorAndDot(hoverPt, addDot = false) {
   }
 
   if (addDot && hoverPt && el("dlgStrokeDots")) {
+    // The trace under the pointer until the server answers. Between two mouse events the pointer can be far away -
+    // a quick hand, or a window that was busy for a moment - and one dot per event then leaves a row of separate
+    // dots where the server draws one line (it joins the points). So the way from the last dot is filled with
+    // dots (STROKE_DOT_STEP): the trace is the stroke that will be made.
+    const box = el("dlgStrokeDots");
+    const first = sessState.lastDotX < 0;
     const dx = hoverPt.x - sessState.lastDotX;
     const dy = hoverPt.y - sessState.lastDotY;
-    if (sessState.lastDotX < 0 || (dx * dx + dy * dy) >= 0.00004) {
+    if (first || (dx * dx + dy * dy) >= 0.00004) {
+      const toX = hoverPt.x * dispW;
+      const toY = hoverPt.y * dispH;
+      const fromX = first ? toX : sessState.lastDotX * dispW;
+      const fromY = first ? toY : sessState.lastDotY * dispH;
+      const gap = Math.sqrt((toX - fromX) * (toX - fromX) + (toY - fromY) * (toY - fromY));
+      const stepPx = Math.max(STROKE_DOT_MIN_PX, diam * STROKE_DOT_STEP);
+      const n = first ? 1 : Math.max(1, Math.min(STROKE_DOTS_PER_MOVE, Math.ceil(gap / stepPx)));
+      for (let i = 1; i <= n && box.childNodes.length < STROKE_DOTS_MAX; i++) {
+        const dot = document.createElement("div");
+        dot.className = "stroke-dot";
+        dot.style.width = diam + "px";
+        dot.style.height = diam + "px";
+        dot.style.left = Math.round(fromX + (toX - fromX) * (i / n) - half) + "px";
+        dot.style.top = Math.round(fromY + (toY - fromY) * (i / n) - half) + "px";
+        dot.style.background = sessState.tool === "eraser" ? "#b41822" : "#22ee58";
+        // (pale dots that add up towards the middle of the stroke look like the soft edge the stroke will have;
+        // the hard brush leaves the solid trace it always had)
+        dot.style.opacity = sessState.brushSoft ? "0.2" : "0.65";
+        box.appendChild(dot);
+      }
       sessState.lastDotX = hoverPt.x;
       sessState.lastDotY = hoverPt.y;
-      const dot = document.createElement("div");
-      dot.className = "stroke-dot";
-      dot.style.width = diam + "px";
-      dot.style.height = diam + "px";
-      dot.style.left = Math.round(hoverPt.x * dispW - half) + "px";
-      dot.style.top = Math.round(hoverPt.y * dispH - half) + "px";
-      dot.style.background = sessState.tool === "eraser" ? "#b41822" : "#22ee58";
-      // (the trace under the pointer until the server answers: pale dots that add up towards the middle of the
-      // stroke look like the soft edge the stroke will have; the hard brush leaves the solid trace it always had)
-      dot.style.opacity = sessState.brushSoft ? "0.2" : "0.65";
-      el("dlgStrokeDots").appendChild(dot);
     }
   }
 }
@@ -2172,6 +2278,7 @@ function takeSessionPictures(d) {
   if (d.comp_jpg_b64 && el("dlgCompImg")) el("dlgCompImg").src = "data:image/jpeg;base64," + d.comp_jpg_b64;
   if (d.overlay_jpg_b64 && el("dlgOverlayImg")) el("dlgOverlayImg").src = "data:image/jpeg;base64," + d.overlay_jpg_b64;
   if (typeof d.exact === "boolean") sessState.exactShown = d.exact;
+  if (d.stats) noteComputeStats(d.stats);
   // something new is on screen: whatever kept the exact recompute from being asked for may be over
   sessState.exactHold = false;
   sessState.exactError = "";
@@ -2185,7 +2292,7 @@ function takeSessionPictures(d) {
 //   "quick"    - a quick preview that stays for now (the exact one failed, or the server declined - see exactHold).
 function previewKind() {
   if (sessState.exactShown || sessState.bgUnsupported) return "exact";
-  return (sessState.exactHold || sessState.exactError) ? "quick" : "refining";
+  return (sessState.exactHold || sessState.exactError || !detailPreview) ? "quick" : "refining";
 }
 
 function exactProgressText() {
@@ -2194,6 +2301,7 @@ function exactProgressText() {
 
 // Should the exact picture be computed now, by itself?
 function exactPreviewWanted() {
+  if (!detailPreview) return false;  // the fast window: the real frame is computed by Apply or by the button
   if (!sessState.open || !sessState.id || sessState.isApplying || sessState.bgUnsupported) return false;
   if (sessState.exactError) return false;
   // a quick preview is on screen (exactHold: the server declined to replace the user's own mask by itself)
@@ -2478,6 +2586,9 @@ function updatePreviewBadge() {
     } else if (sessState.exactError && !sessState.exactShown) {
       text = `Точний перегляд не вдалося порахувати: ${sessState.exactError}. На екрані швидкий перегляд; «Застосувати» все одно зробить точний розрахунок.`;
       cls += " visible stale";
+    } else if (sessState.cpuWarn) {
+      text = sessState.cpuWarn;
+      cls += " visible stale";
     } else if (sessState.note) {
       text = sessState.note;
       cls += " visible note";
@@ -2701,6 +2812,8 @@ async function openInteractiveWorkspace() {
 
       const params = readCurrentConfig();
       params.autoFractions = fracAuto;
+      // the size of the pictures this window will be sent (it is fixed for the whole session)
+      params.previewLong = detailPreview ? PREVIEW_LONG_DETAIL : PREVIEW_LONG_FAST;
       const settingsSig = previewSettingsSignature();
       const jobId = makeJobId();
       const meta = { width, height, channels: components, bitDepth, hasSelection: false, jobId, params };
@@ -2856,6 +2969,8 @@ async function openInteractiveWorkspace() {
       if (untouched && smokeSeen && smokeSeen.on && smokeSeen.protected > 0) smokeNote = smokeNoteText(smokeSeen);
       else if (untouched && smokeSeen && !smokeSeen.on && smokeSeen.found) smokeNote = smokeOffHintText(smokeSeen);
       if (autoNote || smokeNote) showPreviewNote([autoNote, smokeNote].filter(Boolean).join(" "), smokeNote ? 12000 : 8000);
+      // what the first scan took - and a warning when its AI fill ran on the processor (it goes before the note)
+      noteComputeStats(res.stats);
 
       if (el("dlgOrigImg")) el("dlgOrigImg").src = "data:image/jpeg;base64," + res.orig_jpg_b64;
       if (el("dlgCompImg")) el("dlgCompImg").src = "data:image/jpeg;base64," + res.comp_jpg_b64;
@@ -3703,6 +3818,14 @@ function initEvents() {
   el("dlgBtnMask").addEventListener("click", () => {
     setView(sessState.view === "mask" ? "result" : "mask");
   });
+
+  if (el("gChkDetail")) {
+    el("gChkDetail").addEventListener("change", () => {
+      setDetailPreview(el("gChkDetail").checked);
+      scheduleSaveSettings();
+    });
+    setDetailPreview(detailPreview, false);  // the box and the button show the value the settings brought
+  }
 
   el("dlgChkAutoPreset").addEventListener("change", () => {
     setAutoPreset(el("dlgChkAutoPreset").checked);

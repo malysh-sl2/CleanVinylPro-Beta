@@ -1154,6 +1154,21 @@ html, body {
   min-height: 44px;
 }
 
+.detail-row {
+  margin: 2px 0 6px 0;
+}
+
+.g-time-line {
+  font-size: 10px;
+  color: #a8b0bd;
+  margin: 2px 0 5px 0;
+  min-height: 12px;
+}
+
+.g-time-line.warn {
+  color: #ffb14a;
+}
+
 .g-vram-box {
   padding-top: 5px;
   border-top: 1px solid #353942;

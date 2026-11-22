@@ -97,6 +97,7 @@ Part 4 - installing (tests/install_checks.py; needs nothing but Python):
 The comparisons with v3.2.1 use the files of the original program kept in tests/baseline_v321 (engine.py, server.py
 and a few more, exactly as they were; the program itself is no longer in the repository).
 """
+import base64
 import json
 import os
 import re
@@ -164,7 +165,7 @@ def _legacy_window(p: dict) -> dict:
 
 
 def _same_stats(a: dict, b: dict) -> bool:
-    skip = ("elapsed_ms", "reused_stages")
+    skip = ("elapsed_ms", "reused_stages", "timing")
     return all(a[k] == b.get(k) for k in a if k not in skip)
 
 
@@ -2509,6 +2510,157 @@ def check_gpu():
     report("gpu", not bad, "cuDNN option: accepted -> used; rejected / broken CUDA -> previous behaviour" if not bad else f"wrong: {bad}")
 
 
+def check_fallback():
+    """
+    An error of the GPU costs one run, not the session (4.10.0). The processor finishes the fill that the GPU refused,
+    with the same result; the answer says where the fill ran and why; the next run asks the GPU again. Up to 4.9.0
+    the processor kept the job until the models were loaded anew - on one thread, and nothing said so.
+    """
+    bad = []
+    CUDA, CPU = "CUDAExecutionProvider", "CPUExecutionProvider"
+
+    class Refusing(H.FakeLama):                      # the GPU's fill: refuses the requests whose numbers are given
+        def __init__(self, refuse):
+            super().__init__()
+            self.refuse, self.asked = set(refuse), 0
+
+        def run(self, outputs, feed):
+            self.asked += 1
+            if self.asked in self.refuse:
+                raise RuntimeError("CUDA out of memory (simulated)")
+            return super().run(outputs, feed)        # (.calls counts the tiles it filled)
+
+    class OnCpu(H.FakeLama):
+        def get_providers(self):
+            return [CPU]
+
+    class Broken(OnCpu):
+        def run(self, outputs, feed):
+            raise RuntimeError("the processor fails too (simulated)")
+
+    img, sil = H.make_studio_image(1500, 1000, seed=5)
+    p = dict(H.STD, speedMode="quality")
+    ref, ref_st = _quiet(H.make_engine(E, sil).process, img, 8, p)
+    tiles = int(ref_st["tiles_run"])
+    t_ref = ref_st.get("timing") or {}
+    if tiles < 6:
+        bad.append(f"the frame of this check asks for {tiles} tiles only")
+    if t_ref.get("fill_tiles") != tiles or t_ref.get("fill_ep") != CUDA or t_ref.get("fallback") != {} or not isinstance(t_ref.get("fill_s"), float):
+        bad.append(f"a run without trouble must say: {tiles} tiles, on the GPU, no fallback - it says {t_ref}")
+
+    def engine_with(gpu, cpu_cls=OnCpu):
+        eng = H.make_engine(E, sil)
+        eng.lama_sess, made = gpu, []
+
+        def cpu_session(path, threads=1):
+            made.append((threads, cpu_cls()))
+            return made[-1][1], CPU
+
+        eng._create_cpu_session = cpu_session
+        return eng, made
+
+    for name, refuse in (("the 3rd tile", {3}), ("every tile", set(range(1, 500)))):
+        gpu = Refusing(refuse)
+        eng, made = engine_with(gpu)
+        out, st = _quiet(eng.process, img, 8, p)
+        first_bad = min(refuse)
+        t = st.get("timing") or {}
+        if not np.array_equal(out, ref):
+            bad.append(f"the GPU refuses {name}: the result differs from a run without trouble")
+        if eng.lama_sess is not gpu:
+            bad.append(f"the GPU refuses {name}: the GPU session was thrown away (the next run cannot ask it again)")
+        if len(made) != 1 or made[0][1].calls != tiles - (first_bad - 1) or gpu.calls != first_bad - 1 or gpu.asked != first_bad:
+            bad.append(f"the GPU refuses {name}: the processor must finish this run alone - sessions made {len(made)}, tiles filled by the processor "
+                       f"{made[0][1].calls if made else None} of {tiles}, by the GPU {gpu.calls}, GPU asked {gpu.asked} times")
+        if made and made[0][0] != eng._fallback_threads():
+            bad.append(f"the processor's session for such a run: {made[0][0]} thread(s), expected {eng._fallback_threads()}")
+        if t.get("fill_ep") != CPU or "simulated" not in str((t.get("fallback") or {}).get("lama")) or t.get("fill_tiles") != tiles \
+                or "simulated" not in str(eng.cpu_fallback.get("lama")) or "LaMa" not in eng.gpu_error:
+            bad.append(f"the GPU refuses {name}: the answer must say 'processor' and why - it says {t}; engine: {eng.cpu_fallback}")
+        if name == "the 3rd tile":
+            # the next run: the GPU is asked again and does it all; the note of the fallback is gone
+            out2, st2 = _quiet(eng.process, img, 8, p)
+            t2 = st2.get("timing") or {}
+            if not np.array_equal(out2, ref) or gpu.calls != (first_bad - 1) + tiles or len(made) != 1 or made[0][1].calls != tiles - (first_bad - 1):
+                bad.append(f"the run after a fallback must go to the GPU again: GPU filled {gpu.calls - (first_bad - 1)} of {tiles} tiles, "
+                           f"processor sessions {len(made)}")
+            if t2.get("fill_ep") != CUDA or t2.get("fallback") != {} or eng.cpu_fallback != {}:
+                bad.append(f"the run after a fallback: the answer still says {t2}; engine: {eng.cpu_fallback}")
+    # the processor fails as well: the error comes out (no endless retry, no silent picture)
+    eng, made = engine_with(Refusing({1}), Broken)
+    try:
+        _quiet(eng.process, img, 8, p)
+        bad.append("the GPU and the processor both fail: process() must raise")
+    except RuntimeError as exc:
+        if "processor fails too" not in str(exc) or len(made) != 1:
+            bad.append(f"the GPU and the processor both fail: {exc!r}, processor sessions {len(made)}")
+
+    # the silhouette network: the same rule
+    class RefusingMatting(H.FakeMatting):
+        asked, refuse = 0, {1}
+
+        def run(self, outputs, feed):
+            self.asked += 1
+            if self.asked in self.refuse:
+                raise RuntimeError("CUDA out of memory (simulated)")
+            return super().run(outputs, feed)
+
+    eng = H.make_engine(E, sil)
+    gpu_m, made_m = RefusingMatting(sil), []
+
+    def cpu_matting(path, threads=1):
+        made_m.append((threads, H.FakeMatting(sil)))
+        return made_m[-1][1], CPU
+
+    eng.matting_sess, eng._create_cpu_session = gpu_m, cpu_matting
+    out, st = _quiet(eng.process, img, 8, p)
+    if not np.array_equal(out, ref) or eng.matting_sess is not gpu_m or len(made_m) != 1 or "simulated" not in str(eng.cpu_fallback.get("matting")):
+        bad.append(f"the GPU refuses the silhouette: same result {np.array_equal(out, ref)}, GPU session kept {eng.matting_sess is gpu_m}, "
+                   f"processor sessions {len(made_m)}, engine says {eng.cpu_fallback}")
+    out, st = _quiet(eng.process, img, 8, p)
+    if not np.array_equal(out, ref) or gpu_m.asked < 2 or len(made_m) != 1 or eng.cpu_fallback != {}:
+        bad.append(f"the frame after a silhouette fallback must go to the GPU again: asked {gpu_m.asked}, engine says {eng.cpu_fallback}")
+    report("fallback", not bad, f"a GPU error costs one run: the processor finishes it ({tiles} tiles, same pixels, {E.CleanVinylEngine._fallback_threads()} "
+           f"thread(s)), the answer says where the fill ran and why, the next run is on the GPU again; fill and silhouette" if not bad
+           else "wrong:\n  " + "\n  ".join(bad))
+
+
+def check_fastwin():
+    """
+    The fast window (4.10.0): the panel asks for pictures of the working size ("previewLong" 1080) and gets them -
+    also when the automatic preset is on, where the values of the chosen preset replace those of the request.
+    (With 4.8.0 the request's word was lost there: the window would have got the large pictures all the same.)
+    """
+    bad, notes = [], []
+    img, sil = H.make_studio_image(3000, 2000, seed=3)
+    p = dict(H.STD, speedMode="quality")
+
+    def opened(params, presets=None):
+        eng = H.make_engine(E, sil)
+        r = _quiet(eng.start_session, img, 8, params, None, None, presets)
+        pic = cv2.imdecode(np.frombuffer(base64.b64decode(r["comp_jpg_b64"]), np.uint8), cv2.IMREAD_COLOR)
+        a = _quiet(eng.edit_session_mask, r["session_id"], "stroke", [{"x": 0.2, "y": 0.8, "norm": True}, {"x": 0.3, "y": 0.8, "norm": True}], 20.0, False, False, 45.0, 1.0)
+        pic2 = cv2.imdecode(np.frombuffer(base64.b64decode(a["comp_jpg_b64"]), np.uint8), cv2.IMREAD_COLOR)
+        return (r["preview_w"], r["preview_h"]), pic.shape[1::-1], pic2.shape[1::-1], len(r["comp_jpg_b64"]) + len(r["overlay_jpg_b64"]), r
+
+    presets = {"default": dict(p)}                       # what the panel sends with the automatic preset: no "previewLong" in it
+    work, fast, fast_stroke, bytes_fast, r_fast = opened(dict(p, previewLong=1080), presets)
+    if not r_fast.get("scene", {}).get("applied"):
+        bad.append("the frame of this check did not take a preset of the automatic choice")
+    if fast != work or fast_stroke != work:
+        bad.append(f"previewLong 1080 with the automatic preset: pictures {fast} / after a stroke {fast_stroke}, the working size is {work}")
+    _, plain, _, _, _ = opened(dict(p, previewLong=1080))
+    if plain != work:
+        bad.append(f"previewLong 1080 without presets: pictures {plain}, the working size is {work}")
+    _, big, big_stroke, bytes_big, _ = opened(dict(p, previewLong=2160), presets)
+    _, dflt, _, _, _ = opened(dict(p), presets)
+    if max(big) != 2160 or big_stroke != big or dflt != big:
+        bad.append(f"previewLong 2160 with the automatic preset: pictures {big} / after a stroke {big_stroke}; not asked at all: {dflt}")
+    notes.append(f"asked for 1080: pictures {fast[0]}x{fast[1]} (the working size), also with the automatic preset and after a stroke; "
+                 f"asked for 2160: {big[0]}x{big[1]}, {bytes_big / max(1, bytes_fast):.1f} times the bytes")
+    report("fastwin", not bad, "; ".join(notes) if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
 def check_server():
     srv = H.load_server()
     bad = []
@@ -2887,7 +3039,7 @@ def check_http():
         meta = json.loads(body[4:4 + n].decode("utf-8"))
         # ("recomputed" is new: Apply says whether it had to compute the real frame itself; "smoke" is new: what
         #  was seen of smoke in the frame)
-        meta["stats"] = {k: v for k, v in meta.get("stats", {}).items() if k not in ("elapsed_ms", "reused_stages", "recomputed", "smoke")}
+        meta["stats"] = {k: v for k, v in meta.get("stats", {}).items() if k not in ("elapsed_ms", "reused_stages", "recomputed", "smoke", "timing")}
         return meta, body[4 + n:]
 
     def norm(d):
@@ -2898,7 +3050,7 @@ def check_http():
         #  real frame is behind them - see check_exact)
         d = {k: v for k, v in d.items() if k not in ("session_id", "mask_png_b64", "quick", "scene", "smoke", "mask_share", "layer_share", "history", "rev", "exact")}
         if "stats" in d:
-            d["stats"] = {k: v for k, v in d["stats"].items() if k not in ("elapsed_ms", "reused_stages", "smoke")}
+            d["stats"] = {k: v for k, v in d["stats"].items() if k not in ("elapsed_ms", "reused_stages", "smoke", "timing")}
         return d
 
     bad = []
@@ -2993,6 +3145,13 @@ def check_http():
                 hl = cn.get("/health").json()
                 if hl.get("app") != srv.APP_ID or hl.get("version") != srv.APP_VERSION or hl.get("models_dir") != srv.MODELS_DIR:
                     bad.append("/health does not name this program and its models folder")
+                # /health tells the panel what the processor had to compute although a GPU is there (4.10.0)
+                if hl.get("cpu_fallback") != {}:
+                    bad.append(f"/health: cpu_fallback must be empty without trouble, it is {hl.get('cpu_fallback')!r}")
+                srv.ENGINE.cpu_fallback["lama"] = "CUDA out of memory"
+                if cn.get("/health").json().get("cpu_fallback") != {"lama": "CUDA out of memory"}:
+                    bad.append("/health does not pass on what the processor had to compute")
+                srv.ENGINE.cpu_fallback.clear()
                 # clothing + cyclorama through the whole interactive round trip
                 p2 = dict(H.STD, speedMode="fast", cycCurve=60, dressSmooth=True, dressStrength=60)
                 r = cn.post("/session/start", content=packet({"width": w, "height": h, "channels": img.shape[2], "bitDepth": bd, "params": p2}, img))
@@ -5005,7 +5164,7 @@ def check_plugin():
 
 GROUPS = [("convert", check_convert), ("process", check_process), ("stage", check_stage), ("quick", check_quick),
           ("session", check_session),
-          ("white", check_white), ("gpu", check_gpu),
+          ("white", check_white), ("gpu", check_gpu), ("fallback", check_fallback), ("fastwin", check_fastwin),
           ("cyc", check_cyc), ("dress", check_dress), ("speed", check_speed), ("smoke", check_smoke), ("empty", check_empty),
           ("format", check_format), ("scene", check_scene), ("stains", check_stains), ("seam", check_seam), ("mask", check_mask),
           ("brush", check_brush),
