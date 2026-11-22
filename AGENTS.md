@@ -94,6 +94,21 @@ written here and in the repository.
   result): the screenshot was laid over the frame (1 px of it = 2.985 px of the frame) and every circled
   place was measured in the frame, in the result of 4.8.0 and in the result of the new code.
 
+- His message of 2026-11-22 after trying 4.9.0, answering the three questions of the reply, in his words:
+  «пензель дуже довго і робе точки або тянути поленьку... ctrl+ не важливо ну на перегляд треба чекати
+  від 60-400 секунд або зменш або верни нехай буде лице розміти як було я ітак знаю що все ок. головне
+  швидкість.» With it the frame `0Q5A3411.jpg` as shot (3637 x 5456: a woman in a black dress on a stool,
+  low key) and a screenshot with one blue ellipse around the floor left of the dress, the shoe and the hem.
+  Read as: (1) the brush answers very slowly and its trace is a row of dots unless he drags slowly; (2) the
+  zoom keys do not matter to him; (3) a preview takes 60 to 400 seconds - shorten that or bring the former
+  way back; the soft face in the window is fine, he knows the result is right; speed is what matters.
+  The screenshot was laid over the frame (1 px of it = 1.51 px of the frame, its corner = frame (-14,
+  3186)): inside the ellipse the wavy shadows on the floor are gone and the floor is even, by 20-30 levels
+  both ways - far more than the automatic stages do. So the ellipse very likely shows what he DOES with
+  the brush: he paints whole areas of floor, many long strokes. He did not say so; the reply says how it
+  was read. No option card was shown (he left the choice: "shorten or bring back"). 4.10.0 answers this
+  message. He did not write «зливай».
+
 ## 2. What is in the repository
 
 | Path | What it is | Rule |
@@ -531,6 +546,16 @@ second plugin next to the installed one and lose his presets.
 
 ## 3. Current state — update this at the end of every session
 
+> **4.10.0 IS IN PROGRESS and this section is not rewritten yet** (it describes the state after 4.9.0).
+> Done and pushed (`61243ed`): "Детальний перегляд" (checkbox of the big window, off by default) holds the
+> window pictures of 2160 px and the exact picture by itself; off means pictures of the working size
+> (`previewLong` 1080) and no background run. The trace of a stroke fills the gap between two mouse events.
+> A GPU error in the AI fill or the matting costs one run instead of the session (`_lama_on_cpu`,
+> `cpu_fallback`), and the answer says how long the fill took and where it ran (`stats["timing"]`). New check
+> groups `fallback` and `fastwin`, 7 panel scenarios, 5 settings cases.
+> NOT done: the version number (still 4.9.0 everywhere), the manual, `README.md`, `tests/README.md`, the list
+> of deliberate defects (still that of 4.9.0), `.ccx` and ZIP, the full check run, the release, the reply.
+> Delete this note when the section is rewritten.
 _Last updated: 2026-11-22, by the agent of the first session, after releasing 4.9.0._
 
 - **Released:** 4.9.0, tag `cvp2-v4.9.0`, as a pre-release. Direct download:
