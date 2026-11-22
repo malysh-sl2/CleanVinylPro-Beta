@@ -95,6 +95,9 @@ DEFECTS = [
     ("smoke: a piece on the floor counts with nothing of it above the line", "smoke", ENGINE,
      "    SMOKE_SOFT_MIN_AREA = 0.004\n",
      "    SMOKE_SOFT_MIN_AREA = -1.0\n"),
+    ("smoke: patches of thin smoke a few pixels apart are separate pieces (what lies on the floor is lost)", "smoke", ENGINE,
+     "    SMOKE_PIECE_GAP = 17\n",
+     "    SMOKE_PIECE_GAP = 1\n"),
     ("smoke: a band of wisps is smoke (the seam stays at 100 %)", "smoke", ENGINE,
      "        wisp = self._smoke_without_lines(wisp_bin > 0)\n",
      "        wisp = wisp_bin > 0\n"),
@@ -123,7 +126,7 @@ DEFECTS = [
      "            CleanVinylEngine._smoke_auto(p), CleanVinylEngine._smoke_faint(p),\n",
      "            CleanVinylEngine._smoke_auto(p),\n"),
     # (Not in the list, because the checks cannot tell: the corner finder and the seam search given the whole map
-    # instead of the thick smoke - on the frames of the checks only the map of the cove decides; SMOKE_PIECE_GAP.)
+    # instead of the thick smoke - on the frames of the checks only the map of the cove decides.)
     # ---- the panel
     ("panel: the controls do not send the tick as the user's word", panel("every request says that the smoke switch"), MAINJS,
      '    smokeFaint: true,\n    grain: getSliderVal("gSlGrain"),\n',

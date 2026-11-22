@@ -1134,10 +1134,21 @@ def check_smoke():
     got_lo = float(word_map(thin, ENG.SMOKE_SOFT_FROM - 1.0)[in_thin].mean())
     got_60 = float(word_map(thin, 60.0)[in_thin].mean())
     got_80, got_95 = float(word_map(thin)[in_thin].mean()), float(word_map(thin, 95.0)[in_thin].mean())
-    if got_lo > 0.02 or got_80 < 0.75 or got_60 > got_80 - 0.1 or got_95 < got_80 + 0.03:
+    thinner = with_smoke(billows(5, 22.0, 1.5), cloud)   # a cloud that 80 % takes in part only
+    more_80, more_95 = float(word_map(thinner)[in_thin].mean()), float(word_map(thinner, 95.0)[in_thin].mean())
+    if got_lo > 0.02 or got_80 < 0.75 or got_60 > got_80 - 0.1 or got_95 < got_80 or more_95 < more_80 + 0.05:
         bad.append(f"thin smoke by the slider: {got_lo * 100:.0f}% of the cloud under {ENG.SMOKE_SOFT_FROM:.0f}, {got_60 * 100:.0f}% at 60, "
-                   f"{got_80 * 100:.0f}% at 80, {got_95 * 100:.0f}% at 95 (every step up must reach thinner smoke)")
+                   f"{got_80 * 100:.0f}% at 80, {got_95 * 100:.0f}% at 95; of a thinner cloud {more_80 * 100:.0f}% at 80 and "
+                   f"{more_95 * 100:.0f}% at 95 (every step up must reach thinner smoke)")
     note += f", {got_80 * 100:.0f}% of its cloud at 80 and {got_95 * 100:.0f}% at 95"
+    # soft smoke that is strong enough for the threshold of the lowest step: at SMOKE_SOFT_FROM the soft search is
+    # on, one percent lower only the wisps count (and this cloud has none)
+    strong = with_smoke(billows(5, 28.0, 5.0), cloud)
+    at_from = float(word_map(strong, ENG.SMOKE_SOFT_FROM)[in_thin].mean())
+    under_from = float(word_map(strong, ENG.SMOKE_SOFT_FROM - 1.0)[in_thin].mean())
+    if at_from < 0.5 or under_from > 0.02:
+        bad.append(f"strong soft smoke without wisps: {at_from * 100:.0f}% of the cloud at {ENG.SMOKE_SOFT_FROM:.0f} % "
+                   f"(the soft search is on), {under_from * 100:.0f}% one percent lower (only the wisps count)")
     # one direction is not smoke: the soft rim of a pool of light on the wall
     r_pool = np.sqrt((xx - 0.30 * w) ** 2 + (yy - 0.30 * h) ** 2)
     pool = 1.0 / (1.0 + np.exp((r_pool - 0.20 * w) / 18.0))
@@ -1248,6 +1259,14 @@ def check_smoke():
         bad.append(f"the switch on in the window: the answer must say 'faint' and what is protected (light and full refresh alike): {s2} / {s3}")
     if s4.get("faint") is not False or s4.get("auto") is not False or s4.get("protected") == s2.get("protected"):
         bad.append(f"the same values without 'smokeFaint' are another request (only the wisps count) - the maps must be made anew: {s4}")
+    # ...and so must the real frame: Apply that brings the word back has other settings than the frame it holds
+    full = _count_full_frames(eng)
+    _quiet(eng.apply_session, r1["session_id"], 90.0, True, True, 50.0)   # the real frame for the values of r4
+    before = full["n"]
+    st = _quiet(eng.apply_session, r1["session_id"], 90.0, True, True, 50.0, None, dict(win, smokeOn=True))[2]
+    if st.get("recomputed") is not True or full["n"] != before + 1:
+        bad.append(f"Apply with the same values and 'smokeFaint' back must compute the real frame anew: "
+                   f"recomputed={st.get('recomputed')}, {full['n'] - before} full computation(s)")
     report("smoke", not bad, note if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
