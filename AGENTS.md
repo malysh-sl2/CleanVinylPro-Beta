@@ -109,6 +109,24 @@ written here and in the repository.
   was read. No option card was shown (he left the choice: "shorten or bring back"). 4.10.0 answers this
   message. He did not write «зливай».
 
+- His message of 2026-11-22 after trying 4.10.0, in his words: «швидкий тепер пензель і  малює він
+  лінію.Останній розрахунок: 30 с · Al-заливка: 121 пл. за 15 с (відеокарта) Автовивантаження моделей із
+  VRAM. інколи лінія залишається і недобре розуміє де дим на світлому фоні удебільше розуміє де менше ні
+  і я нажимаю що є дим воно каже ні нема.Збій відеокарти-цеяк і як провірити». No file came with it.
+  Read as: (1) the brush is fast now and draws a line - 4.10.0 did what it was made for; (2) the time
+  line of his window: one computation 30 s, of them the AI fill 15 s for 121 tiles on the video card - the
+  GPU works on his PC; (3) «Автовивантаження моделей із VRAM.» is the caption that stands under the time
+  line in the settings, copied along; whether it was a question is not known, the reply explains the
+  setting in two sentences; (4) «інколи лінія залишається» - sometimes a line stays: either the wall-floor
+  line or a floor joint on some frames (the answer to question 3 of the reply to 4.9.0), or the trace of
+  the brush on the photo; not confirmed, the reply asks for the frame as shot and a screenshot;
+  (5) smoke on a light backdrop is understood badly: where there is more of it the program knows it,
+  where there is less it does not, and when he presses "there is smoke" the program answers that there
+  is none; (6) a question: what is a "GPU failure" (the words of the 4.10.0 warning) and how to check for
+  it. No frame with smoke is among his files, so (5) was reproduced with drawn smoke laid over his frames
+  (see the entry «4.11.0» in section 2) - a frame as shot is asked for in the reply. No option card was
+  shown. 4.11.0 answers this message. He did not write «зливай».
+
 ## 2. What is in the repository
 
 | Path | What it is | Rule |

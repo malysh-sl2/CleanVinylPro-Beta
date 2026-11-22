@@ -166,6 +166,36 @@ class CleanVinylEngine:
     # From this value of the smoke slider up the user says "this frame has smoke": everything smoke-like is protected
     # without asking for that evidence (the built-in preset for smoke shoots sits here).
     SMOKE_ALWAYS_FROM = 95.0
+    # "smokeFaint" (sent by the plugin since 4.11.0): the smoke switch is the user's word - "this frame has smoke".
+    # No evidence is asked for, and thin smoke is looked for as well: the search above knows smoke by its fine
+    # wisps, which only thick smoke has (on a light backdrop the same smoke has a third of the contrast it has on
+    # a dark one). Thin smoke is soft structure without a direction - billows, curls; the edge of a shadow, the
+    # rim of a pool of light and the wall-floor line all have ONE direction. It is measured as the smaller
+    # eigenvalue of the structure tensor of the smoothed lightness (see _smoke_soft_structure), at these scales
+    # (pixels of the 1024 px copy), in levels of L.
+    SMOKE_SOFT_SCALES = (2.5, 5.0, 10.0)
+    # The measure of a scale is divided by (scale / 5) ** this, so that one threshold serves all of them: on real
+    # backdrops, with and without smoke, the measure grows a little slower than the scale.
+    SMOKE_SOFT_SCALE_POWER = 0.9
+    # A place counts only when the weaker direction has at least this share of the stronger one: the curved rim
+    # of a pool of light or of a round shadow has a little of the second direction too.
+    SMOKE_SOFT_MIN_RATIO = 0.10
+    # The threshold of that measure by the slider: ..._AT_FULL at 100 %, higher by ..._PER_STEP for every percent
+    # below (0.45 at the usual 80 %); under ..._FROM the soft search is off and only the wisps count. Synthetic
+    # smoke over the owner's frames: curls of 1.5 levels and more give 0.45 and more, a clean wall under 0.25.
+    SMOKE_SOFT_AT_FULL = 0.30
+    SMOKE_SOFT_PER_STEP = 0.0075
+    SMOKE_SOFT_FROM = 40.0
+    # What is believed where. Above SMOKE_FLOOR_FROM of the frame height (the same line below which the dust
+    # search does not listen to the smoke map) every cloud of wisps is smoke, and so is every soft area that
+    # has at least SMOKE_SOFT_MIN_AREA of the frame there. Under the line lies the floor next to the feet:
+    # footprints and the shadows of the feet are wisps and soft structure of the same kind (12-79 % of that
+    # floor on the owner's frames without smoke, 0-8 % above it) - protecting them keeps exactly the dirt that
+    # has to go (his complaint about 4.3.0). There a place counts only when it hangs together with smoke that
+    # is believed: with such an area above the line, or with a cloud of wisps that alone proves smoke
+    # (SMOKE_MIN_CLOUD). At 100 % on the slider everything counts, the floor too.
+    SMOKE_FLOOR_FROM = 0.70
+    SMOKE_SOFT_MIN_AREA = 0.004
 
     def __init__(self, models_dir: str, idle_unload_sec: float = DEFAULT_IDLE_UNLOAD_SEC, load_models: bool = True):
         """load_models=False builds the engine without touching the model files (used by tests/ with stub sessions)."""
@@ -995,6 +1025,7 @@ class CleanVinylEngine:
         smoke_auto: bool = False,
         info: dict | None = None,
         gear_body: bool = False,
+        smoke_faint: bool = False,
     ):
         """
         Returns (stand protection, stand removal, smoke protection, shadow) maps, uint8, long side 1024.
@@ -1104,6 +1135,40 @@ class CleanVinylEngine:
         stand_remove[core_s > 0.35] = 0.0
 
         # B. White & colored smoke protection
+        smoke_mask = self._smoke_zone_small(L, A, B, fg_s, stand_mask, edges_any, smoke_strength, protect_smoke,
+                                            smoke_auto, info, smoke_faint)
+
+        # C. Cast & contact shadows (multi-scale close catches both tight contact & wide full-body shadows!)
+        if keep_shadows:
+            l_256 = cv2.resize(L, (max(16, sw // 4), max(16, sh // 4)), interpolation=cv2.INTER_AREA)
+            l_ref_256 = cv2.morphologyEx(l_256, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (45, 45)))
+            l_floor_wide = cv2.resize(cv2.GaussianBlur(l_ref_256, (15, 15), 0), (sw, sh), interpolation=cv2.INTER_LINEAR)
+            l_floor_tight = cv2.GaussianBlur(cv2.morphologyEx(L, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (65, 65))), (31, 31), 0)
+            l_floor_ref = np.maximum(l_floor_wide, l_floor_tight)
+            shadow_drop = np.clip((l_floor_ref - L - 4.5) / 14.5, 0.0, 1.0)
+            shadow_smooth = cv2.GaussianBlur(shadow_drop, (17, 17), 0)
+            fg_dist = cv2.distanceTransform((fg_s < 0.3).astype(np.uint8), cv2.DIST_L2, 5)
+            prox = np.clip(1.0 - fg_dist / (0.68 * max(sh, sw)), 0.0, 1.0)
+            shadow_mask = np.clip(shadow_smooth * (0.55 + 0.45 * prox), 0.0, 1.0)
+        else:
+            shadow_mask = np.zeros((sh, sw), dtype=np.float32)
+
+        return (
+            np.clip(stand_protect * 255, 0, 255).astype(np.uint8),
+            np.clip(stand_remove * 255, 0, 255).astype(np.uint8),
+            np.clip(smoke_mask * 255, 0, 255).astype(np.uint8),
+            np.clip(shadow_mask * 255, 0, 255).astype(np.uint8),
+        )
+
+    def _smoke_zone_small(self, L: np.ndarray, A: np.ndarray, B: np.ndarray, fg_s: np.ndarray, stand_mask: np.ndarray,
+                          edges_any: np.ndarray, smoke_strength: float, protect_smoke: bool, smoke_auto: bool,
+                          info: dict | None, smoke_faint: bool = False) -> np.ndarray:
+        """
+        The smoke map of _compute_protection_maps_small (float32 0..1, the size of L): where nothing is to be
+        cleaned because smoke is there. L, A, B: the frame in Lab at the 1024 px size; fg_s: the person;
+        stand_mask / edges_any: the gear and every group of strong edges. The other arguments: see there.
+        """
+        sh, sw = L.shape[:2]
         smoke_mask = np.zeros((sh, sw), dtype=np.float32)
         want_smoke = bool(protect_smoke) and smoke_strength > 5
         if info is not None:
@@ -1146,7 +1211,13 @@ class CleanVinylEngine:
             smoke_share = float(kept_areas.sum()) / float(sh * sw)
             smoke_largest = (float(kept_areas.max()) / float(sh * sw)) if kept_areas.size else 0.0
             smoke_found = smoke_share >= self.SMOKE_MIN_SHARE or smoke_largest >= self.SMOKE_MIN_CLOUD
-            if want_smoke and (smoke_found or not smoke_auto):
+            if want_smoke and smoke_faint:
+                # the user's word: no evidence asked for, and thin smoke is looked for as well
+                smoke_bin = self._smoke_by_word(sm_lut[lbl_sm], self._smoke_soft_structure(L, bg_only), smoke_strength)
+                smoke_mask = cv2.GaussianBlur(
+                    cv2.dilate(smoke_bin, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (33, 33))), (25, 25), 0
+                )
+            elif want_smoke and (smoke_found or not smoke_auto):
                 smoke_bin = sm_lut[lbl_sm]
                 smoke_mask = cv2.GaussianBlur(
                     cv2.dilate(smoke_bin, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (33, 33))), (25, 25), 0
@@ -1156,28 +1227,95 @@ class CleanVinylEngine:
                     "share": round(smoke_share, 4), "largest": round(smoke_largest, 4), "found": bool(smoke_found),
                     "protected": round(float((smoke_mask > 0.5).mean()), 4),
                 })
+        return smoke_mask
 
-        # C. Cast & contact shadows (multi-scale close catches both tight contact & wide full-body shadows!)
-        if keep_shadows:
-            l_256 = cv2.resize(L, (max(16, sw // 4), max(16, sh // 4)), interpolation=cv2.INTER_AREA)
-            l_ref_256 = cv2.morphologyEx(l_256, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (45, 45)))
-            l_floor_wide = cv2.resize(cv2.GaussianBlur(l_ref_256, (15, 15), 0), (sw, sh), interpolation=cv2.INTER_LINEAR)
-            l_floor_tight = cv2.GaussianBlur(cv2.morphologyEx(L, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (65, 65))), (31, 31), 0)
-            l_floor_ref = np.maximum(l_floor_wide, l_floor_tight)
-            shadow_drop = np.clip((l_floor_ref - L - 4.5) / 14.5, 0.0, 1.0)
-            shadow_smooth = cv2.GaussianBlur(shadow_drop, (17, 17), 0)
-            fg_dist = cv2.distanceTransform((fg_s < 0.3).astype(np.uint8), cv2.DIST_L2, 5)
-            prox = np.clip(1.0 - fg_dist / (0.68 * max(sh, sw)), 0.0, 1.0)
-            shadow_mask = np.clip(shadow_smooth * (0.55 + 0.45 * prox), 0.0, 1.0)
+    def _smoke_soft_structure(self, L: np.ndarray, bg_only: np.ndarray) -> np.ndarray:
+        """
+        How much soft structure WITHOUT a direction the backdrop has at each place (float32, levels of L; 0 where
+        the backdrop is not seen). L: lightness at the 1024 px size; bg_only: 1 where only backdrop is.
+
+        The gradient of the smoothed lightness is collected over a neighbourhood into the structure tensor. Its
+        larger eigenvalue is the strength along the main direction; the smaller one is what is left ACROSS it.
+        A straight edge - a shadow's edge, the wall-floor line, a seam, the slope of the light - leaves nothing
+        there, however strong it is; billows and curls leave about as much as along. The square root of the
+        smaller eigenvalue, times the scale, is the measure. Each scale is computed on a copy reduced so that
+        the scale is 2.5 px there; the largest answer of the scales counts.
+        """
+        sh, sw = L.shape[:2]
+        out = np.zeros((sh, sw), dtype=np.float32)
+        bg_f = bg_only.astype(np.float32)
+        for s1 in self.SMOKE_SOFT_SCALES:
+            f = max(1.0, float(s1) / 2.5)
+            rw, rh = max(8, int(round(sw / f))), max(8, int(round(sh / f)))
+            if f > 1.0:
+                m = cv2.resize(bg_f, (rw, rh), interpolation=cv2.INTER_AREA)
+                lr = cv2.resize(L * bg_f, (rw, rh), interpolation=cv2.INTER_AREA) / np.maximum(m, 1e-3)
+                m = (m > 0.999).astype(np.float32)
+            else:
+                m, lr = bg_f, L
+            s1r = float(s1) / f
+            den = np.maximum(cv2.GaussianBlur(m, (0, 0), s1r), 1e-3)
+            ls = cv2.GaussianBlur(lr * m, (0, 0), s1r) / den
+            gx = cv2.Sobel(ls, cv2.CV_32F, 1, 0, ksize=3) / 8.0
+            gy = cv2.Sobel(ls, cv2.CV_32F, 0, 1, ksize=3) / 8.0
+            # only where the smoothing saw nothing but backdrop: next to the person the average leans away
+            # from the person and a gradient appears that the backdrop does not have
+            wgt = ((den > 0.97) & (m > 0)).astype(np.float32)
+            s2r = 4.0 * s1r
+            dw = cv2.GaussianBlur(wgt, (0, 0), s2r)
+            dwn = np.maximum(dw, 1e-3)
+            jxx = cv2.GaussianBlur(gx * gx * wgt, (0, 0), s2r) / dwn
+            jyy = cv2.GaussianBlur(gy * gy * wgt, (0, 0), s2r) / dwn
+            jxy = cv2.GaussianBlur(gx * gy * wgt, (0, 0), s2r) / dwn
+            tr = jxx + jyy
+            root = np.sqrt(np.maximum((jxx - jyy) ** 2 + 4.0 * jxy * jxy, 0.0))
+            lam2 = np.maximum(0.5 * (tr - root), 0.0)
+            lam1 = np.maximum(0.5 * (tr + root), 1e-9)
+            # (the gradient is per pixel of the reduced copy, f times that of the 1024 px copy: s1r * f / f = s1r)
+            val = s1r * np.sqrt(lam2) / ((float(s1) / 5.0) ** self.SMOKE_SOFT_SCALE_POWER)
+            val[(lam2 < self.SMOKE_SOFT_MIN_RATIO * lam1) | (dw < 0.25) | (m <= 0)] = 0.0
+            if f > 1.0:
+                val = cv2.resize(val, (sw, sh), interpolation=cv2.INTER_LINEAR)
+            np.maximum(out, val, out=out)
+        out[bg_f <= 0] = 0.0
+        return out
+
+    def _smoke_by_word(self, wisp_bin: np.ndarray, soft: np.ndarray, smoke_strength: float) -> np.ndarray:
+        """
+        The smoke of a frame whose user says it has smoke ("smokeFaint"): the clouds of wisps as the old search
+        gives them (wisp_bin, 0/1), plus the areas of soft structure (soft: see _smoke_soft_structure) that the
+        slider reaches. See SMOKE_FLOOR_FROM for what is believed where. Returns float32 0/1.
+        """
+        sh, sw = wisp_bin.shape[:2]
+        wisp = wisp_bin > 0
+        if smoke_strength >= self.SMOKE_SOFT_FROM:
+            thr = self.SMOKE_SOFT_AT_FULL + max(0.0, 100.0 - float(smoke_strength)) * self.SMOKE_SOFT_PER_STEP
+            weak = cv2.morphologyEx((soft > thr).astype(np.uint8), cv2.MORPH_OPEN,
+                                    cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))) > 0
         else:
-            shadow_mask = np.zeros((sh, sw), dtype=np.float32)
-
-        return (
-            np.clip(stand_protect * 255, 0, 255).astype(np.uint8),
-            np.clip(stand_remove * 255, 0, 255).astype(np.uint8),
-            np.clip(smoke_mask * 255, 0, 255).astype(np.uint8),
-            np.clip(shadow_mask * 255, 0, 255).astype(np.uint8),
-        )
+            weak = np.zeros((sh, sw), dtype=bool)
+        both = wisp | weak
+        if smoke_strength >= 100.0:
+            return both.astype(np.float32)
+        line = int(self.SMOKE_FLOOR_FROM * sh)
+        frame = float(sh * sw)
+        # every connected piece of "wisps or soft" is believed as a whole when enough of it lies above the line,
+        # or when it holds a real cloud of wisps; of the other pieces only the wisps above the line count
+        n, lbl, _, _ = cv2.connectedComponentsWithStats(both.astype(np.uint8), 8)
+        upper = np.zeros((sh, sw), dtype=bool)
+        upper[:line] = True
+        if n <= 1:
+            return (wisp & upper).astype(np.float32)
+        above = np.bincount(lbl[:line].ravel(), minlength=n).astype(np.float64)
+        n_w, lbl_w, st_w, _ = cv2.connectedComponentsWithStats(wisp.astype(np.uint8), 8)
+        cloud = np.zeros(n, dtype=bool)
+        if n_w > 1:
+            big = np.zeros(n_w, dtype=bool)
+            big[1:] = st_w[1:, cv2.CC_STAT_AREA] >= self.SMOKE_MIN_CLOUD * frame
+            cloud[np.unique(lbl[big[lbl_w]])] = True
+        keep = (above >= self.SMOKE_SOFT_MIN_AREA * frame) | cloud
+        keep[0] = False
+        return ((both & keep[lbl]) | (wisp & upper)).astype(np.float32)
 
     # ------------------------------------------------------------------
     # 3. Vinyl Join Seam Detector (Multi-scale thin/wide ratio)
@@ -3945,6 +4083,7 @@ class CleanVinylEngine:
             edge_prot = float(params.get("edge", 70))
             smoke_on = bool(params.get("smokeOn", True))
             smoke_auto = self._smoke_auto(params)
+            smoke_faint = self._smoke_faint(params)
             smoke_str = float(params.get("smoke", 80))
             keep_shadow = bool(params.get("shadow", True))
             remove_stands = bool(params.get("removeStands", False))
@@ -3968,7 +4107,7 @@ class CleanVinylEngine:
                 fg_mask_u8, core_mask_u8 = self._clean_fg_mask(fg_raw_1024, w, h, edge_prot)
                 stand_protect_s, stand_remove_s, smoke_s, shadow_s = self._compute_protection_maps_small(
                     img_rgb_u8, fg_mask_u8, core_mask_u8, smoke_str, smoke_on, keep_shadow, smoke_auto=smoke_auto,
-                    gear_body=gear_body,
+                    gear_body=gear_body, smoke_faint=smoke_faint,
                 )
                 eff_stand_protect = np.zeros_like(stand_protect_s) if remove_stands else stand_protect_s
                 eff_fg_for_spots = core_mask_u8 if remove_stands else fg_mask_u8
@@ -4247,8 +4386,10 @@ class CleanVinylEngine:
             edge_prot = float(params.get("edge", 70))
             smoke_on = bool(params.get("smokeOn", True))
             smoke_str = float(params.get("smoke", 80))
-            # "smokeAuto": protect smoke only on frames that really have it (the plugin asks for it; see SMOKE_MIN_SHARE)
+            # "smokeAuto": protect smoke only on frames that really have it (see SMOKE_MIN_SHARE). "smokeFaint" (the
+            # plugin sends this one since 4.11.0): the switch is the user's word, thin smoke is looked for as well
             smoke_auto = self._smoke_auto(params)
+            smoke_faint = self._smoke_faint(params)
             grain_keep = float(params.get("grain", 90))
             keep_shadow = bool(params.get("shadow", True))
             remove_stands = bool(params.get("removeStands", False))
@@ -4323,7 +4464,7 @@ class CleanVinylEngine:
                     sc[name] = (key, value)
 
             k_fg = self._fg_stage_key(edge_prot)
-            k_maps = (k_fg, smoke_str, smoke_on, smoke_auto, keep_shadow, gear_body)
+            k_maps = (k_fg, smoke_str, smoke_on, smoke_auto, smoke_faint, keep_shadow, gear_body)
             # The wall-floor corner and the seam search. With the corner tool on, the line is left to that tool: the
             # seam search skips its strip. With the tool at 0 (or when the selection holds only a part of the line,
             # so the tool leaves it) the seam search may take the line for a joint, as it always could - but only
@@ -4486,9 +4627,9 @@ class CleanVinylEngine:
                             smoke_info = {}
                             stand_protect_s, stand_remove_s, smoke_s, shadow_s = self._compute_protection_maps_small(
                                 img_rgb_u8, fg_mask_u8, core_mask_u8, smoke_str, smoke_on, keep_shadow,
-                                smoke_auto=smoke_auto, info=smoke_info, gear_body=gear_body,
+                                smoke_auto=smoke_auto, info=smoke_info, gear_body=gear_body, smoke_faint=smoke_faint,
                             )
-                            smoke_info.update({"on": bool(smoke_on), "auto": bool(smoke_auto)})
+                            smoke_info.update({"on": bool(smoke_on), "auto": bool(smoke_auto), "faint": bool(smoke_faint)})
                             _sc_put("maps", k_maps, (stand_protect_s, stand_remove_s, smoke_s, shadow_s, smoke_info))
                         eff_stand_protect = np.zeros_like(stand_protect_s) if remove_stands else stand_protect_s
                         eff_fg_for_spots = core_mask_u8 if remove_stands else fg_mask_u8
@@ -6080,8 +6221,16 @@ class CleanVinylEngine:
         True when smoke is protected only on frames that really have it ("smokeAuto", sent by the plugin). Not so
         with the protection off, and not from SMOKE_ALWAYS_FROM up on the slider (then smoke is taken on trust).
         """
-        return (bool(p.get("smokeOn", True)) and bool(p.get("smokeAuto", False))
+        return (bool(p.get("smokeOn", True)) and bool(p.get("smokeAuto", False)) and not bool(p.get("smokeFaint", False))
                 and float(p.get("smoke", 80)) < cls.SMOKE_ALWAYS_FROM)
+
+    @staticmethod
+    def _smoke_faint(p: dict) -> bool:
+        """
+        True when the smoke switch is the user's word ("smokeFaint", sent by the plugin since 4.11.0): the smoke is
+        protected without asking for evidence, thin smoke included (see SMOKE_SOFT_SCALES). It replaces "smokeAuto".
+        """
+        return bool(p.get("smokeOn", True)) and bool(p.get("smokeFaint", False))
 
     @staticmethod
     def _tone_stages_on(p: dict) -> bool:
@@ -6102,7 +6251,8 @@ class CleanVinylEngine:
             fl("spots", 75), fl("scuffs", 65), fl("blur", 0), fl("cycCurve", 0), fl("feather", 60),
             bool(p.get("seamOn", True)), fl("seam", 85), fl("edge", 70),
             bool(p.get("smokeOn", True)), fl("smoke", 80), fl("grain", 90),
-            CleanVinylEngine._smoke_auto(p), bool(p.get("seamJoin", True)), bool(p.get("grainLocal", True)),
+            CleanVinylEngine._smoke_auto(p), CleanVinylEngine._smoke_faint(p),
+            bool(p.get("seamJoin", True)), bool(p.get("grainLocal", True)),
             bool(p.get("gearBody", True)), bool(p.get("shadowSpots", True)),
             bool(p.get("toneEdge", True)), bool(p.get("cornerHair", True)),
             float(np.clip(fl("strayHair", 0), 0.0, 100.0)),
