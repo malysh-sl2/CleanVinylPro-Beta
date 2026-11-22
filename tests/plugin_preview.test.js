@@ -8,9 +8,10 @@
 //   - a preset click gives one light refresh with that preset's values and says what it changed;
 //   - the automatic preset: the presets travel with the photo, the server's choice lands on the controls;
 //   - a button pressed while the server is still starting is remembered and runs when the server answers;
-//   - smoke: the protection is off until it is asked for; every request asks for "protect smoke only where there
-//     is smoke", and the smoke controls say in words what the server saw (on a frame without smoke they change
-//     nothing - the note explains why); a frame that seems to have smoke says so when the window opens;
+//   - smoke: the protection is off until it is asked for; every request says that the switch is the user's word
+//     ("smokeFaint"), and the smoke controls say in words how much of the frame is kept for smoke - never "no smoke
+//     found" (a server before 4.11.0 still gets its own words); a frame that seems to have smoke says so when
+//     the window opens;
 //   - mask edits: Ctrl + Z / Ctrl + Shift + Z / Ctrl + Y and the two buttons step back and forward, edits reach
 //     the server one after another;
 //   - "Скинути пресет" gives one built-in preset the values it ships with, after a second press;
@@ -85,7 +86,9 @@ function makeEnv(serverOpts = {}) {
     scene: null,           // what the server sees in the frame, e.g. { kind: "wide", framing: "wide", dark: false }
     startMaskShare: null,  // share of the frame that is green after the first scan
     maskShares: [],        // ...and after each following recompute
-    frameSmoke: null,      // what the frame has of smoke, e.g. { share: 0.05, largest: 0.04, found: true }
+    frameSmoke: null,      // what the frame has of smoke, e.g. { share: 0.05, largest: 0.04, found: true }; with
+                           // kept / keptFull: the share that is protected on the user's word below 100 % / at 100 %
+    smokeOld: false,       // true = a server before 4.11.0: it knows nothing of "smokeFaint"
     disk: null,            // files in the plugin's data folder, e.g. { "presets_local.json": [...] }; null = no disk
     oldSceneRule: false,   // true = a server before 4.5.0: a dark frame is offered the "dark" set only
     historyAware: true,    // false = a server before 4.5.0: no steps back / forward for the mask edits
@@ -131,13 +134,21 @@ function makeEnv(serverOpts = {}) {
   const stopBackground = () => { for (const run of Array.from(bgRuns)) run.giveWay(); };
 
   const reply = (obj, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => obj, arrayBuffer: async () => new ArrayBuffer(0) });
-  // What the engine says of smoke for the parameters `p` (the rule of engine.py: _smoke_auto, SMOKE_ALWAYS_FROM)
+  // What the engine says of smoke for the parameters `p` (the rules of engine.py: _smoke_faint, _smoke_auto,
+  // SMOKE_ALWAYS_FROM)
   function smokeAnswer(p) {
-    if (!server.frameSmoke) return null;
+    const fs = server.frameSmoke;
+    if (!fs) return null;
     const on = !!p.smokeOn;
-    const auto = on && !!p.smokeAuto && Number(p.smoke) < 95;
-    const kept = on && (server.frameSmoke.found || !auto);
-    return Object.assign({}, server.frameSmoke, { on, auto, protected: kept ? Math.round(server.frameSmoke.share * 12000) / 10000 : 0 });
+    const faint = on && !!p.smokeFaint && !server.smokeOld;
+    const auto = on && !!p.smokeAuto && !faint && Number(p.smoke) < 95;
+    const usual = fs.share * 1.2;
+    let kept = 0;
+    if (faint) kept = Number(p.smoke) >= 100 ? (fs.keptFull ?? fs.kept ?? usual) : (fs.kept ?? usual);
+    else if (on && (fs.found || !auto)) kept = usual;
+    const ans = { share: fs.share, largest: fs.largest, found: fs.found, on, auto, protected: Math.round(kept * 10000) / 10000 };
+    if (!server.smokeOld) ans.faint = faint;
+    return ans;
   }
   function waitOrAbort(ms, signal) {
     return new Promise((resolve, reject) => {
@@ -1901,13 +1912,15 @@ async function main() {
     });
 
   // ---------------------------------------------------------------- smoke
-  await scenario("smoke: every request asks to protect smoke only where there is smoke; the corner presets go with the floor",
+  await scenario("smoke: every request says that the smoke switch is the user's word; the corner presets go with the floor",
     { scene: { kind: "wide", framing: "wide", dark: false } }, async (env, expect) => {
       await env.open();
       const start = env.of("/session/start")[0];
       const sp = start.body.scenePresets || {};
-      expect(start.body.params.smokeAuto === true, "the first scan must ask for it: " + JSON.stringify(start.body.params));
-      expect(Object.keys(sp).length === 8 && Object.keys(sp).every((k) => sp[k].smokeAuto === true), "...and so must every set of the automatic preset");
+      expect(start.body.params.smokeFaint === true && start.body.params.smokeAuto === true,
+        "the first scan must say it (and keep the older key for a server before 4.11.0): " + JSON.stringify(start.body.params));
+      expect(Object.keys(sp).length === 8 && Object.keys(sp).every((k) => sp[k].smokeFaint === true && sp[k].smokeAuto === true),
+        "...and so must every set of the automatic preset");
       expect(sp.wide.cycCurve === 65 && sp.medium.cycCurve === 65 && sp.default.cycCurve === 65 && sp.dark.cycCurve === 65 && sp.dark_wide.cycCurve === 65 &&
         sp.dark_medium.cycCurve === 65 && sp.close.cycCurve === 0 && sp.dark_close.cycCurve === 0,
         "the corner line goes by default wherever a floor is usually in the frame and stays in the two close-up presets: "
@@ -1916,15 +1929,70 @@ async function main() {
       await env.drag("gSlSpots", 90);
       await env.settle(900);
       const rc = env.recomputes();
-      expect(rc.length === 1 && rc[0].body.params.smokeAuto === true && rc[0].body.params.cycCurve === 65, "a refresh must carry it too");
+      expect(rc.length === 1 && rc[0].body.params.smokeFaint === true && rc[0].body.params.smokeAuto === true && rc[0].body.params.cycCurve === 65,
+        "a refresh must carry it too");
       env.click("dlgBtnApply");
       await env.settle(900);
       const ap = env.of("/session/apply");
-      expect(ap.length === 1 && ap[0].body.params.smokeAuto === true, "...and Apply as well");
+      expect(ap.length === 1 && ap[0].body.params.smokeFaint === true && ap[0].body.params.smokeAuto === true, "...and Apply as well");
     });
 
-  await scenario("smoke controls on a frame without smoke: the note says why nothing changes",
-    { frameSmoke: { share: 0.004, largest: 0.002, found: false } }, async (env, expect) => {
+  // His report on 4.10.0: "I press that there is smoke and it says no, there is none".
+  await scenario("the smoke switch is the user's word: it is never answered with 'no smoke found'",
+    { frameSmoke: { share: 0.004, largest: 0.002, found: false, kept: 0, keptFull: 0.21 } }, async (env, expect) => {
+      env.check("dlgChkAutoPreset", false);
+      await env.open();
+      await env.settle(300);
+      expect(env.badge() === "", "a frame without smoke opens without a word about smoke: " + env.badge());
+      env.check("dlgChkSmoke", true);                        // "I shot with smoke"
+      expect(env.hint().includes("увімкнено") && env.hint().includes("оновлюю перегляд"), "ticking the box must say at once that the preview is being refreshed: " + env.hint());
+      await env.settle(900);
+      let rc = env.recomputes();
+      expect(rc.length === 1 && rc[0].body.params.smokeOn === true && rc[0].body.params.smokeFaint === true && rc[0].body.quick === true,
+        "one light refresh with the protection on, taken on the user's word");
+      const denies = (t) => t.includes("не знайдено") || t.includes("нічого не змінює") || t.includes("той самий") || t.includes("немає");
+      expect(env.badge().includes("Захист диму увімкнено") && env.badge().includes("не розпізнала") && env.badge().includes("до 100 %"),
+        "nothing is kept yet: the note must say so and say what to do: " + env.badge());
+      expect(!denies(env.badge()), "the note must not say that the frame has no smoke - the user has just said it has: " + env.badge());
+      expect(env.hint() === env.badge(), "the same words must stay in the hint strip after the note is gone: " + env.hint());
+      env.check("dlgChkSmoke", false);
+      await env.settle(900);
+      rc = env.recomputes();
+      expect(rc.length === 2 && rc[1].body.params.smokeOn === false, "one more refresh with the protection off");
+      expect(env.badge().includes("вимкнено") && env.badge().includes("чиститься") && !denies(env.badge()),
+        "switched off: the note must say that everything is cleaned, without a word on whether smoke is there: " + env.badge());
+      env.check("dlgChkSmoke", true);
+      await env.settle(900);
+      await env.drag("gSlSmoke", 100);                       // "protect it anyway"
+      await env.settle(1100);
+      rc = env.recomputes();
+      expect(rc.length === 4 && rc[3].body.params.smoke === 100 && rc[3].body.params.smokeOn === true, "the slider gives one more refresh");
+      expect(env.badge().includes("Захист диму увімкнено") && env.badge().includes("21 %") && env.badge().includes("бере за дим") && !denies(env.badge()),
+        "the note must say how much of the frame is kept now: " + env.badge());
+      await env.drag("gSlSpots", 90);                        // another control: no words about smoke
+      await env.settle(1100);
+      expect(env.recomputes().length === 5, "the other slider refreshes as usual");
+      expect(!env.badge().includes("бере за дим"), "the smoke note must not come back after another control: " + env.badge());
+    });
+
+  await scenario("thin smoke that the search by wisps does not call smoke: the tick protects it and says how much",
+    { frameSmoke: { share: 0.02, largest: 0.005, found: false, kept: 0.24 } }, async (env, expect) => {
+      env.check("dlgChkAutoPreset", false);
+      await env.open();
+      await env.settle(300);
+      expect(env.badge() === "", "too little of it to speak of smoke at the opening: " + env.badge());
+      env.click("gBtnSmoke");                                // the switch in the fine settings
+      await env.settle(900);
+      const rc = env.recomputes();
+      expect(rc.length === 1 && rc[0].body.params.smokeOn === true && rc[0].body.params.smokeFaint === true, "one refresh with the protection on");
+      expect(env.badge().includes("Захист диму увімкнено") && env.badge().includes("24 %") && env.badge().includes("бере за дим") && env.badge().includes("вище"),
+        "the note must say how much is kept and which way the slider goes: " + env.badge());
+      expect(!env.badge().includes("не знайдено") && !env.badge().includes("нічого не змінює"), "...and must not deny the smoke: " + env.badge());
+      expect(env.el("dlgChkSmoke").checked, "the checkbox on top must follow the switch");
+    });
+
+  await scenario("a server before 4.11.0, smoke controls on a frame without smoke: its own words, as before",
+    { frameSmoke: { share: 0.004, largest: 0.002, found: false }, smokeOld: true }, async (env, expect) => {
       env.check("dlgChkAutoPreset", false);
       await env.open();
       await env.settle(300);
@@ -1968,8 +2036,9 @@ async function main() {
       env.check("dlgChkSmoke", true);
       await env.settle(900);
       let rc = env.recomputes();
-      expect(rc.length === 1 && rc[0].body.params.smokeOn === true && rc[0].body.params.smokeAuto === true, "one refresh with the protection on");
-      expect(env.badge().includes("Дим знайдено") && env.badge().includes("6,0 %"), "the note must say that the smoke is protected now: " + env.badge());
+      expect(rc.length === 1 && rc[0].body.params.smokeOn === true && rc[0].body.params.smokeFaint === true, "one refresh with the protection on");
+      expect(env.badge().includes("Захист диму увімкнено") && env.badge().includes("6,0 %") && env.badge().includes("бере за дим"),
+        "the note must say that the smoke is protected now: " + env.badge());
       expect(env.el("gBtnSmoke").textContent === "Увімк.", "the switch in the fine settings must follow the checkbox");
       env.click("gBtnSmoke");                                // ...and the switch works the other way round
       await env.settle(900);
@@ -1988,11 +2057,30 @@ async function main() {
       await env.open();
       await env.settle(300);
       const p = env.of("/session/start")[0].body.params;
-      expect(p.smokeOn === true && p.smoke === 95, "the first scan must protect smoke: " + JSON.stringify([p.smokeOn, p.smoke]));
-      expect(env.badge().includes("95–100") && env.badge().includes("збережено"), "the opening note must say that smoke is kept: " + env.badge());
+      expect(p.smokeOn === true && p.smoke === 95 && p.smokeFaint === true, "the first scan must protect smoke: " + JSON.stringify([p.smokeOn, p.smoke, p.smokeFaint]));
+      expect(env.badge().includes("Захист диму увімкнено") && env.badge().includes("6,0 %"), "the opening note must say that smoke is kept: " + env.badge());
       env.click("dlgBtnPresets");
       env.clickPreset("Студія (Стандарт)");
       expect(!env.el("dlgChkSmoke").checked, "another preset switches the protection off again");
+    });
+
+  await scenario("the window opens with the protection on and nothing is recognised as smoke: said at once",
+    { frameSmoke: { share: 0.004, largest: 0.002, found: false, kept: 0 } }, async (env, expect) => {
+      env.check("dlgChkAutoPreset", false);
+      env.state("applyPreset(presetsList.find((p) => p.id === 'smoke')); renderPresets(); updateSliderVisuals();");
+      await env.open();
+      await env.settle(300);
+      expect(env.badge().includes("Захист диму увімкнено") && env.badge().includes("не розпізнала") && env.badge().includes("до 100 %"),
+        "the opening note must say that nothing is kept and what to do: " + env.badge());
+    });
+
+  await scenario("a server before 4.11.0 with the preset 'Зйомка з димом': its own words at the opening",
+    { frameSmoke: { share: 0.05, largest: 0.04, found: true }, smokeOld: true }, async (env, expect) => {
+      env.check("dlgChkAutoPreset", false);
+      env.state("applyPreset(presetsList.find((p) => p.id === 'smoke')); renderPresets(); updateSliderVisuals();");
+      await env.open();
+      await env.settle(300);
+      expect(env.badge().includes("95–100") && env.badge().includes("збережено"), "the opening note must say that smoke is kept: " + env.badge());
     });
 
   await scenario("an older server that says nothing of smoke: no smoke notes, nothing breaks", {}, async (env, expect) => {

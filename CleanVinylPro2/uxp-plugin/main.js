@@ -549,9 +549,11 @@ function readCurrentConfig() {
     edge: getSliderVal("gSlEdge"),
     smokeOn: smokeEnabled,
     smoke: getSliderVal("gSlSmoke"),
-    // Smoke is protected only on frames that really have it: the server looks for it and says what it saw
-    // (see smokeNoteText). From 95% up on the slider smoke is taken on trust and everything smoke-like is kept.
+    // The smoke switch is the user's word - "this frame has smoke": the server asks for no evidence and looks for
+    // thin smoke as well (smokeFaint, since 4.11.0), and says how much of the frame it keeps (see smokeNoteText).
+    // smokeAuto is what a server before 4.11.0 understands: smoke protected only when the frame has enough of it.
     smokeAuto: true,
+    smokeFaint: true,
     grain: getSliderVal("gSlGrain"),
     shadow: el("gChkShadow") ? el("gChkShadow").checked : true,
     removeStands: el("gChkRemoveStands") ? el("gChkRemoveStands").checked : false,
@@ -591,6 +593,7 @@ function normalizedPresetConfig(cfg) {
     smokeOn: flag(c.smokeOn, false),
     smoke: clampSliderVal("gSlSmoke", c.smoke ?? 80),
     smokeAuto: true,
+    smokeFaint: true,
     grain: clampSliderVal("gSlGrain", c.grain ?? 90),
     shadow: flag(c.shadow, true),
     removeStands: !!c.removeStands,
@@ -2578,13 +2581,24 @@ function presetNoteText(note, shareNow) {
 
 // What the server saw of smoke in this frame, in words. `sm` comes with every answer of the big window:
 // { share, largest: smoke-like areas / the biggest of them (share of the frame), found: enough of it to call it
-//   smoke, protected: share of the frame that is kept, on: protection asked for, auto: only when smoke is found }.
+//   smoke, protected: share of the frame that is kept, on: protection asked for, auto: only when smoke is found,
+//   faint: the switch was taken as the user's word (a server from 4.11.0 on always sends this key) }.
+// With such a server the switch is never answered with "no smoke found": the user says there is smoke, the
+// program says how much of the frame it keeps for it and which way to move the slider.
 function smokeNoteText(sm) {
   if (!sm || typeof sm !== "object") return "";
+  const byWord = "faint" in sm;
   if (!sm.on) {
-    return sm.found
-      ? `Захист диму вимкнено: дим у кадрі (${percentOfFrame(sm.share)}) чиститься як звичайний фон.`
+    if (sm.found) return `Захист диму вимкнено: дим у кадрі (${percentOfFrame(sm.share)}) чиститься як звичайний фон.`;
+    return byWord
+      ? "Захист диму вимкнено: увесь фон чиститься як звичайний — і дим, якщо він там є."
       : "Захист диму вимкнено. Диму в кадрі й так не знайдено — результат той самий.";
+  }
+  if (byWord && sm.faint) {
+    if (!(sm.protected > 0)) {
+      return "Захист диму увімкнено, але програма не розпізнала в кадрі диму, тож поки нічого не береже. Дим є? Потягніть «Захист диму» до 100 % — тоді вона береже все м’яке на фоні, і на підлозі теж.";
+    }
+    return `Захист диму увімкнено: ${percentOfFrame(sm.protected)} кадру програма бере за дим і не чистить. Частину диму все одно зачищено — потягніть «Захист диму» вище (до 100 %); береже бруд — нижче.`;
   }
   if (!sm.found && sm.auto) {
     return "Перегляд оновлено. Диму в кадрі не знайдено, тому захист диму тут нічого не змінює — картинка та сама. Дим є, але ледь помітний? Поставте «Захист диму» на 95–100 %.";
@@ -3013,7 +3027,8 @@ async function openInteractiveWorkspace() {
       // Smoke in the frame changes what is cleaned, so it is said right away (no smoke - the usual case - no words)
       const smokeSeen = res.smoke || (res.scene && res.scene.smoke) || null;
       let smokeNote = "";
-      if (untouched && smokeSeen && smokeSeen.on && smokeSeen.protected > 0) smokeNote = smokeNoteText(smokeSeen);
+      // (a server from 4.11.0 on takes the switch on trust: then it is also said when it keeps nothing)
+      if (untouched && smokeSeen && smokeSeen.on && (smokeSeen.protected > 0 || smokeSeen.faint)) smokeNote = smokeNoteText(smokeSeen);
       else if (untouched && smokeSeen && !smokeSeen.on && smokeSeen.found) smokeNote = smokeOffHintText(smokeSeen);
       if (autoNote || smokeNote) showPreviewNote([autoNote, smokeNote].filter(Boolean).join(" "), smokeNote ? 12000 : 8000);
       // what the first scan took - and a warning when its AI fill ran on the processor (it goes before the note)

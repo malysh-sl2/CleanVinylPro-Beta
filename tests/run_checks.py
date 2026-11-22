@@ -258,11 +258,11 @@ def _mutate(p, rng):
         k = str(rng.choice(["spots", "scuffs", "blur", "cycCurve", "feather", "seam", "edge", "smoke", "grain", "master",
                             "seamOn", "smokeOn", "shadow", "removeStands", "fracFine", "fracMed", "fracLarge",
                             "cleanPasses", "speedMode", "autoFractions", "same", "blur", "cycCurve", "scuffs", "blur",
-                            "feather", "spots", "smokeAuto", "seamJoin", "cycCurve", "scuffs"]))
+                            "feather", "spots", "smokeAuto", "seamJoin", "cycCurve", "scuffs", "smokeFaint"]))
         if k == "same":
             continue
         if k in ("seamOn", "smokeOn", "shadow", "removeStands", "fracFine", "fracMed", "fracLarge", "autoFractions",
-                 "smokeAuto", "seamJoin"):
+                 "smokeAuto", "seamJoin", "smokeFaint"):
             p[k] = not bool(p.get(k, False))
         elif k == "cleanPasses":
             p[k] = 3 - int(p.get(k, 1))
@@ -1048,15 +1048,15 @@ def check_smoke():
     dirt = cv2.GaussianBlur(dirt, (0, 0), 12)
     dirty = np.clip(img.astype(np.float32) + (wisps * dirt)[..., None], 0, 255).astype(np.uint8)
 
-    def texture(a, zone):
+    def texture(a, zone, band=(4.0, 20.0)):
         g = a.astype(np.float32).mean(axis=2)
-        band = cv2.GaussianBlur(g, (0, 0), 4.0) - cv2.GaussianBlur(g, (0, 0), 20.0)
-        return float(np.sqrt((band[zone > 0.6] ** 2).mean()))
+        mid = cv2.GaussianBlur(g, (0, 0), band[0]) - cv2.GaussianBlur(g, (0, 0), band[1])
+        return float(np.sqrt((mid[zone > 0.6] ** 2).mean()))
 
-    def cleaned(frame, zone, **over):
+    def cleaned(frame, zone, band=(4.0, 20.0), **over):
         eng = H.make_engine(E, sil)
         out, stats = _quiet(eng.process, frame, 8, dict(H.STD, spots=0, seamOn=False, speedMode="fast", **over))
-        return stats.get("smoke") or {}, texture(_comp(frame, out), zone) / texture(frame, zone)
+        return stats.get("smoke") or {}, texture(_comp(frame, out), zone, band) / texture(frame, zone, band)
 
     sm, kept = cleaned(dirty, dirt, smokeAuto=True)
     if sm.get("found") is not False or sm.get("protected") != 0.0 or sm.get("on") is not True or sm.get("auto") is not True or kept > 0.7:
@@ -1087,6 +1087,164 @@ def check_smoke():
         bad.append(f"the window must say that smoke was found and protected: {s1}")
     if s2.get("on") is not False or s2.get("protected") != 0.0 or s2.get("found") is not True or s3 != s2:
         bad.append(f"after the protection is switched off the window must say so (light and full refresh alike): {s2} / {s3}")
+
+    # ---- The smoke switch as the user's word ("smokeFaint", sent by the plugin since 4.11.0) ----
+    # His report on 4.10.0: on a light backdrop the program knows the smoke where there is much of it and not where
+    # there is little, and "I press that there is smoke and it says no, there is none".
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+
+    def billows(seed_b, sigma=22.0, std=2.0):   # thin smoke: soft billows of two levels, no fine wisps
+        b = cv2.GaussianBlur(np.random.default_rng(seed_b).standard_normal((h, w)).astype(np.float32), (0, 0), sigma)
+        return b * (std / float(b.std()))
+
+    def oval(cx, cy, rx, ry, soft):
+        m = np.zeros((h, w), np.float32)
+        cv2.ellipse(m, (int(w * cx), int(h * cy)), (int(w * rx), int(h * ry)), 0, 0, 360, 1.0, -1)
+        return cv2.GaussianBlur(m, (0, 0), soft)
+
+    def with_smoke(pattern, zone):
+        return np.clip(img.astype(np.float32) + (pattern * zone)[..., None], 0, 255).astype(np.uint8)
+
+    def word_map(image, strength=80.0):
+        """The smoke map with the switch taken on trust, at the size of the frame."""
+        eng_w = H.make_engine(E, sil)
+        fg_w, core_w = eng_w._clean_fg_mask(np.clip(sil * 255, 0, 255).astype(np.uint8), w, h, 70.0)
+        sm_w = eng_w._compute_protection_maps_small(image, fg_w, core_w, float(strength), True, True, smoke_faint=True)[2]
+        return cv2.resize(sm_w, (w, h), interpolation=cv2.INTER_LINEAR) > 100
+
+    thin_band = (11.0, 44.0)
+    in_thin = cloud > 0.6
+    thin = with_smoke(billows(5), cloud)
+    sm, old_left = cleaned(thin, cloud, band=thin_band, smokeAuto=True)   # the way of 4.10.0: this is his report
+    if sm.get("found") is not False or sm.get("protected") != 0.0 or old_left > 0.6:
+        bad.append(f"the thin cloud of this check must be one that the search by wisps does not see: {sm}, {old_left * 100:.0f}% left")
+    sm, kept = cleaned(thin, cloud, band=thin_band, smokeAuto=True, smokeFaint=True)
+    if sm.get("faint") is not True or sm.get("auto") is not False or not (sm.get("protected", 0) > 0.04) or kept < 0.9:
+        bad.append(f"thin smoke with the switch on must be protected on the user's word: {sm}, {kept * 100:.0f}% of its texture left")
+    note += f"; the switch as the user's word: thin smoke kept {kept * 100:.0f}% (the way of 4.10.0: {old_left * 100:.0f}%)"
+    sm, kept = cleaned(smoky, cloud, smokeAuto=True, smokeFaint=True)
+    if sm.get("found") is not True or not (sm.get("protected", 0) > 0.05) or kept < 0.95:
+        bad.append(f"a real cloud with the switch on: {sm}, {kept * 100:.0f}% of its texture left")
+    # nothing on a clean wall, nothing next to the person
+    plain_w = word_map(img)
+    wall_w, ring_w = float(plain_w[: int(h * 0.45)].mean()), float(plain_w[near].mean())
+    if wall_w > 0.01 or ring_w > 0.03:
+        bad.append(f"no smoke in the frame, the switch on: {wall_w * 100:.1f}% of the wall and {ring_w * 100:.1f}% of the ring around the person are 'smoke'")
+    # the slider: under SMOKE_SOFT_FROM only wisps count, higher up it reaches thinner smoke
+    got_lo = float(word_map(thin, ENG.SMOKE_SOFT_FROM - 1.0)[in_thin].mean())
+    got_80, got_95 = float(word_map(thin)[in_thin].mean()), float(word_map(thin, 95.0)[in_thin].mean())
+    if got_lo > 0.02 or got_80 < 0.75 or got_95 < got_80:
+        bad.append(f"thin smoke by the slider: {got_lo * 100:.0f}% of the cloud under {ENG.SMOKE_SOFT_FROM:.0f}, {got_80 * 100:.0f}% at 80, {got_95 * 100:.0f}% at 95")
+    note += f", {got_80 * 100:.0f}% of its cloud at 80 and {got_95 * 100:.0f}% at 95"
+    # one direction is not smoke: the soft rim of a pool of light on the wall
+    r_pool = np.sqrt((xx - 0.30 * w) ** 2 + (yy - 0.30 * h) ** 2)
+    pool = 1.0 / (1.0 + np.exp((r_pool - 0.20 * w) / 18.0))
+    lit = np.clip(img.astype(np.float32) * (1.0 + 0.30 * pool[..., None]), 0, 255).astype(np.uint8)
+    rim = float(word_map(lit)[np.abs(r_pool - 0.20 * w) < 60].mean())
+    if rim > 0.3:
+        bad.append(f"the rim of a pool of light is taken for smoke on {rim * 100:.0f}% of its length")
+    note += f"; rim of a pool of light {rim * 100:.0f}%"
+    # the floor next to the feet: dirt stays dirt until the slider says "everything" (100 %)
+    line = ENG.SMOKE_FLOOR_FROM
+    for value, limit in ((80.0, None), (95.0, None), (100.0, 0.95)):
+        sm, kept = cleaned(dirty, dirt, smokeAuto=True, smokeFaint=True, smoke=value)
+        in_dirt = float(word_map(dirty, value)[dirt > 0.6].mean())
+        if limit is None and (kept > 0.7 or in_dirt > 0.02):
+            bad.append(f"dirty floor, the switch on, slider {value:.0f}: {kept * 100:.0f}% of the dirt left, {in_dirt * 100:.0f}% of it protected")
+        if limit is not None and (kept < limit or in_dirt < 0.9):
+            bad.append(f"slider {value:.0f} means everything soft, the floor too: {kept * 100:.0f}% of the dirt left, {in_dirt * 100:.0f}% of it protected")
+    # thin smoke that comes down to the floor is kept there too; thin smoke on the floor alone only at 100 %
+    low = oval(0.22, line + 0.02, 0.16, 0.15, 25)
+    under = (low > 0.6) & (yy > (line + 0.04) * h)
+    down = float(word_map(with_smoke(billows(6), low))[under].mean())
+    alone = oval(0.22, line + 0.175, 0.16, 0.05, 20)
+    alone_img = with_smoke(billows(6), alone)
+    alone_80, alone_100 = float(word_map(alone_img)[alone > 0.6].mean()), float(word_map(alone_img, 100.0)[alone > 0.6].mean())
+    if down < 0.9 or alone_80 > 0.05 or alone_100 < 0.9:
+        bad.append(f"thin smoke at the floor: {down * 100:.0f}% of the part under the line of a cloud that comes from above; "
+                   f"a cloud on the floor alone {alone_80 * 100:.0f}% at 80 and {alone_100 * 100:.0f}% at 100")
+    note += f"; floor: dirt cleaned, smoke from above kept {down * 100:.0f}%, alone {alone_80 * 100:.0f}% / {alone_100 * 100:.0f}% at 100"
+    # A line is not smoke. (1) A soft straight line across the wall, crossed by the fall-off of the light: two
+    # straight things that cross have two directions too - the light is taken out first, up to the very border.
+    row_l = int(0.35 * h)
+    step_l = 1.0 / (1.0 + np.exp(-np.clip((yy - row_l) / 4.0, -50, 50)))
+    lined = np.clip(img.astype(np.float32) - 9.0 * step_l[..., None], 0, 255).astype(np.uint8)
+    on_line = np.abs(yy - row_l) < 10
+    ends = on_line & ((xx < 0.08 * w) | (xx > 0.92 * w))
+    for value in (80.0, 95.0, 100.0):
+        got_l = word_map(lined, value)
+        if float(got_l[on_line].mean()) > 0.03 or float(got_l[ends].mean()) > 0.03:
+            bad.append(f"a straight line on the wall, slider {value:.0f}: {got_l[on_line].mean() * 100:.0f}% of it is 'smoke' "
+                       f"({got_l[ends].mean() * 100:.0f}% of its two ends at the frame border)")
+    slope = np.add.outer(np.arange(6, dtype=np.float32) * 2, np.arange(5, dtype=np.float32) * 3)
+    known = np.ones_like(slope)
+    known[0, 1] = 0.0
+    past, past_w = ENG._continued_past_border(slope, known, 3)
+    want = np.add.outer((np.arange(12, dtype=np.float32) - 3) * 2, (np.arange(11, dtype=np.float32) - 3) * 3)
+    if past.shape != (12, 11) or not np.allclose(past, want) or float(past_w[:3, 4].max()) != 0.0 or float(past_w[:3, 5].min()) != 1.0:
+        bad.append("_continued_past_border: a slope must go on as the same slope past every border, and what leans on an "
+                   "unknown border value must not count")
+    # (2) a band of wisps is a line, whichever way it lies; a cloud, a thick band, a short piece, a bent one are not
+    shapes = np.zeros((400, 600), np.uint8)
+    cv2.line(shapes, (40, 60), (340, 90), 1, 14)              # 1: a thin straight band, a little tilted
+    cv2.ellipse(shapes, (470, 80), (70, 45), 0, 0, 360, 1, -1)  # 2: a cloud
+    cv2.line(shapes, (40, 200), (340, 200), 1, 60)            # 3: a thick band
+    cv2.line(shapes, (420, 200), (455, 200), 1, 14)           # 4: a short piece
+    cv2.line(shapes, (60, 300), (260, 300), 1, 14)            # 5: a bent one
+    cv2.line(shapes, (260, 300), (260, 390), 1, 14)
+    left = H.make_engine(E, sil)._smoke_without_lines(shapes > 0)
+    probes = {"thin straight band": (190, 75, False), "cloud": (470, 80, True), "thick band": (190, 200, True),
+              "short piece": (437, 200, True), "bent band": (160, 300, True)}
+    wrong = [name for name, (px, py, stays) in probes.items() if bool(left[py, px]) != stays]
+    if wrong:
+        bad.append(f"_smoke_without_lines: only a thin straight band of wisps is a line; wrong for: {', '.join(wrong)}")
+
+    def after(frame, **over):
+        eng_l = H.make_engine(E, sil)
+        out, stats = _quiet(eng_l.process, frame, 8, dict(H.STD, speedMode="fast", smokeAuto=True, smokeFaint=True, **over))
+        return _comp(frame, out), stats
+
+    def corner_left(res):   # the steepest change across the wall-floor corner, left of the person (levels per pixel)
+        g = res[:, int(0.05 * w):int(0.30 * w)].astype(np.float32).mean(axis=(1, 2))
+        g = cv2.GaussianBlur(g.reshape(-1, 1), (0, 0), 3).ravel()
+        return float(np.abs(np.gradient(g))[int(0.62 * h) - 40:int(0.62 * h) + 40].max())
+
+    # (3) the vinyl seam gives a band of wisps: at 100 % - "everything" - it is still a seam and is repaired
+    seam_off, seam_full = after(img, smokeOn=False)[1].get("seam_px", 0), after(img, smoke=100)[1].get("seam_px", 0)
+    if seam_off < 5000 or seam_full < 0.9 * seam_off:
+        bad.append(f"the seam with the smoke switch at 100 %: {seam_full} px found for repair, {seam_off} with the switch off")
+    # (4) the tools for lines stop under thick smoke only: the corner goes under thin smoke as well, and a frame
+    # without smoke loses its corner at any value of the slider
+    corner_in = corner_left(img)
+    corner_off = corner_left(after(img, smokeOn=False, cycCurve=65)[0])
+    corner_on = max(corner_left(after(img, smoke=value, cycCurve=65)[0]) for value in (95, 100))
+    if corner_in < 0.3 or corner_off > 0.15 or corner_on > corner_off + 0.05:
+        bad.append(f"the corner of a frame without smoke: {corner_in:.2f} levels/px in the frame, {corner_off:.2f} after the corner "
+                   f"tool, {corner_on:.2f} with the smoke switch at 95-100 %")
+    over_corner = oval(0.17, 0.62, 0.14, 0.13, 25)
+    thin_c = with_smoke(billows(7), over_corner)
+    taken = float(word_map(thin_c)[over_corner > 0.6].mean())
+    corner_thin = corner_left(after(thin_c, smoke=80, cycCurve=65)[0])
+    if taken < 0.75 or corner_thin > 0.2:
+        bad.append(f"thin smoke over the corner: {taken * 100:.0f}% of it is taken for smoke; the corner under it is left at "
+                   f"{corner_thin:.2f} levels/px ({corner_left(thin_c):.2f} in the frame)")
+    note += (f"; lines: a wall line 0%, the seam at 100 % {seam_full} px (off: {seam_off}), the corner {corner_in:.2f} -> "
+             f"{corner_on:.2f} at 95-100 % and {corner_thin:.2f} under thin smoke")
+
+    # the window: the answer says that the switch was taken on trust, and the maps follow the key
+    eng = H.make_engine(E, sil)
+    win = dict(H.STD, speedMode="fast", smokeAuto=True, smokeFaint=True, smokeOn=False)
+    r1 = _quiet(eng.start_session, thin, 8, dict(win))
+    r2 = _quiet(eng.recompute_session, r1["session_id"], dict(win, smokeOn=True), True, None, True)
+    r3 = _quiet(eng.recompute_session, r1["session_id"], dict(win, smokeOn=True), True, None, False)
+    r4 = _quiet(eng.recompute_session, r1["session_id"], dict(win, smokeOn=True, smokeAuto=False, smokeFaint=False), True, None, True)
+    s1, s2, s3, s4 = (r.get("smoke") or {} for r in (r1, r2, r3, r4))
+    if s1.get("on") is not False or s1.get("faint") is not False or s1.get("protected") != 0.0:
+        bad.append(f"the window opens with the switch off: {s1}")
+    if s2.get("on") is not True or s2.get("faint") is not True or s2.get("auto") is not False or not (s2.get("protected", 0) > 0.04) or s3 != s2:
+        bad.append(f"the switch on in the window: the answer must say 'faint' and what is protected (light and full refresh alike): {s2} / {s3}")
+    if s4.get("faint") is not False or s4.get("auto") is not False or s4.get("protected") == s2.get("protected"):
+        bad.append(f"the same values without 'smokeFaint' are another request (only the wisps count) - the maps must be made anew: {s4}")
     report("smoke", not bad, note if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 

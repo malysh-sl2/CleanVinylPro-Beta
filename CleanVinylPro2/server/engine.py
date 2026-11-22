@@ -180,11 +180,22 @@ class CleanVinylEngine:
     # A place counts only when the weaker direction has at least this share of the stronger one: the curved rim
     # of a pool of light or of a round shadow has a little of the second direction too.
     SMOKE_SOFT_MIN_RATIO = 0.10
+    # The light is taken out before the measuring - whatever is as slow as this (pixels of the 1024 px copy): two
+    # straight things that cross have two directions as well. Without it the fall-off of the light along the
+    # wall, crossed by the wall-floor line, was "smoke" all along the line (12 % of the test frame of the checks
+    # at 80 %, and on the owner's frame 1 a patch at the line that stopped the corner tool).
+    SMOKE_SOFT_FLATTEN = 40.0
     # The threshold of that measure by the slider: ..._AT_FULL at 100 %, higher by ..._PER_STEP for every percent
-    # below (0.45 at the usual 80 %); under ..._FROM the soft search is off and only the wisps count. Synthetic
-    # smoke over the owner's frames: curls of 1.5 levels and more give 0.45 and more, a clean wall under 0.25.
+    # down to the usual 80 % (0.36 there), by ..._PER_STEP_LOW below that (0.48 at 60 %); under ..._FROM the soft
+    # search is off and only the wisps count. Measured on the owner's seven frames (none has smoke) and on smoke
+    # drawn over them: the backdrop itself - grain, paper, old scuffs - gives up to about 0.30 (at 0.30 a fifth
+    # of his frame 1 is "smoke", at 0.315 nothing), curls of 1.5 levels and more give 0.36 and more. So 80 %
+    # finds such curls and leaves his plain frames alone, and the last steps before 100 % reach what cannot be
+    # told from the backdrop's own unevenness.
     SMOKE_SOFT_AT_FULL = 0.30
-    SMOKE_SOFT_PER_STEP = 0.0075
+    SMOKE_SOFT_PER_STEP = 0.003
+    SMOKE_SOFT_USUAL = 80.0
+    SMOKE_SOFT_PER_STEP_LOW = 0.006
     SMOKE_SOFT_FROM = 40.0
     # What is believed where. Above SMOKE_FLOOR_FROM of the frame height (the same line below which the dust
     # search does not listen to the smoke map) every cloud of wisps is smoke, and so is every soft area that
@@ -196,6 +207,14 @@ class CleanVinylEngine:
     # (SMOKE_MIN_CLOUD). At 100 % on the slider everything counts, the floor too.
     SMOKE_FLOOR_FROM = 0.70
     SMOKE_SOFT_MIN_AREA = 0.004
+    SMOKE_PIECE_GAP = 17
+    # A line is not smoke. The search by wisps answers along every soft line - the wall-floor corner on a light
+    # backdrop above all: with the slider at 95-100 % of 4.10.0 the corner of the owner's frame 1 was "smoke", the
+    # corner tool left it alone and the line stayed. Such an answer is a thin straight band: at most ..._WIDTH
+    # across (pixels of the 1024 px copy), at least ..._ASPECT times as long, and filling its box by ..._FILL.
+    SMOKE_LINE_WIDTH = 30.0
+    SMOKE_LINE_ASPECT = 4.0
+    SMOKE_LINE_FILL = 0.60
 
     def __init__(self, models_dir: str, idle_unload_sec: float = DEFAULT_IDLE_UNLOAD_SEC, load_models: bool = True):
         """load_models=False builds the engine without touching the model files (used by tests/ with stub sessions)."""
@@ -1026,6 +1045,7 @@ class CleanVinylEngine:
         info: dict | None = None,
         gear_body: bool = False,
         smoke_faint: bool = False,
+        lines_out: dict | None = None,
     ):
         """
         Returns (stand protection, stand removal, smoke protection, shadow) maps, uint8, long side 1024.
@@ -1135,8 +1155,11 @@ class CleanVinylEngine:
         stand_remove[core_s > 0.35] = 0.0
 
         # B. White & colored smoke protection
-        smoke_mask = self._smoke_zone_small(L, A, B, fg_s, stand_mask, edges_any, smoke_strength, protect_smoke,
-                                            smoke_auto, info, smoke_faint)
+        smoke_mask, smoke_dense = self._smoke_zone_small(L, A, B, fg_s, stand_mask, edges_any, smoke_strength,
+                                                         protect_smoke, smoke_auto, info, smoke_faint)
+        if lines_out is not None:
+            # the smoke that the tools for lines respect (the corner, the seams): see _smoke_zone_small
+            lines_out["smoke"] = np.clip(smoke_dense * 255, 0, 255).astype(np.uint8)
 
         # C. Cast & contact shadows (multi-scale close catches both tight contact & wide full-body shadows!)
         if keep_shadows:
@@ -1162,14 +1185,20 @@ class CleanVinylEngine:
 
     def _smoke_zone_small(self, L: np.ndarray, A: np.ndarray, B: np.ndarray, fg_s: np.ndarray, stand_mask: np.ndarray,
                           edges_any: np.ndarray, smoke_strength: float, protect_smoke: bool, smoke_auto: bool,
-                          info: dict | None, smoke_faint: bool = False) -> np.ndarray:
+                          info: dict | None, smoke_faint: bool = False) -> tuple[np.ndarray, np.ndarray]:
         """
-        The smoke map of _compute_protection_maps_small (float32 0..1, the size of L): where nothing is to be
-        cleaned because smoke is there. L, A, B: the frame in Lab at the 1024 px size; fg_s: the person;
-        stand_mask / edges_any: the gear and every group of strong edges. The other arguments: see there.
+        The smoke maps of _compute_protection_maps_small (float32 0..1, the size of L): where nothing is to be
+        cleaned because smoke is there, and the part of it that the tools for lines respect. L, A, B: the frame
+        in Lab at the 1024 px size; fg_s: the person; stand_mask / edges_any: the gear and every group of strong
+        edges. The other arguments: see there.
+
+        The second map: the wall-floor corner and a seam show through thin smoke, so the corner tool and the
+        seam search go on under it; they stop only where the smoke is thick (the clouds of wisps). Without
+        "smokeFaint" the two maps are the same one, as in every version before 4.11.0.
         """
         sh, sw = L.shape[:2]
         smoke_mask = np.zeros((sh, sw), dtype=np.float32)
+        dense_mask = smoke_mask
         want_smoke = bool(protect_smoke) and smoke_strength > 5
         if info is not None:
             info.update({"share": 0.0, "largest": 0.0, "found": False, "protected": 0.0})
@@ -1213,21 +1242,42 @@ class CleanVinylEngine:
             smoke_found = smoke_share >= self.SMOKE_MIN_SHARE or smoke_largest >= self.SMOKE_MIN_CLOUD
             if want_smoke and smoke_faint:
                 # the user's word: no evidence asked for, and thin smoke is looked for as well
-                smoke_bin = self._smoke_by_word(sm_lut[lbl_sm], self._smoke_soft_structure(L, bg_only), smoke_strength)
-                smoke_mask = cv2.GaussianBlur(
-                    cv2.dilate(smoke_bin, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (33, 33))), (25, 25), 0
-                )
+                smoke_bin, dense_bin = self._smoke_by_word(
+                    sm_lut[lbl_sm], self._smoke_soft_structure(L, bg_only), smoke_strength)
+                wide = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (33, 33))
+                smoke_mask = cv2.GaussianBlur(cv2.dilate(smoke_bin, wide), (25, 25), 0)
+                dense_mask = cv2.GaussianBlur(cv2.dilate(dense_bin, wide), (25, 25), 0)
             elif want_smoke and (smoke_found or not smoke_auto):
                 smoke_bin = sm_lut[lbl_sm]
                 smoke_mask = cv2.GaussianBlur(
                     cv2.dilate(smoke_bin, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (33, 33))), (25, 25), 0
                 )
+                dense_mask = smoke_mask
             if info is not None:
                 info.update({
                     "share": round(smoke_share, 4), "largest": round(smoke_largest, 4), "found": bool(smoke_found),
                     "protected": round(float((smoke_mask > 0.5).mean()), 4),
                 })
-        return smoke_mask
+        return smoke_mask, dense_mask
+
+    def _smoke_without_lines(self, wisp: np.ndarray) -> np.ndarray:
+        """The clouds of wisps (bool) without those that are a thin straight band - a line (see SMOKE_LINE_WIDTH)."""
+        n, lbl, st, _ = cv2.connectedComponentsWithStats(wisp.astype(np.uint8), 8)
+        if n <= 1:
+            return wisp
+        keep = np.ones(n, dtype=bool)
+        keep[0] = False
+        for i in range(1, n):
+            x, y, bw, bh, area = (int(v) for v in st[i])
+            if min(bw, bh) > 3.0 * self.SMOKE_LINE_WIDTH:
+                continue   # (too thick to be a band whichever way it lies)
+            ys, xs = np.nonzero(lbl[y:y + bh, x:x + bw] == i)
+            (_, _), (rw, rh), _ = cv2.minAreaRect(np.stack([xs, ys], axis=1).astype(np.float32))
+            long_side, short_side = max(rw, rh) + 1.0, min(rw, rh) + 1.0
+            if (short_side <= self.SMOKE_LINE_WIDTH and long_side >= self.SMOKE_LINE_ASPECT * short_side
+                    and area >= self.SMOKE_LINE_FILL * long_side * short_side):
+                keep[i] = False
+        return keep[lbl]
 
     def _smoke_soft_structure(self, L: np.ndarray, bg_only: np.ndarray) -> np.ndarray:
         """
@@ -1244,6 +1294,21 @@ class CleanVinylEngine:
         sh, sw = L.shape[:2]
         out = np.zeros((sh, sw), dtype=np.float32)
         bg_f = bg_only.astype(np.float32)
+        if self.SMOKE_SOFT_FLATTEN > 0:
+            # Two straight things that cross have two directions as well: the fall-off of the light along the
+            # wall and the wall-floor line across it read as "structure without a direction" all along the line.
+            # The light is taken out first - whatever is as slow as SMOKE_SOFT_FLATTEN. What it leaves of a line
+            # still runs across the line only.
+            # (something that slow is found on a quarter-size copy just as well, in a sixteenth of the time)
+            qw, qh = max(8, sw // 4), max(8, sh // 4)
+            q_m = cv2.resize(bg_f, (qw, qh), interpolation=cv2.INTER_AREA)
+            q_l = cv2.resize(L * bg_f, (qw, qh), interpolation=cv2.INTER_AREA) / np.maximum(q_m, 1e-3)
+            sig = self.SMOKE_SOFT_FLATTEN / 4.0
+            pad = int(max(1, min(round(3.0 * sig), qw - 2, qh - 2)))
+            q_l, q_m = self._continued_past_border(q_l, q_m, pad)
+            slow = cv2.GaussianBlur(q_l * q_m, (0, 0), sig) / np.maximum(cv2.GaussianBlur(q_m, (0, 0), sig), 1e-3)
+            slow = np.ascontiguousarray(slow[pad:pad + qh, pad:pad + qw])
+            L = L - cv2.resize(slow, (sw, sh), interpolation=cv2.INTER_CUBIC)
         for s1 in self.SMOKE_SOFT_SCALES:
             f = max(1.0, float(s1) / 2.5)
             rw, rh = max(8, int(round(sw / f))), max(8, int(round(sh / f)))
@@ -1280,33 +1345,58 @@ class CleanVinylEngine:
         out[bg_f <= 0] = 0.0
         return out
 
-    def _smoke_by_word(self, wisp_bin: np.ndarray, soft: np.ndarray, smoke_strength: float) -> np.ndarray:
+    @staticmethod
+    def _continued_past_border(val: np.ndarray, wgt: np.ndarray, pad: int) -> tuple[np.ndarray, np.ndarray]:
+        """
+        (val, wgt) with `pad` more rows and columns on every side, where the values go on past the border as
+        they came to it: mirrored about the border VALUE (2 * border - mirrored), not about the border line.
+        A smoothing over such a frame leaves a slope alone up to the very border; over the usual mirrored border
+        it bends the slope there, and what is left when the smoothed light is taken out is a ramp along the whole
+        border (in _smoke_soft_structure: "smoke" at both ends of the wall-floor line). A mirrored value counts
+        only where the border value it leans on is known (wgt).
+        """
+        for axis in (0, 1):
+            v = val if axis == 0 else val.T
+            g = wgt if axis == 0 else wgt.T
+            head_v, head_g = 2.0 * v[0:1] - v[pad:0:-1], g[pad:0:-1] * g[0:1]
+            tail_v, tail_g = 2.0 * v[-1:] - v[-2:-pad - 2:-1], g[-2:-pad - 2:-1] * g[-1:]
+            v, g = np.vstack([head_v, v, tail_v]), np.vstack([head_g, g, tail_g])
+            val, wgt = (v, g) if axis == 0 else (v.T, g.T)
+        return np.ascontiguousarray(val, dtype=np.float32), np.ascontiguousarray(wgt, dtype=np.float32)
+
+    def _smoke_by_word(self, wisp_bin: np.ndarray, soft: np.ndarray, smoke_strength: float) -> tuple[np.ndarray, np.ndarray]:
         """
         The smoke of a frame whose user says it has smoke ("smokeFaint"): the clouds of wisps as the old search
-        gives them (wisp_bin, 0/1), plus the areas of soft structure (soft: see _smoke_soft_structure) that the
-        slider reaches. See SMOKE_FLOOR_FROM for what is believed where. Returns float32 0/1.
+        gives them (wisp_bin, 0/1) - without those that are a line -, plus the areas of soft structure (soft: see
+        _smoke_soft_structure) that the slider reaches. See SMOKE_FLOOR_FROM for what is believed where.
+        Returns (all the smoke, its thick part: the clouds of wisps in it), float32 0/1.
         """
         sh, sw = wisp_bin.shape[:2]
-        wisp = wisp_bin > 0
+        wisp = self._smoke_without_lines(wisp_bin > 0)
         if smoke_strength >= self.SMOKE_SOFT_FROM:
-            thr = self.SMOKE_SOFT_AT_FULL + max(0.0, 100.0 - float(smoke_strength)) * self.SMOKE_SOFT_PER_STEP
+            value = min(100.0, float(smoke_strength))
+            thr = (self.SMOKE_SOFT_AT_FULL + (100.0 - max(value, self.SMOKE_SOFT_USUAL)) * self.SMOKE_SOFT_PER_STEP
+                   + max(0.0, self.SMOKE_SOFT_USUAL - value) * self.SMOKE_SOFT_PER_STEP_LOW)
             weak = cv2.morphologyEx((soft > thr).astype(np.uint8), cv2.MORPH_OPEN,
                                     cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))) > 0
         else:
             weak = np.zeros((sh, sw), dtype=bool)
         both = wisp | weak
         if smoke_strength >= 100.0:
-            return both.astype(np.float32)
+            return both.astype(np.float32), wisp.astype(np.float32)
         line = int(self.SMOKE_FLOOR_FROM * sh)
         frame = float(sh * sw)
         # every connected piece of "wisps or soft" is believed as a whole when enough of it lies above the line,
-        # or when it holds a real cloud of wisps; of the other pieces only the wisps above the line count
-        n, lbl, _, _ = cv2.connectedComponentsWithStats(both.astype(np.uint8), 8)
+        # or when it holds a real cloud of wisps; of the other pieces only the wisps above the line count.
+        # (Thin smoke is found in patches: patches up to SMOKE_PIECE_GAP apart are one piece - the map made of
+        # them is widened by more than that anyway.)
+        gap = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (self.SMOKE_PIECE_GAP, self.SMOKE_PIECE_GAP))
+        n, lbl, _, _ = cv2.connectedComponentsWithStats(cv2.dilate(both.astype(np.uint8), gap), 8)
         upper = np.zeros((sh, sw), dtype=bool)
         upper[:line] = True
         if n <= 1:
-            return (wisp & upper).astype(np.float32)
-        above = np.bincount(lbl[:line].ravel(), minlength=n).astype(np.float64)
+            return (wisp & upper).astype(np.float32), (wisp & upper).astype(np.float32)
+        above = np.bincount(lbl[:line][both[:line]].ravel(), minlength=n).astype(np.float64)
         n_w, lbl_w, st_w, _ = cv2.connectedComponentsWithStats(wisp.astype(np.uint8), 8)
         cloud = np.zeros(n, dtype=bool)
         if n_w > 1:
@@ -1315,7 +1405,8 @@ class CleanVinylEngine:
             cloud[np.unique(lbl[big[lbl_w]])] = True
         keep = (above >= self.SMOKE_SOFT_MIN_AREA * frame) | cloud
         keep[0] = False
-        return ((both & keep[lbl]) | (wisp & upper)).astype(np.float32)
+        smoke = (both & keep[lbl]) | (wisp & upper)
+        return smoke.astype(np.float32), (wisp & smoke).astype(np.float32)
 
     # ------------------------------------------------------------------
     # 3. Vinyl Join Seam Detector (Multi-scale thin/wide ratio)
@@ -4105,10 +4196,12 @@ class CleanVinylEngine:
                 if progress_cb is not None:
                     progress_cb(65, "Пошук дефектів для зеленої маски...")
                 fg_mask_u8, core_mask_u8 = self._clean_fg_mask(fg_raw_1024, w, h, edge_prot)
+                lines = {}
                 stand_protect_s, stand_remove_s, smoke_s, shadow_s = self._compute_protection_maps_small(
                     img_rgb_u8, fg_mask_u8, core_mask_u8, smoke_str, smoke_on, keep_shadow, smoke_auto=smoke_auto,
-                    gear_body=gear_body, smoke_faint=smoke_faint,
+                    gear_body=gear_body, smoke_faint=smoke_faint, lines_out=lines,
                 )
+                smoke_lines_s = lines.get("smoke", smoke_s)
                 eff_stand_protect = np.zeros_like(stand_protect_s) if remove_stands else stand_protect_s
                 eff_fg_for_spots = core_mask_u8 if remove_stands else fg_mask_u8
 
@@ -4116,9 +4209,9 @@ class CleanVinylEngine:
                 if seam_on and seam_eff > 0 and frac_large:
                     corner_line = None
                     if cyc_str > 0 or seam_join:  # the wall-floor corner, treated exactly as in process()
-                        corner_line = self._corner_line_of_frame(img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_s)
+                        corner_line = self._corner_line_of_frame(img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_lines_s)
                     seam_mask = self._detect_vinyl_seam_mask(
-                        img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_s, seam_eff, edge_prot, fast_mode=False,
+                        img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_lines_s, seam_eff, edge_prot, fast_mode=False,
                         join=seam_join, skip_line=(corner_line if cyc_str > 0 else None),
                         step_ok_line=(corner_line if cyc_str <= 0 else None),
                     )
@@ -4520,6 +4613,7 @@ class CleanVinylEngine:
                         "fg_mask_u8": r_fg[1][0], "core_mask_u8": r_fg[1][1],
                         "stand_protect_s": r_maps[1][0], "stand_remove_s": r_maps[1][1],
                         "smoke_s": r_maps[1][2], "shadow_s": r_maps[1][3], "smoke_info": r_maps[1][4],
+                        "smoke_lines_s": r_maps[1][5],
                         "heal_mask": r_det[1][0], "seam_px": r_det[1][1], "spot_px": r_det[1][2],
                         "grain_sigma": float(r_det[1][3]), "reused_stages": ["fg", "maps", "detect"],
                         "corner_line": (corner_of_this_run(r_cor[1][0], r_fg[1][1] if remove_stands else r_fg[1][0])
@@ -4541,6 +4635,7 @@ class CleanVinylEngine:
             core_mask_u8 = np.zeros((h, w), dtype=np.uint8)
             stand_protect_s = np.zeros((1, 1), dtype=np.uint8)
             smoke_s = np.zeros((1, 1), dtype=np.uint8)
+            smoke_lines_s = smoke_s   # the smoke that the tools for lines respect, see _smoke_zone_small
             shadow_s = np.zeros((1, 1), dtype=np.uint8)
             eff_stand_protect = np.zeros((1, 1), dtype=np.uint8)
             eff_fg_for_spots = np.zeros((h, w), dtype=np.uint8)
@@ -4578,6 +4673,7 @@ class CleanVinylEngine:
                     fg_mask_u8, core_mask_u8 = analysis["fg_mask_u8"], analysis["core_mask_u8"]
                     stand_protect_s, stand_remove_s = analysis["stand_protect_s"], analysis["stand_remove_s"]
                     smoke_s, shadow_s = analysis["smoke_s"], analysis["shadow_s"]
+                    smoke_lines_s = analysis.get("smoke_lines_s", smoke_s)
                     smoke_info = analysis.get("smoke_info")
                     corner_line = analysis.get("corner_line")
                     if corner_line is not None and render_scale != 1.0:
@@ -4621,16 +4717,19 @@ class CleanVinylEngine:
 
                         rec = _sc_get("maps", k_maps)
                         if rec is not None:
-                            stand_protect_s, stand_remove_s, smoke_s, shadow_s, smoke_info = rec
+                            stand_protect_s, stand_remove_s, smoke_s, shadow_s, smoke_info, smoke_lines_s = rec
                         else:
                             _prog(40, "Аналіз стійок, диму й тіней...")
-                            smoke_info = {}
+                            smoke_info, lines = {}, {}
                             stand_protect_s, stand_remove_s, smoke_s, shadow_s = self._compute_protection_maps_small(
                                 img_rgb_u8, fg_mask_u8, core_mask_u8, smoke_str, smoke_on, keep_shadow,
                                 smoke_auto=smoke_auto, info=smoke_info, gear_body=gear_body, smoke_faint=smoke_faint,
+                                lines_out=lines,
                             )
+                            smoke_lines_s = lines.get("smoke", smoke_s)
                             smoke_info.update({"on": bool(smoke_on), "auto": bool(smoke_auto), "faint": bool(smoke_faint)})
-                            _sc_put("maps", k_maps, (stand_protect_s, stand_remove_s, smoke_s, shadow_s, smoke_info))
+                            _sc_put("maps", k_maps,
+                                    (stand_protect_s, stand_remove_s, smoke_s, shadow_s, smoke_info, smoke_lines_s))
                         eff_stand_protect = np.zeros_like(stand_protect_s) if remove_stands else stand_protect_s
                         eff_fg_for_spots = core_mask_u8 if remove_stands else fg_mask_u8
                         if corner_wanted:
@@ -4639,7 +4738,7 @@ class CleanVinylEngine:
                                 (corner_frame,) = rec
                             else:
                                 corner_frame = self._corner_line_of_frame(
-                                    img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_s, hair=hair_line)
+                                    img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_lines_s, hair=hair_line)
                                 _sc_put("corner", k_corner, (corner_frame,))
                             if cyc_str > 0:
                                 corner_line = corner_of_this_run(corner_frame, eff_fg_for_spots)
@@ -4674,7 +4773,7 @@ class CleanVinylEngine:
                                         # the whole zone it was found in
                                         skip_line = dict(skip_line, half=skip_line.get("zone", skip_line["half"]))
                                     seam_mask = self._detect_vinyl_seam_mask(
-                                        img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_s, seam_eff, edge_prot, fast_mode=False,
+                                        img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_lines_s, seam_eff, edge_prot, fast_mode=False,
                                         join=seam_join, skip_line=skip_line,
                                         step_ok_line=(corner_frame if corner_line is None else None),
                                     )
@@ -4755,6 +4854,7 @@ class CleanVinylEngine:
                         "fg_mask_u8": fg_mask_u8, "core_mask_u8": core_mask_u8,
                         "stand_protect_s": stand_protect_s, "stand_remove_s": stand_remove_s,
                         "smoke_s": smoke_s, "shadow_s": shadow_s, "smoke_info": smoke_info,
+                        "smoke_lines_s": smoke_lines_s,
                         "heal_mask": heal_mask, "seam_px": seam_px, "spot_px": spot_px,
                         "grain_sigma": float(grain_sigma), "reused_stages": reused_stages,
                         "corner_line": corner_line,
@@ -4960,7 +5060,7 @@ class CleanVinylEngine:
                     cleaned_f32,
                     eff_fg_for_spots,
                     eff_stand_protect,
-                    smoke_s,
+                    smoke_lines_s,
                     shadow_s,
                     cyc_str,
                     feather_str,
