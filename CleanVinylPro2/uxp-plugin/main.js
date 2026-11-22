@@ -104,8 +104,9 @@ let autoPreset = true;    // pick the preset that suits the frame every time the
 // and the default again since 4.10.0: the window gets pictures of the working size (in a large window the person
 // looks a little soft; the layer is not affected) and after a change it shows the quick preview; the real frame is
 // computed by "Застосувати" or by the button "↻ Перерахувати зараз". On - what 4.8.0 brought: pictures twice as
-// detailed and the exact picture by itself, in the background. On the owner's PC that made the brush slow (every
-// answer 1.7 MB instead of 0.5) and kept the computer busy for one to seven minutes after every change.
+// detailed and the exact picture by itself, in the background. On the owner's PC the brush was slow with it (every
+// answer to a stroke is 1.7 MB instead of 0.5) and a preview took one to seven minutes. Which part cost the time
+// there is not known - it cannot be measured without his Photoshop; he asked for the former way back.
 let detailPreview = false;
 const PREVIEW_LONG_FAST = 1080;     // "previewLong" of the start request: the working pictures themselves
 const PREVIEW_LONG_DETAIL = 2160;
@@ -423,7 +424,7 @@ const USER_GUIDE_TIPS = [
   "💡 Поставте галочку «Make Mask» зверху, якщо хочете отримати у Photoshop редаговану маску шару.",
   "💡 Якщо на фоні є стійки, кабелі чи прилади — увімкніть їх видалення в налаштуваннях (шестигранник) або пресеті «Без стійок (AI)».",
   "💡 Пензель і гумка мають м’який край — без смуги й різкого переходу. Потрібен чіткий край — нижній кружечок під розміром пензля.",
-  "💡 Перегляд перераховується сам: щойно відпустите повзунок — швидко, а за мить — точно, для всього кадру. Кнопку для цього натискати не треба."
+  "💡 Щойно відпустите повзунок, вікно показує швидкий перегляд; точний кадр рахує «Застосувати». Чіткіше фото у вікні й точний перерахунок сам вмикає галочка «Детальний перегляд» у налаштуваннях — це повільніше."
 ];
 
 let tipCycleIndex = Math.floor(Math.random() * USER_GUIDE_TIPS.length);
@@ -710,7 +711,14 @@ function setAutoPreset(on) {
 }
 
 // The button of the exact picture says what it is for: with the detailed preview the same picture comes by itself.
+// The note at the top of the settings says what happens after a slider is released.
 function updateRecomputeButton() {
+  const note = el("gLiveNote");
+  if (note) {
+    note.textContent = detailPreview
+      ? "Перегляд перераховується сам: щойно відпустите повзунок — швидко, а потім точно, для всього кадру (поки рахується, у кутку фото написано «уточнюється»). Жодної кнопки натискати не треба."
+      : "Щойно відпустите повзунок — вікно показує швидкий перегляд. Точний кадр, для всього фото, рахує «Застосувати».";
+  }
   const btn = el("gBtnRecompute");
   if (!btn) return;
   btn.textContent = detailPreview ? "↻ Перерахувати зараз (не обов’язково)" : "↻ Перерахувати зараз (точний перегляд)";
@@ -752,6 +760,11 @@ function cpuFallbackText(why) {
     String(why).slice(0, 160) + ". Якщо повторюється — закрийте програми, що займають відеопам’ять, або перезапустіть сервер (restart_gpu_server.bat).";
 }
 
+function fillTimeText(t) {
+  const onCpu = String(t.fill_ep || "").includes("CPU");
+  return `AI-заливка: ${t.fill_tiles} пл. за ${secondsText(t.fill_s)} (${onCpu ? "процесор" : "відеокарта"})`;
+}
+
 // What the last computation of the frame took: a line in the settings of the big window. When a video card is there
 // and the AI fill ran on the processor all the same (the card refused a tile - see _lama_on_cpu of the engine), the
 // window says so in the corner of the photo: that is what "a preview takes minutes" usually is.
@@ -763,7 +776,7 @@ function noteComputeStats(stats) {
   const line = el("gTimeLine");
   if (line) {
     const whole = typeof stats.elapsed_ms === "number" ? `Останній розрахунок: ${secondsText(stats.elapsed_ms / 1000)} · ` : "";
-    line.textContent = `${whole}AI-заливка: ${t.fill_tiles} пл. за ${secondsText(t.fill_s)} (${onCpu ? "процесор" : "відеокарта"})`;
+    line.textContent = whole + fillTimeText(t);
     line.classList.toggle("warn", onCpu);
   }
   if (why) {
@@ -1970,6 +1983,13 @@ function setBrushSoft(soft, byUser = true) {
     : "Край пензля і гумки: жорсткий — мазок закінчується біля кола курсора; такий пензель перемальовує все, по чому пройде.");
 }
 
+function removeNode(node) {
+  try {
+    if (node && typeof node.remove === "function") node.remove();
+    else if (node && node.parentNode) node.parentNode.removeChild(node);
+  } catch (_) {}
+}
+
 // Takes the trace of the strokes away. `upTo` (optional): only the strokes up to this number - the ones whose
 // result is in the picture now. A stroke that is being drawn, or that is still on its way to the server, keeps its
 // trace: until 4.9.0 the answer to one stroke wiped the trace of the next, which then looked as if it had not taken.
@@ -1982,7 +2002,7 @@ function clearStrokeDots(upTo = null) {
     const keep = [];
     sessState.strokeDots.forEach((it) => {
       if (it.stroke > upTo) keep.push(it);
-      else if (d && it.node && it.node.parentNode === d) d.removeChild(it.node);
+      else removeNode(it.node);
     });
     sessState.strokeDots = keep;
   }
@@ -2072,6 +2092,7 @@ function getNormalizedStagePoint(clientX, clientY) {
 // never put an older picture over a newer one (several Ctrl + Z in a row, a stroke right after a step back).
 // Resolves with the server's answer, or null when there was none.
 let maskEditQueue = Promise.resolve(null);
+let maskEditsWaiting = 0;  // requests that were made and are not answered yet
 
 function sendMaskEditOp(op, points = null) {
   if (!sessState.id) return Promise.resolve(null);
@@ -2088,6 +2109,7 @@ function sendMaskEditOp(op, points = null) {
   // The strokes whose trace may go when this answer is shown: all that were finished before this request. (Requests
   // are answered in the order they were made, so every one of those strokes is in the picture by then.)
   const tracesUpTo = sessState.isDrawing ? sessState.strokeNo - 1 : sessState.strokeNo;
+  maskEditsWaiting += 1;
   const run = () => postMaskEdit(body, tracesUpTo);
   maskEditQueue = maskEditQueue.then(run, run);
   return maskEditQueue;
@@ -2111,7 +2133,11 @@ async function postMaskEdit(body, tracesUpTo = null) {
       if (d.history) setEditHistory(d.history);
     }
   }
-  clearStrokeDots(tracesUpTo);
+  maskEditsWaiting = Math.max(0, maskEditsWaiting - 1);
+  // Nothing else is on its way and nothing is being drawn - the usual case: every dot goes, as it always did.
+  // Otherwise only the traces of the strokes that are in the picture now.
+  const allDone = maskEditsWaiting === 0 && !sessState.isDrawing;
+  clearStrokeDots(allDone ? null : tracesUpTo);
   // (a stroke changes nothing about the frame itself; but if the picture under it is still a quick preview, its
   //  exact version is due - and was put off while the brush was busy)
   if (sessState.id === body.session_id) scheduleExactPreview();
@@ -3276,7 +3302,16 @@ async function commitApplyPayloadToPhotoshop(payload) {
     const totalSec = opStartMs > 0 ? ((Date.now() - opStartMs) / 1000).toFixed(2) : "—";
     const chPx = (meta.stats && meta.stats.changed_px) || 0;
     const gpuLabel = ((meta.stats && meta.stats.gpu) || "GPU").replace("NVIDIA GeForce ", "").split(",")[0].trim();
-    setFooterStatus(`✓ Шар створено (${gpuLabel}, ${bitDepth}-bit${maskNote}, змінено ${chPx.toLocaleString("uk-UA")} пкс, сесія ${totalSec} с).`, "success");
+    // What "Застосувати" itself took, and the AI fill inside it (with the fast window the real frame is computed
+    // here): the window is closed by now, so the panel is the place where the user can read it - and tell us.
+    const st = meta.stats || {};
+    const tm = st.timing && st.timing.fill_tiles ? st.timing : null;
+    let timeNote = typeof st.elapsed_ms === "number" ? ` «Застосувати»: ${secondsText(st.elapsed_ms / 1000)}` : "";
+    if (tm) timeNote += `${timeNote ? " · " : " "}${fillTimeText(tm)}`;
+    if (timeNote) timeNote += ".";
+    const why = tm && tm.fallback && (tm.fallback.lama || tm.fallback.matting);
+    setFooterStatus(`✓ Шар створено (${gpuLabel}, ${bitDepth}-bit${maskNote}, змінено ${chPx.toLocaleString("uk-UA")} пкс, сесія ${totalSec} с).` +
+      timeNote + (why ? " " + cpuFallbackText(why) : ""), "success");
     probeHealthSilent();
   } catch (err) {
     setFooterStatus("Помилка запису шару у Photoshop: " + (err && err.message ? err.message : String(err)), "error");

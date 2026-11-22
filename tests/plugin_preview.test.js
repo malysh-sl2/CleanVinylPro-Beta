@@ -91,6 +91,7 @@ function makeEnv(serverOpts = {}) {
     historyAware: true,    // false = a server before 4.5.0: no steps back / forward for the mask edits
     edits: { undo: 0, redo: 0 },  // the history of mask edits the server holds
     editDelays: [],        // ms the next mask edits take, one by one (then no delay)
+    applyStats: null,      // the "stats" of the answer to Apply
     editSeq: 0,            // how many mask edits were answered (each answer carries its number in the picture)
     backupAware: true,     // false = a server before 4.5.0: no /backup/... addresses
     backupSaveFails: false,
@@ -347,7 +348,7 @@ function makeEnv(serverOpts = {}) {
             stopBackground();
           }
           await waitOrAbort(server.applyDelay, init.signal);
-          const meta = Buffer.from(JSON.stringify({ ok: true, width: W, height: H, channels: 4, bitDepth: 8, hasLayerMask: false, stats: {} }), "utf8");
+          const meta = Buffer.from(JSON.stringify({ ok: true, width: W, height: H, channels: 4, bitDepth: 8, hasLayerMask: false, stats: server.applyStats || {} }), "utf8");
           const out = new Uint8Array(4 + meta.length + W * H * 4);
           new DataView(out.buffer).setUint32(0, meta.length, true);
           out.set(meta, 4);
@@ -2440,6 +2441,8 @@ async function main() {
     expect(env.state("detailPreview") === false && env.el("gChkDetail").checked === false, "a fresh installation: 'Детальний перегляд' is off");
     expect(env.el("gBtnRecompute").textContent.includes("Перерахувати зараз") && env.el("gBtnRecompute").textContent.includes("точний перегляд"),
       "the button says what it is for: " + env.el("gBtnRecompute").textContent);
+    expect(env.el("gLiveNote").textContent.includes("швидкий перегляд") && env.el("gLiveNote").textContent.includes("Застосувати") && !env.el("gLiveNote").textContent.includes("сам"),
+      "the note of the settings must not promise an exact picture by itself: " + env.el("gLiveNote").textContent);
     await env.open();
     const start = env.of("/session/start")[0];
     expect(start && start.body.params.previewLong === 1080, "the window must ask for pictures of the working size (previewLong 1080), got " + (start && start.body.params.previewLong));
@@ -2490,6 +2493,7 @@ async function main() {
     env.check("gChkDetail", true);
     expect(env.state("detailPreview") === true && env.hint().includes("Детальний перегляд увімкнено"), "the window says what the tick does: " + env.hint());
     expect(env.el("gBtnRecompute").textContent.includes("не обов’язково"), "the button is optional now: " + env.el("gBtnRecompute").textContent);
+    expect(env.el("gLiveNote").textContent.includes("перераховується сам"), "the note of the settings says so too: " + env.el("gLiveNote").textContent);
     await env.waitFor(() => env.exacts().length === 1, 1500);
     expect(env.exacts().length === 1, "ticked while a quick preview is on screen: its exact picture is asked for by itself");
     expect(env.modeBadge().includes("уточнюється"), "the corner says that it is being refined: " + env.modeBadge());
@@ -2497,6 +2501,7 @@ async function main() {
     await sleep(120);
     expect(env.of("/session/stop-background").length === 1, "unticking stops the background run, got " + env.of("/session/stop-background").length);
     expect(env.modeBadge() === "ПІСЛЯ · швидкий перегляд" && env.hint().includes("вимкнено"), `quick preview again: '${env.modeBadge()}' / '${env.hint()}'`);
+    expect(!env.el("gLiveNote").textContent.includes("сам"), "the note of the settings is that of the fast window again: " + env.el("gLiveNote").textContent);
     await sleep(1700);
     expect(env.exacts().length === 1, "and no new one starts, got " + env.exacts().length);
     env.check("gChkDetail", true);
@@ -2540,7 +2545,7 @@ async function main() {
     expect(dots().length === 0, "the trace goes when the server has answered");
   });
 
-  await scenario("a stroke begun before the answer to the last one keeps its trace", { detail: false, editDelays: [400, 300, 20], previewSize: [400, 600] }, async (env, expect) => {
+  await scenario("a stroke begun before the answer to the last one keeps its trace", { detail: false, editDelays: [400, 300, 500], previewSize: [400, 600] }, async (env, expect) => {
     await env.open();
     const dots = () => Array.from(env.el("dlgStrokeDots").children).map((d) => [parseFloat(d.style.left), parseFloat(d.style.top), parseFloat(d.style.width)]);
     Object.defineProperty(env.el("dlgStage"), "offsetWidth", { value: 400, configurable: true });
@@ -2576,7 +2581,7 @@ async function main() {
     env.release();
     const n3 = dots().length - n2all;
     await env.waitFor(() => env.edits().length >= 2 && env.edits()[1].done, 2000);
-    await sleep(10);
+    await sleep(60);                                       // (the answer to stroke 3 takes 500 ms from here)
     d = dots();
     expect(n3 >= 4 && d.length === n3 && d.every((p) => Math.abs(p[1] + p[2] / 2 - 500) <= 1.5), `a stroke that waits for the server keeps its trace: ${d.length} dots left, stroke 3 had ${n3}`);
     await env.waitFor(() => env.edits().length === 3 && env.edits()[2].done, 2000);
@@ -2642,6 +2647,42 @@ async function main() {
     expect(line.textContent.includes("9,3 с") && line.textContent.includes("90") && line.textContent.includes("6,3 с") && line.textContent.includes("відеокарта") && !line.classList.contains("warn"),
       "the line of the settings: " + line.textContent);
     expect(!env.badge().includes("процесор"), "no warning: " + env.badge());
+  });
+
+  await scenario("after Apply the panel says what the layer took and where the AI fill ran", {
+    detail: false,
+    applyStats: { elapsed_ms: 12400, changed_px: 1234, gpu: "NVIDIA GeForce RTX 5060 Ti", recomputed: true,
+                  timing: { fill_tiles: 90, fill_s: 6.25, fill_ep: "CUDAExecutionProvider", fallback: {} } }
+  }, async (env, expect) => {
+    await env.open();
+    env.click("dlgBtnApply");
+    await env.waitFor(() => env.ps.layersMade.length === 1 && env.footer().includes("Шар створено"), 3000);
+    const f = env.footer();
+    expect(f.includes("«Застосувати»: 12 с") && f.includes("AI-заливка: 90 пл. за 6,3 с (відеокарта)"), "the footer of the panel: " + f);
+    expect(!f.includes("процесор") && env.el("footerStatus").className.includes("success"), "nothing warns: " + f);
+  });
+
+  await scenario("after Apply the panel warns when the AI fill of the layer ran on the processor", {
+    detail: false,
+    applyStats: { elapsed_ms: 251000, changed_px: 1234, gpu: "NVIDIA GeForce RTX 5060 Ti", recomputed: true,
+                  timing: { fill_tiles: 132, fill_s: 240.2, fill_ep: "CPUExecutionProvider", fallback: { lama: "CUDA out of memory" } } }
+  }, async (env, expect) => {
+    await env.open();
+    env.click("dlgBtnApply");
+    await env.waitFor(() => env.ps.layersMade.length === 1 && env.footer().includes("Шар створено"), 3000);
+    const f = env.footer();
+    expect(f.includes("«Застосувати»: 251 с") && f.includes("132 пл. за 240 с (процесор)"), "the footer of the panel: " + f);
+    expect(f.includes("на процесорі") && f.includes("CUDA out of memory"), "the footer must say why it was slow: " + f);
+  });
+
+  await scenario("after Apply with the frame ready (or an older server) the footer says the time only", {
+    detail: false, applyStats: { elapsed_ms: 1800, changed_px: 10, gpu: "NVIDIA GeForce RTX 5060 Ti", recomputed: false }
+  }, async (env, expect) => {
+    await env.open();
+    env.click("dlgBtnApply");
+    await env.waitFor(() => env.ps.layersMade.length === 1 && env.footer().includes("Шар створено"), 3000);
+    const f = env.footer();
+    expect(f.includes("«Застосувати»: 1,8 с.") && !f.includes("AI-заливка"), "the footer of the panel: " + f);
   });
 
   await scenario("the hair slider: 'Вимк.' until it is moved; one light refresh carries its value, a preset puts it back to 0, Apply carries it", {}, async (env, expect) => {

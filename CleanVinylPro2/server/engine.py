@@ -6241,7 +6241,7 @@ class CleanVinylEngine:
         px = sess.get("proxy")
         seed = {"size": (px["w"], px["h"])} if px is not None else None
         out_cache: dict = {}
-        cleaned_rgba, _ = self.process(
+        cleaned_rgba, st = self.process(
             sess["img_rgba_orig"],
             bit_depth,
             self._session_clean_params(sess["params"]),
@@ -6252,6 +6252,7 @@ class CleanVinylEngine:
             stage_cache=sess.setdefault("stage_cache", {}),
             proxy_seed=seed,
         )
+        sess["last_timing"] = (st or {}).get("timing")   # (Apply passes it on: with the fast window this run is Apply's)
         self._seed_session_proxy(px, seed)
         sess["cleaned_base_rgba"] = cleaned_rgba
         sess["core_mask_u8"] = out_cache["core_mask_u8"]
@@ -7007,6 +7008,9 @@ class CleanVinylEngine:
                     "provider": self.provider_name,
                     "recomputed": recomputed,  # True: the real frame was computed inside this Apply
                 }
+                if recomputed and sess.get("last_timing"):
+                    # how long the AI fill of that computation took and where it ran (see process)
+                    stats["timing"] = sess["last_timing"]
                 return out_rgba, layer_mask_u8, stats
         finally:
             self._end_job()

@@ -3,7 +3,7 @@
 Self-checks of the Clean Vinyl Pro server (folder CleanVinylPro2; the program was shown as "Pro 2" up to 4.7.0).
 No AI models, no GPU and no Photoshop needed.
 
-    python tests/run_checks.py            # quick run (a few minutes)
+    python tests/run_checks.py            # quick run (about 35 minutes)
     python tests/run_checks.py --full     # more random cases
     python tests/run_checks.py stage http # only the groups whose name contains one of the words
 
@@ -78,6 +78,13 @@ Part 2 - what this program does differently from v3.2.1, each with its own measu
             the lower the slider, the longer a hair must be, and a higher position never takes less; dark and
             light hairs, a close-up; at 0 nothing is looked for; in the big window a light refresh and a full
             recompute give the frame of that slider value
+  fallback  an error of the GPU costs one run, not the session (since 4.10.0): the processor finishes the fill the
+            GPU refused, with the same pixels and with all processors but one; the answer says where the fill ran
+            and why; the next run asks the GPU again; when the processor fails too, the error comes out; the
+            silhouette network follows the same rule
+  fastwin   the fast window (since 4.10.0): a start request that asks for pictures of the working size gets them,
+            also with the automatic preset and after a stroke; without the request the pictures are the large
+            ones; an Apply that computes the real frame says what its AI fill took and where it ran
 
 Part 3 - the program around the engine:
   server    settings migration, binary packets, one version everywhere; the name a person reads has no 2 (since
@@ -2538,6 +2545,12 @@ def check_fallback():
         def run(self, outputs, feed):
             raise RuntimeError("the processor fails too (simulated)")
 
+    class BrokenLater(OnCpu):                        # the processor's session gives up after its first tile
+        def run(self, outputs, feed):
+            if self.calls >= 1:
+                raise RuntimeError("the processor fails too (simulated)")
+            return super().run(outputs, feed)
+
     img, sil = H.make_studio_image(1500, 1000, seed=5)
     p = dict(H.STD, speedMode="quality")
     ref, ref_st = _quiet(H.make_engine(E, sil).process, img, 8, p)
@@ -2594,14 +2607,16 @@ def check_fallback():
                            f"processor sessions {len(made)}")
             if t2.get("fill_ep") != CUDA or t2.get("fallback") != {} or eng.cpu_fallback != {}:
                 bad.append(f"the run after a fallback: the answer still says {t2}; engine: {eng.cpu_fallback}")
-    # the processor fails as well: the error comes out (no endless retry, no silent picture)
-    eng, made = engine_with(Refusing({1}), Broken)
-    try:
-        _quiet(eng.process, img, 8, p)
-        bad.append("the GPU and the processor both fail: process() must raise")
-    except RuntimeError as exc:
-        if "processor fails too" not in str(exc) or len(made) != 1:
-            bad.append(f"the GPU and the processor both fail: {exc!r}, processor sessions {len(made)}")
+    # the processor fails as well: the error comes out (no going back to the GPU, no tile left out, no silent picture)
+    for cpu_cls, when in ((Broken, "at once"), (BrokenLater, "after its first tile")):
+        gpu = Refusing({1})
+        eng, made = engine_with(gpu, cpu_cls)
+        try:
+            _quiet(eng.process, img, 8, p)
+            bad.append(f"the GPU and the processor both fail ({when}): process() must raise")
+        except RuntimeError as exc:
+            if "processor fails too" not in str(exc) or len(made) != 1 or gpu.asked != 1:
+                bad.append(f"the GPU and the processor both fail ({when}): {exc!r}, processor sessions {len(made)}, GPU asked {gpu.asked} time(s)")
 
     # the session of the processor really gets the threads it is given
     class Options:
@@ -2692,6 +2707,22 @@ def check_fastwin():
         bad.append(f"previewLong 2160 with the automatic preset: pictures {big} / after a stroke {big_stroke}; not asked at all: {dflt}")
     notes.append(f"asked for 1080: pictures {fast[0]}x{fast[1]} (the working size), also with the automatic preset and after a stroke; "
                  f"asked for 2160: {big[0]}x{big[1]}, {bytes_big / max(1, bytes_fast):.1f} times the bytes")
+
+    # With the fast window the real frame is computed by Apply: its answer says what the AI fill took and where it
+    # ran - the panel shows that after the window has closed. An Apply that finds the frame ready says nothing of it.
+    eng = H.make_engine(E, sil)
+    r = _quiet(eng.start_session, img, 8, dict(p, previewLong=1080))
+    q = _quiet(eng.recompute_session, r["session_id"], dict(p, previewLong=1080, spots=35), True, None, True)
+    _, _, st = _quiet(eng.apply_session, r["session_id"], 100.0, False, False, 45.0)
+    t = st.get("timing") or {}
+    if q.get("quick") is not True or st.get("recomputed") is not True:
+        bad.append(f"the frame of this check: a light refresh (quick={q.get('quick')}), then an Apply that computes (recomputed={st.get('recomputed')})")
+    elif not t.get("fill_tiles") or t.get("fill_ep") != "CUDAExecutionProvider" or not isinstance(t.get("fill_s"), float) or t.get("fallback") != {}:
+        bad.append(f"Apply computed the real frame: its answer must say the tiles, the seconds and where the fill ran - it says {t}")
+    _, _, st2 = _quiet(eng.apply_session, r["session_id"], 100.0, False, False, 45.0)
+    if st2.get("recomputed") is not False or "timing" in st2:
+        bad.append(f"a second Apply finds the frame ready: recomputed={st2.get('recomputed')}, timing {st2.get('timing')}")
+    notes.append(f"Apply after a light refresh computes the frame and says so ({t.get('fill_tiles')} tiles, {t.get('fill_ep')})")
     report("fastwin", not bad, "; ".join(notes) if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 

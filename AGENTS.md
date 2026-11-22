@@ -544,6 +544,76 @@ second plugin next to the installed one and lose his presets.
     slider…» of the window test. `tests/try_defects.py` holds the 36 deliberate defects of 4.9.0 (30 in
     the engine, 6 in the panel).
 
+- **4.10.0** — speed, after his report on 4.9.0 («пензель дуже довго і робе точки… на перегляд треба чекати
+  від 60-400 секунд… головне швидкість»). The cleaning is unchanged: the layers are those of 4.9.0.
+  - **The fast window is the default again.** `detailPreview` (panel, `main.js`; saved with the settings
+    under that name; the checkbox «Детальний перегляд (повільніше)», `gChkDetail`, in the settings of the
+    big window above «↻ Перерахувати зараз») is `false` unless he ticks it. Off means what 4.7.0 did:
+    - the start request carries `params.previewLong = PREVIEW_LONG_FAST` (1080), so the window pictures are
+      the working pictures themselves (`_display_size`): every answer to a stroke is 0.54 MB instead of
+      1.75 MB on frame 3411. On: `PREVIEW_LONG_DETAIL` (2160), the pictures of 4.8.0. The size is fixed
+      when the window opens, so ticking shows from the next opening (the tooltip says so);
+    - `exactPreviewWanted()` returns false, so nothing is computed by itself after a light refresh or a
+      stroke; `previewKind()` says "quick" (corner: «ПІСЛЯ · швидкий перегляд»); the real frame comes from
+      Apply or from the button, which reads «↻ Перерахувати зараз (точний перегляд)» (with the box ticked:
+      «… (не обов’язково)»); with 2 passes, where there is no light way, the corner names the button;
+    - `setDetailPreview(on, announce)`: ticking asks for the exact picture of a quick preview that is on
+      screen; unticking stops a background run (`stopBackgroundRun` → `/session/stop-background`) and
+      starts none; `updateRecomputeButton` also writes the note at the top of the settings (`gLiveNote`).
+    - Engine: `start_session` reads `previewLong` from the REQUEST also when the automatic preset
+      replaces `params` by the values of a preset (those have no such key; before, the request's word was
+      lost there and the window would have got the large pictures all the same).
+    - Why it was slow for him is not known. Measured here (stand-in networks, 2 CPUs): the server needs
+      about the same time for a stroke at either size (290-610 ms as the painted area grows from 3 % to
+      15 % of the frame, brush radius 60; the whole painted zone is filled anew with every stroke -
+      `_brush_fill` works per connected zone); what differs is the answer (3.2 times the bytes, two JPEGs
+      of four times the pixels for Photoshop to decode) and the background run that started 0.7 s after
+      every stroke. Neither can be timed without Photoshop.
+  - **The brush: a line, not dots** (three faults, all in the panel; the server always joined the points
+    of a stroke):
+    - the trace under the pointer was one dot per mouse event. Now the way from the last dot is filled
+      (`renderBrushCursorAndDot`: a dot every `STROKE_DOT_STEP` = 0.3 brush diameters, at least
+      `STROKE_DOT_MIN_PX`; at most `STROKE_DOTS_PER_MOVE` = 120 per event and `STROKE_DOTS_MAX` = 1,500 on
+      screen);
+    - a stroke ends where the button was released: the `mouseup` handler adds the place of the release
+      when the last move was not there. A quick stroke whose moves never arrived (the window busy with the
+      picture of the stroke before - an assumption, read from «робе точки або тянути поленьку») was a dot
+      at the place of the press. A release at client (0, 0) counts as "no place" and adds nothing (a
+      seatbelt against a line to the corner of the photo; never seen);
+    - every dot knows its stroke (`sessState.strokeNo`, `sessState.strokeDots`), and the answer to a mask
+      edit takes away the traces of the strokes that were finished before that request
+      (`clearStrokeDots(upTo)`, `tracesUpTo` in `sendMaskEditOp`). Up to 4.9.0 any answer wiped every dot,
+      also those of a stroke being drawn or waiting in the queue, and reset the trace mid-stroke.
+  - **A GPU error costs one run, not the session.** Up to 4.9.0 one error of the GPU during the AI fill
+    (or the matting) replaced `self.lama_sess` (`self.matting_sess`) by a processor session with ONE
+    thread until the models were loaded anew, and nothing on screen said so - the panel went on naming
+    the video card. Minutes per frame is what that looks like, which makes it the SUSPECTED cause of his
+    «60-400 секунд» - a guess, not confirmed on his PC. Now:
+    - `_run_lama_tiles`: the tile that the GPU refused and the rest of THAT call go to
+      `self._lama_cpu_sess` (`_lama_on_cpu`; made when first needed with `_fallback_threads()` = all
+      processors but one; dropped with the models); `self.lama_sess` stays and the next call asks it
+      again. If the processor session fails too, the error comes out. `_predict_fg_raw` does the same for
+      the matting (`_matting_cpu_sess`).
+    - `self.cpu_fallback` = `{"lama": reason, "matting": reason}` while the last use of that model ran on
+      the processor (popped by the next use that the GPU does alone). `/health` carries it.
+    - `stats["timing"]` of `process` (only when LaMa tiles ran): `{fill_tiles, fill_s, fill_ep,
+      fallback}`; `_fill_log` collects it over the calls of one `process`. It travels with the answers of
+      start and recompute. `_refresh_stale_base` keeps it in `sess["last_timing"]`, and `apply_session`
+      passes it on when it computed the real frame itself (`recomputed`) - with the fast window that is
+      where the real frame is computed.
+    - Panel: `noteComputeStats` writes the line `gTimeLine` in the settings («Останній розрахунок: 12 с ·
+      AI-заливка: 90 пл. за 6,3 с (відеокарта)»; marked when it says «процесор») and, on a fallback, puts
+      `sessState.cpuWarn` into the corner of the photo for 20 s (`updatePreviewBadge` shows it before the
+      preview note; it is set AFTER the auto-preset note, which used to overwrite it); the health banner
+      of the panel warns too; after Apply the footer of the panel says «„Застосувати“: N с · AI-заливка:
+      …» and the warning (`commitApplyPayloadToPhotoshop`, `fillTimeText`, `cpuFallbackText`).
+  - Checks: the new groups `fallback` and `fastwin`; `timing` is left out of the comparisons with v3.2.1;
+    `check_http` asserts `cpu_fallback` of `/health`; the window test has 14 new scenarios (94) and the
+    settings test 5 new cases (54). In the window test `scenario()` ticks the detailed preview unless the
+    scenario says `detail: false` - everything written before 4.10.0 tests the detailed preview - and
+    `release()` happens where the pointer was last. `tests/try_defects.py` holds the 51 deliberate
+    defects of 4.10.0 (19 in the engine and the server, 32 in the panel).
+
 ## 3. Current state — update this at the end of every session
 
 > **4.10.0 IS IN PROGRESS and this section is not rewritten yet** (it describes the state after 4.9.0).
