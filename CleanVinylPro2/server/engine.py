@@ -1911,7 +1911,9 @@ class CleanVinylEngine:
     HAIR_GUARD = 1.5             # px of the 1024 matte: this close to the outline of the person nothing is taken
     HAIR_KERNEL = 0.03           # head widths: a single hair is thinner than this
     HAIR_LINE = 0.024            # head widths: the response is averaged along this length, in 8 directions
-    HAIR_MIN_LEN = (0.16, 0.07)  # head widths: the shortest hair at slider 0 .. 100
+    HAIR_MIN_LEN = (0.16, 0.05)  # head widths: the shortest hair at slider 0 .. 100. The fuzz of the outline is
+    #                              not counted in the length, so 0.05 is what a hair has left of it when it just
+    #                              reaches HAIR_STICK_OUT: at 100 the length asks for nothing more than that rule.
     HAIR_TUFT = 5.0              # centre-line pixels per pixel of length above which a piece is a tuft, not hairs
     HAIR_FRINGE = 0.02           # head widths beyond the guard strip: the fuzz of the outline, never searched
     HAIR_STICK_OUT = 0.07        # head widths: its far end is at least this far from the guard strip
@@ -6125,6 +6127,8 @@ class CleanVinylEngine:
         small["core_mask_u8"] = reduced("core", found["core_mask_u8"])
         small["heal_mask"] = reduced("heal", found["heal_mask"], binary=True)
         if found.get("near_mask") is not None:
+            # (at the size of the copy like the other masks; today the drawing only asks whether there are marks
+            # and brings them to the size of its own working picture)
             small["near_mask"] = reduced("near", found["near_mask"], binary=True)
         draw_params = dict(clean_params)
         draw_params["speedMode"] = "fast"  # the copy is always drawn the fast way; the real mode is used for the real frame

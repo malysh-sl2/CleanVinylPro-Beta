@@ -488,8 +488,9 @@ second plugin next to the installed one and lose his presets.
     1. pieces: strong enough, no tuft (`HAIR_TUFT`), leading away from the person (`HAIR_AWAY`; and
        `HAIR_OUTWARD` of the piece, weighed by strength, points across the outline rather than along it);
     2. a hair = the pieces within `HAIR_GAP`: it begins at the outline (`HAIR_ATTACH`), sticks out
-       (`HAIR_STICK_OUT`), is long enough (`HAIR_MIN_LEN`: 0.16 → 0.07 head widths over the slider) and
-       reaches neither the end of the zone (`leaves`) nor the border of the frame (`at_border`);
+       (`HAIR_STICK_OUT`), is long enough (`HAIR_MIN_LEN`: 0.16 → 0.05 head widths over the slider; the
+       fuzz is not counted) and reaches neither the end of the zone (`leaves`) nor the border of the
+       frame (`at_border`);
     3. a dark hair grows out of something dark (`HAIR_ROOT`; a light hair is not asked);
     4. the line does not go on beyond its far end (`goes_on`, `HAIR_TAIL`, `HAIR_GOES_ON`): the piece of a
        cable between the head and a knot of hairs ends in the open like a hair.
@@ -502,17 +503,22 @@ second plugin next to the installed one and lose his presets.
     backdrop: next to a head that average is not the tone of the wall right there. Everywhere else the
     band is painted over as always, so every other repair of the frame is pixel for pixel what it is with
     the slider at 0. (The first version showed the photo along the whole outline as soon as one hair was
-    marked: on 3417 that changed 515 px of the dust repairs below the head by more than one level, up to
-    5 - a tool that is asked for hairs must not touch the floor.) The repair itself obeys the protected
+    marked: on 3417 that changed 7,696 px of the other repairs, more than 100 px away from any hair, by
+    more than one level, up to 33 - a tool that is asked for hairs must not touch the floor. Now: 222 px,
+    up to 4 levels, all in the LaMa tiles around the head, where another hole in a tile changes its
+    neighbours a little; below the waist nothing.) The repair itself obeys the protected
     band like every repair, so the first pixels of a removed hair, next to the hairdo, stay. (For a
     while the mark was blended at full strength inside the band; that gained a stub a few pixels
     shorter, no check could tell the two apart, and it was taken out.)
   - Traps met on the way - do not undo them: the cast-shadow map calls the wall next to a light hair a
     shadow, so it is not asked; the gear map flags a strong hair as a thin thing, so only its bodies
     count; a mark narrower than about 13 px only fades the hair; a lower threshold joins a hair with its
-    neighbours into a "tuft", hence `HAIR_STEPS`; next to a strong line the kernels that cross it leave
-    faint centre pixels that point across it, hence the weighing in rule 1; `stats["hair_px"]` in every
-    answer broke the comparison with v3.2.1, so it is there only when the tool is on.
+    neighbours into a "tuft", hence `HAIR_STEPS`; the length of a hair is counted outside the fuzz of the
+    outline, so the first shortest length at 100 (0.07 head widths) asked for a reach of 0.09 and the
+    clearest hair on top of the head of 3417 stayed (36 px where 38 were asked); next to a strong line
+    the kernels that cross it leave faint centre pixels that point across it, hence the weighing in
+    rule 1; `stats["hair_px"]` in every answer broke the comparison with v3.2.1, so it is there only when
+    the tool is on.
   - Panel: `gSlHair` is one of `ALL_SLIDER_IDS`; `readCurrentConfig` sends it as `strayHair`,
     `normalizedPresetConfig` keeps it within 0..100 (0 when a preset has no such key), `applyConfig`
     puts it on the slider, `previewSettingsSignature` holds it. The tooltips of «Циклорама» and «Захист
@@ -829,17 +835,17 @@ python3 -m venv /tmp/cvenv
 /tmp/cvenv/bin/pip install numpy opencv-python-headless fastapi uvicorn httpx Pillow
 npm install --prefix tests jsdom@24      # for the panel test; the folder is git-ignored
 
-# the checks: the quick run takes about 25 minutes and ends with "ALL CHECKS PASSED"
+# the checks: the quick run takes about 30 minutes and ends with "ALL CHECKS PASSED"
 /tmp/cvenv/bin/python tests/run_checks.py
 /tmp/cvenv/bin/python tests/run_checks.py install bat    # only the groups named
 /tmp/cvenv/bin/python tests/run_checks.py --full         # more random cases
 
-# the deliberate defects of the latest version: about 70 minutes for 4.8.0 (each of the 14 `exact` defects
-# takes 3.5 minutes); it patches engine.py / server.py in place - run those in a copy of the tree (below)
+# the deliberate defects of the latest version: about 28 minutes for 4.9.0 (a `hair` defect takes a minute,
+# the one that runs `quick` 4.5); it patches engine.py in place - run those in a copy of the tree (below)
 /tmp/cvenv/bin/python tests/try_defects.py               # ends with "N of N defects caught"
-/tmp/cvenv/bin/python tests/try_defects.py sharp: http:  # only the defects whose name or group has these words
-/tmp/cvenv/bin/python tests/try_defects.py panel:        # only the defects of the panel (9 minutes; they go
-                                                         # into a copy of the plugin folder by themselves)
+/tmp/cvenv/bin/python tests/try_defects.py edge: line:   # only the defects whose name or group has these words
+/tmp/cvenv/bin/python tests/try_defects.py panel:        # only the defects of the panel (half a minute; they
+                                                         # go into a copy of the plugin folder by themselves)
 /tmp/cvenv/bin/python tests/try_defects.py --list
 
 # after ANY change inside CleanVinylPro2: the .ccx first, because it is inside the ZIP
@@ -857,7 +863,7 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   ```bash
   mkdir -p /tmp/tree && tar cf - --exclude=node_modules --exclude=__pycache__ CleanVinylPro2 tests tools \
     | (cd /tmp/tree && tar xf -)
-  cd /tmp/tree && PYTHONUNBUFFERED=1 /tmp/cvenv/bin/python tests/try_defects.py sharp: http: exact:
+  cd /tmp/tree && PYTHONUNBUFFERED=1 /tmp/cvenv/bin/python tests/try_defects.py edge: line: hair:
   ```
 
   The copy must be made from the final state; throw it away afterwards.
@@ -1040,6 +1046,21 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
 - The plugin has no file dialog (`localFileSystem: "plugin"` in the manifest): anything the owner must find
   on disk is written by the server, and the panel shows the full path.
 
+- A background process runs only while a turn runs. Between two turns the sandbox stands still: a defect
+  run started at the end of a turn stood at the same defect eight hours later and went on when the next
+  turn began. Start a long run early in the turn and wait for its exit (`get_process_output` with
+  `wait_for`) before the turn ends; never tell the owner that something "is running" and will be ready.
+- A tool that is switched on must not change what the other tools do. For a new tool compare, on one of
+  his frames, the result with the tool on and off AWAY from what the tool marks: the hair tool of 4.9.0
+  changed the dust repairs along the whole person (it showed the inpainting another source picture) and
+  no drawn check had a speck of dust in its hair frame.
+- A check proves nothing where the code does not look. Two checks of 4.9.0 drew their test object in such
+  a place - the thin line in the middle of the step (a strip the seam search skips anyway), the fill
+  source looked at beyond the protected band - and their defects went through. When a defect is not
+  caught, first ask whether the scene of the check can show the rule at all.
+- Read the NUMBERS in the reason of a caught defect, not only its words: one defect of 4.9.0 was "caught"
+  by a difference of 0.0 levels (a threshold on a quantity that the rule did not move). The rule could
+  not be told from its absence and was taken out.
 ## 5. What the owner can send you
 
 Arena's Agent Mode accepts only these uploads: PNG, JPEG, WebP, GIF, PDF, TXT, Markdown, CSV, HTML, XML, CSS,

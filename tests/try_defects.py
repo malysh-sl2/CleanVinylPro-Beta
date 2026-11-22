@@ -140,9 +140,9 @@ DEFECTS = [
     ("hair: the slider moved in the window keeps the marks of its former position", "hair", ENGINE,
      "            k_hair = (k_maps, remove_stands, hair_eff)\n",
      "            k_hair = (k_maps, remove_stands)\n"),
-    ("hair: the light refresh gets the hair marks at the size of the real frame", "hair", ENGINE,
-     "        if found.get(\"near_mask\") is not None:\n            small[\"near_mask\"] = reduced(\"near\", found[\"near_mask\"], binary=True)\n",
-     ""),
+    # Not in the list: "the light refresh gets the hair marks at the size of the real frame" (_quick_preview hands
+    # them over unreduced). Since the hair repair obeys the protected band like every repair, the drawing only
+    # asks whether there are marks and brings them to its own size: nothing that can be seen changes.
     ("hair: hair_px is in every answer of the server (the tool is off)", "http", ENGINE,
      "            if hair_eff > 0:\n                stats[\"hair_px\"] = hair_px",
      "            if True:\n                stats[\"hair_px\"] = hair_px"),
