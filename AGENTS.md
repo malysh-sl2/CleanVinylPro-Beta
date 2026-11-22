@@ -93,6 +93,7 @@ written here and in the repository.
   message. He did not write «зливай». Ellipses on a screenshot are his way to point (as the red ones on a
   result): the screenshot was laid over the frame (1 px of it = 2.985 px of the frame) and every circled
   place was measured in the frame, in the result of 4.8.0 and in the result of the new code.
+
 ## 2. What is in the repository
 
 | Path | What it is | Rule |
@@ -527,64 +528,119 @@ second plugin next to the installed one and lose his presets.
     `cornerHair=False`, `strayHair=0`; five new cases of the settings test and the scenario «the hair
     slider…» of the window test. `tests/try_defects.py` holds the 36 deliberate defects of 4.9.0 (30 in
     the engine, 6 in the panel).
+
 ## 3. Current state — update this at the end of every session
 
-> **4.9.0 IS IN PROGRESS and this section is not rewritten yet** (it still describes the state after
-> 4.8.0). The code, the checks, the manual and `README.md` are at 4.9.0 (the entry «4.9.0» of section 2 says
-> what was built); `CleanVinylPro2.ccx` and `CleanVinylPro2.zip` are still those of 4.8.0, so the group
-> `plugin` fails until `tools/build_ccx.py` and `tools/build_zip.py` are run; no release `cvp2-v4.9.0`
-> exists; the owner has got no reply to his report on 4.8.0. Delete this note when the section is rewritten.
-_Last updated: 2026-11-21, by the agent of the first session, after releasing 4.8.0._
+_Last updated: 2026-11-22, by the agent of the first session, after releasing 4.9.0._
 
-- **Released:** 4.8.0, tag `cvp2-v4.8.0`, as a pre-release. Direct download:
-  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.8.0/CleanVinylPro2.zip`
-- **Owner's progress:** 4.2.0 to 4.7.0 have been installed and work on his PC (program in
+- **Released:** 4.9.0, tag `cvp2-v4.9.0`, as a pre-release. Direct download:
+  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.9.0/CleanVinylPro2.zip`
+- **Owner's progress:** 4.2.0 to 4.8.0 have been installed and work on his PC (program in
   `D:\Plugin Photoshop\CleanVinylPro2`, models in `D:\model AI fotoshop`, LaMa on `CUDAExecutionProvider`,
   Python 3.12.10). So the `.bat` files, the installer, the GPU, the real models and the panel HAVE run on
-  Windows. The old program (`D:\CleanVinylPro`) is removed from his PC. He wrote about 4.7.0 with five
-  points and added a sixth while 4.8.0 was being built (section 1); 4.8.0 answers them.
-  **He has not reported on 4.8.0 yet.**
+  Windows. The old program (`D:\CleanVinylPro`) is removed from his PC. He wrote about 4.8.0 with three
+  points - a seam left on the floor, a rim around the person, single hairs (section 1); 4.9.0 answers
+  them. He said nothing about the questions that went with 4.8.0 (zoom keys, right mouse button, the
+  time of the exact picture, the speed of the brush); his screenshot shows the big window of 4.8.0 at
+  work. **He has not reported on 4.9.0 yet.**
   The path to the plugin list of Creative Cloud (Stock & Marketplace → Plugins → Manage plugins → the three
   dots → Uninstall; the same list opens from Photoshop with Plugins → Manage Plugins) is in section 6 of
   the manual since 4.8.0. Whether his Creative Cloud shows these names in English or in Ukrainian is not
   known.
-- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (37 results in
-  1,619 s; 79 scenarios of the panel test and 44 cases of the settings test among them) on
-  2026-11-21, with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4. (A check of two defects ran next
-  to it for its first eleven minutes; with nothing next to it the run took 1,480 s earlier that day.)
-  Deliberate defects for what is new in 4.8.0 (`tests/try_defects.py`), put in one by one: 33 in the
-  engine and the server (14 `exact`, 16 `sharp`, 3 `http`), in a copy of the tree (3,867 s for one
-  pass); 38 in the panel, put into a copy of the plugin folder (612 s). All 71 are caught by the
-  checks as they are now. Not all were at first: the defects that showed a hole were run again after the
-  check was repaired, the others were not repeated (the repairs only added conditions to `exact` and
-  changed one panel scenario).
-  Holes that the defects found while 4.8.0 was built, all closed:
-  - "the zoom keys work without Ctrl" was let through: the scenario pressed zoom-in and then zoom-out and
-    saw that nothing had changed. Each key is tried by itself now.
-  - a run of the engine defects was counted as "caught" although the check process had been killed (a
-    measurement on a 22 MP frame ran next to it and the sandbox ran out of memory). The runner now says
-    CRASHED for a check run that ends without a FAIL line, and counts it as not caught.
-  - the first check of the larger window pictures did not notice "the larger pictures do not show the
-    strokes and the eraser" by itself (the defect was caught only through a side effect in the clothing
-    part): the eraser was tried on clean floor, where erasing shows nothing. Now it is drawn along a row
-    of specks that the search removes, and the brush paints over a mark that the search leaves.
-  - "Apply waits for a background run of other values" was let through after "a slider that is taken stops
-    the run" had been added: the scenario changed the values with a slider, and that alone now stops the
-    run, so there was nothing left for Apply to follow. The scenario changes the values with a button now
-    (a click does not stop the run). A new rule can empty an older scenario: run ALL the defects again
-    after the last change, not only the new ones.
-  - "a background run holds the session while it computes" was caught only through a side effect: the
-    stroke that should have been answered meanwhile came back after the gate of the check had given up
-    (45 s), and that still counted as "meanwhile". `Gate.holding()` now tells whether the run still stood
-    at the gate when the answer came.
-  - "with the user's own mask the frame is computed first and declined afterwards" was not caught: the
-    answer and the session were the same, only a frame was computed for nothing (the second test, after
-    the computation, declined). The check counts the frames now.
-  Read the reason after "<-" of every caught defect: when it names another rule than the one the defect
-  breaks, the check that should have noticed is too weak, even though the defect counts as caught.
-  The runners of earlier versions are gone or replaced (4.7.0: 29 defects, in the history at `c3be3ed`;
-  4.6.0: 34, at `50bae15`; 4.5.0: 71 and 4.4.0: 41, never committed); their checks are still in
-  `tests/run_checks.py`.
+- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (40 results in
+  1,881 s; 80 scenarios of the panel test and 49 cases of the settings test among them) on
+  2026-11-22, with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4, with nothing running next to it.
+  (A first run, started next to a run of the hair defects, was killed for memory in the group `exact`
+  after 22 results: 2.4 GB for that group alone. One heavy job at a time - section 4.)
+  Deliberate defects for what is new in 4.9.0 (`tests/try_defects.py`), put in one by one: 35
+  (29 in the engine - `edge` 5, `cyc` 1, `process` 1, `line` 4, `hair` 16, `http` 1,
+  `quick` 1 - and 6 in the panel). All are caught by the checks as they are now, each by the check of
+  the rule it breaks. They ran in a copy of the tree in three passes: the first list of 36 (31 caught, 1,731 s); the
+  35 of the list after the checks were repaired (34 caught, 1,667 s - the one that was not caught is
+  no defect any more, below); and, after the last two changes of the engine, the 18 `hair:` defects
+  once more (18 caught; 2,205 s next to another run, about 20 minutes alone). The 7 `edge:`, 4
+  `line:` and 6 `panel:` defects ran before those last changes, which touch only the hair tool.
+  Holes that the defects found while 4.9.0 was built, all closed:
+  - a dead straight strong hair was never taken, and two defects ("a line that leaves the searched zone
+    is a hair", "a line that reaches the frame border is a hair") changed nothing: the pole of the check
+    was turned away by ANOTHER rule, for a wrong reason. Next to a strong line the kernels that cross it
+    leave faint centre pixels, and those point across it (43 % of the piece pointed away, 45 % is
+    needed). The direction is weighed by strength now; the check has a dead straight vertical hair,
+    which must go, and a pole in its place, which must stay.
+  - "the seam tool works inside the zone of the corner's thin line" was let through: the check drew its
+    line in the middle of the step, inside the strip that the seam search skips anyway. There is a frame
+    with the line 38 px beside the middle now.
+  - "around a hair the repair is shown an average of the backdrop" was let through: the check looked at
+    what the inpainting is given from 8 px off the person, beyond the protected band (about 7 px at
+    protection 70 in a 2000 px frame). It looks from 5 px now (the guard strip is 4 px).
+  - a rule could not be told from its absence, so it was taken out with its two defects: the hair repair
+    blended at full strength inside the protected band (25 % against 52 % of the contrast over the
+    outer 4 px of the band; one of the two defects had been "caught" by a difference of 0.0 levels).
+  - with that rule gone, "the light refresh gets the hair marks at the size of the real frame" was not
+    caught either, and rightly: the drawing now only asks whether there are marks and resizes them, so
+    nothing visible changes. It left the list; the line stays in `_quick_preview` with a comment.
+  - not found by a defect but by comparing the slider at 0 and at 100 on frame 3417: with one hair
+    marked, every repair of the frame was shown another source picture. Cured (`HAIR_SRC_NEAR`), with a
+    check (dust next to the legs must come out pixel for pixel as with the slider at 0) and a defect.
+  - not found by a defect either, but by looking at the marks on 3417 in a stretched view: the clearest
+    hair on top of the head stayed at 100, two pixels too short (`HAIR_MIN_LEN`, section 2). No drawn
+    hair of the check lies between 0.07 and 0.09 head widths; the check was left as it is.
+  Defects that cannot be caught and are NOT in the list (said in a comment of `try_defects.py`):
+  `HAIR_AWAY` removed alone; either half of the strength test of a piece (`HAIR_MEAN`, the peak) in
+  the scenes of the check.
+  Holes found while earlier versions were built are told in the history of this file (4.8.0: at
+  `0f4cb46`). Two of their lessons stay rules: read the reason after "<-" of every caught defect - when
+  it names another rule than the one the defect breaks, the check that should have noticed is too weak;
+  and a new rule can empty an older scenario, so run ALL the defects again after the last change.
+  The runners of earlier versions are gone or replaced (4.8.0: 71 defects, in the history at `0f4cb46`;
+  4.7.0: 29, at `c3be3ed`; 4.6.0: 34, at `50bae15`; 4.5.0: 71 and 4.4.0: 41, never committed); their
+  checks are still in `tests/run_checks.py`.
+- **What 4.9.0 gives on his frames** (stand-in networks, section 4: the same engine code as on his PC,
+  but another silhouette and another fill - an indication, not a proof):
+  - `0Q5A3417` (automatic preset «Темний дальній план»): the thin line right of the dress is gone
+    (`corner_hair` 5 pieces). The rim at the left hem, row 4500, x 808-828 of the frame: 50 50 48 50 38
+    where 4.8.0 gave 53 55 58 59 42 (the last number is the dress). The floor above the train, 10 px from
+    the dress against 30 px from it: 4.8.0 28 / 46 at x 2250 and 17.5 / 33 at x 2850; now 42 / 47 and
+    32 / 33. The window flow (light refresh 2.2 s, background recompute 8.4 s here) gives the same frame
+    as the direct call.
+  - the five other frames (`1.jpg`, `2.jpg`, `3.jpg`, `0Q5A3384`, `0Q5A3413`), slider at 0, against
+    4.8.0: 0.11-0.37 % of the frame differs by more than one level, almost all of it within 12 px of
+    the person; inside the person nothing.
+  - the hair slider, marked pixels at 25 / 50 / 75 / 100: 3417: 2,482 / 3,094 / 4,798 / 8,679; `1.jpg`:
+    4,119 / 8,340 / 8,511 / 8,511; `2.jpg`: 0 / 3,235 / 5,882 / 7,070; `3.jpg`: 0 / 0 / 0 / 3,314;
+    `0Q5A3384`: 30,196 / 32,161 / 44,869 / 59,582; `0Q5A3413`: 0 / 0 / 3,603 / 4,761. Every mark was
+    looked at: at 100 one to three places per frame, all at the hairdo, real hairs in each; nothing at a
+    face, a hand or the clothes. The search takes 0.5-1.6 s per frame here.
+    What stays at 100 on 3417, seen in a strongly stretched view: the loops of hair around the forehead
+    and the long hairs that lie along the back of the head (a wisp, and hairs along the outline, stay by
+    rule), and single hairs fainter than the threshold. He may well mean those too - he was asked.
+  - with the slider at 100 on 3417 the frame away from the marked hairs (more than 100 px) differs from
+    the slider at 0 on 2,020 px, by 4 levels at most, all above the waist (see «4.9.0» in section 2).
+- **Decided by the agent alone for 4.9.0** (no option card was shown; change it if he says otherwise):
+  - the hair slider is at 0 in every built-in preset, and a preset saved before 4.9.0 means 0: the tool
+    repaints the wall next to a head, so he switches it on himself;
+  - what a hair is: it begins at the hairdo, lies within 0.6 head widths of the person and between the
+    top of the head and 1.8 head widths below it, and ends in the open. A line that is still there at
+    the end of that zone or at the frame border is a cable or a stand and stays;
+  - the tool is careful rather than thorough: a wisp, the fuzz of the outline and the finest hairs stay;
+  - the first pixels of a removed hair stay (the repair obeys «Захист моделі та країв» like every repair);
+  - the tone stages reach the person at every position of «Захист моделі та країв»; `toneEdge` and
+    `cornerHair` are request parameters without a switch in the panel;
+  - the thin line of a joint is taken only where the corner tool works on that joint; nothing new
+    happens with «Циклорама» at 0.
+- **Not run in Photoshop yet (4.9.0):** all of it. In particular:
+  - the rim along the hem and the shoe with the REAL matte. The tone gate follows the matte of the real
+    network and the edges of the photo; here the silhouette of 3417 was a GrabCut outline corrected by
+    hand (MediaPipe alone is not usable on that frame). Where the real matte is soft over a wide stretch
+    (tulle, loose hair) the tone shift is partial across it; that is meant, but nobody has seen it;
+  - whether the thin line right of the dress is found on his PC as it is here (the corner finder and the
+    line search do not use the networks, but the visible part of the floor depends on the silhouette);
+  - the hair tool with the real matte and the real LaMa. Which hairs are found depends on the outline:
+    a hair that the network draws as part of the person is inside the person and stays; a looser
+    outline swallows the root of a hair. How the wall is refilled depends on LaMa (here: OpenCV's
+    Telea in the fast mode and a stand-in in the quality mode);
+  - whether the hairs he meant are the ones the tool takes - he was asked to circle them;
+  - the look of the new slider row in the panel (it was only drawn in jsdom).
 - **Decided by the agent alone for 4.8.0** (he chose "the cleaned photo stays on screen" and "remove the
   2"; the rest was not asked - change it if he says otherwise):
   - the exact picture is asked for after 0.7 s of quiet (`EXACT_DELAY_MS`);
@@ -599,7 +655,8 @@ _Last updated: 2026-11-21, by the agent of the first session, after releasing 4.
     than before;
   - the icon: nothing can be done about Creative Cloud; the plugin icon was made opaque for Photoshop's
     own list of plugins.
-- **Not run in Photoshop yet (4.8.0):** all of it. In particular:
+- **Not confirmed about 4.8.0** (it runs on his PC - his screenshot shows its big window - but he wrote
+  only about the cleaning). Still unknown:
   - whether Photoshop passes Ctrl + «+» / «−» / 0 and the right mouse button to the window of the plugin
     (if not, they do nothing; the wheel, Space + mouse, the middle button and the Hand tool stay);
   - how long the background recompute takes on his GPU, and whether the percent in the corner label moves;
@@ -681,16 +738,20 @@ _Last updated: 2026-11-21, by the agent of the first session, after releasing 4.
   - of 4.5.0, still unconfirmed: opening the backup folder from the panel, the look of the new buttons,
     the one-time preset moves. (Ctrl+Z works in Photoshop: he confirmed it.)
 - **Merging:** pull request #1 (`arena/33f1ced8-cleanvinylpro-beta` into `main`) is open and deliberately not
-  merged yet: fixes that follow his report on 4.8.0 should come from the session that knows the code. He
+  merged yet: fixes that follow his report on 4.9.0 should come from the session that knows the code. He
   asked what merging into `main` means and was told: the version is already published and can be downloaded;
   merging only marks it on GitHub as the main one and changes nothing on his PC; he should write «зливай»
   when he wants it. Merge it when he writes that or when the session ends (section 6). If `main` already
   contains this file, that has happened. Merging also removes the folder `CleanVinylPro/` from `main`.
 
-### Open questions (ask when he reports on 4.8.0)
+### Open questions (ask when he reports on 4.9.0)
 
-- New with 4.8.0: do Ctrl + «+» / «−» / 0 and the right mouse button work in Photoshop? Is the window
-  sharp enough now, also zoomed in? Did the brush get slower? How long does the exact picture take to come?
+- New with 4.9.0: is the rim along the hem and the shoe gone on his PC? Is the line right of the dress
+  gone? Does the hair slider take the hairs he meant - and does it take anything it should not (a thin
+  earring, a chain, a ribbon)? He was asked for a screenshot with the hairs circled.
+- From 4.8.0, not answered: do Ctrl + «+» / «−» / 0 and the right mouse button work in Photoshop? Is the
+  window sharp enough now, also zoomed in? Did the brush get slower? How long does the exact picture take
+  to come? Does the photo look grainy in a small window?
 - From 4.7.0, not answered: is the soft edge as soft as he wants (the fade is one brush radius;
   `BRUSH_SOFT_BAND`)? Is the one mode fast enough on his PC? (The old program is removed: that went through.)
 - Answered after 4.5.0: Ctrl+Z works in Photoshop; the corner on a black backdrop must go completely;
@@ -708,6 +769,10 @@ _Last updated: 2026-11-21, by the agent of the first session, after releasing 4.
 
 ### Offered to the owner, not built (he has not asked for them)
 
+- a bolder hair tool (named in the reply about 4.9.0 as the next step once he has circled the hairs he
+  means): today a wisp, the loops of hair around the forehead, hairs that lie along the hairdo and the
+  faintest hairs stay by rule. Taking them means repainting more of the wall next to the head, so it
+  needs his frames with the hairs marked and the real LaMa to judge the fill;
 - rewriting the history so that the 666 MB of the removed original program really leave GitHub (needs a force
   push of `main`; ask him first, and do it only at the very start of a session);
 - a switch "update nothing until I press a button" for the big window;
@@ -798,10 +863,31 @@ _Last updated: 2026-11-21, by the agent of the first session, after releasing 4.
   highlighted. Harmless today. If settings are ever written without `cfg`, apply the active preset in
   `bootstrap` of `main.js` (a restore from a backup already does).
 - The cyclorama corner is searched between 25 % and 82 % of the frame height and must be nearly horizontal.
-  A hair-thin dark crease right in the corner stays as a faint line after the corner tool: the seam search
-  leaves the corner strip alone when the tool is on. (Letting the seam repair run there first gave the same
-  tone on his frames and removed the crease on a drawn frame, but puts a long inpainted strip next to the
-  person; it could not be judged without the real LaMa. One line decides: `corner_skip` in `process`.)
+  A hair-thin dark line in the corner or within 2 % of the frame height of it (`CORNER_HAIR_ZONE`) goes
+  with the corner since 4.9.0: what its profile has beyond the straight line between its two shoulders is
+  subtracted, at most 0.045 of the range (`CORNER_HAIR_CAP`, about 11 levels) - a deeper or wider crease
+  stays in part, and a line that the search does not find stays whole. The seam search leaves that zone
+  alone when the corner tool is on, so a second, real seam that close to the corner is not repaired as a
+  seam. With «Циклорама» at 0 none of this runs.
+- The tone stages and the person (4.9.0): the corner and the stains now shift the tone up to the matte
+  itself, not up to the margin of «Захист моделі та країв». A thin part of the person that the matte
+  misses and that only the margin used to cover (a strap, a heel, the tip of a shoe) gets the smooth
+  shift of the floor next to it - a few levels, no repainting. Where the matte is soft, the shift is
+  partial. Where the network is sure of the person (`TONE_GATE_SURE`) nothing shifts at all.
+- Single hairs (4.9.0), found on drawn frames and on his six frames, not cured:
+  - a narrow strong rim of light around the head is gear to the gear map: hardly a hair is marked there;
+  - a strong wisp next to a cable is one "body" with the cable and is not searched;
+  - a thick hair that is exactly vertical in a close-up gives several centre pixels per row and is
+    dropped as a tuft;
+  - the first pixels of a hair, inside the protected band, stay: a stub at the hairdo, wider with a
+    higher «Захист моделі та країв»;
+  - the finest hairs (below `HAIR_FLOOR` / `HAIR_SIGMA` of the backdrop's own response) stay at 100;
+  - a hair longer than the zone (0.6 head widths from the person) is taken for a cable and stays whole;
+  - a thin thing that begins at the head and ends in the open - a thin earring, a chain, the end of a
+    ribbon, a feather - passes for a hair. The eraser of the big window brings it back; a lower slider
+    asks for longer hairs and may leave it;
+  - a light hair is not asked what it grows out of (a dark one must grow out of something dark), so a
+    thin light line that touches the head on a dark wall is taken.
 - The stain stage reaches about 2 % of the frame. At the default 65 a round stain of 1 % of the frame height
   loses 85 %, one of 2.4 % loses 70 %, one of 4 % half, one of 6 % a fifth; from 10 % up it is taken for light
   and stays. A small soft shadow is evened like a stain of its size (a drawn one of 8 % of the height kept
@@ -870,7 +956,10 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
 - **One heavy job at a time.** The sandbox has 3.9 GB of memory and two CPUs. A session on a 22 MP frame of
   his takes about 2 GB. A check run that is killed for memory ends without a word and without a FAIL
   line: `try_defects.py` reports that as CRASHED (not caught), and a full run simply stops. Do not start a
-  measurement, a second check run or the panel test next to a running check.
+  measurement, a second check run or the panel test next to a running check. (Paid for twice. In 4.9.0
+  a full run next to a run of the hair defects was killed in its group `exact`, which takes 2.4 GB by
+  itself; `dmesg | tail` names the killed process. The single groups `hair`, `edge` and `line` are
+  small enough to run next to a defect run; the full run is not.)
 - The comparisons with v3.2.1 (`process`, `session`, `http`) load the old engine and server from
   `tests/baseline_v321/`. If that folder is missing they are skipped and the group `server` fails.
 - No real AI models here, so what the person-matting model returns is faked (`FakeMatting`). To try something
@@ -1061,6 +1150,7 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
 - Read the NUMBERS in the reason of a caught defect, not only its words: one defect of 4.9.0 was "caught"
   by a difference of 0.0 levels (a threshold on a quantity that the rule did not move). The rule could
   not be told from its absence and was taken out.
+
 ## 5. What the owner can send you
 
 Arena's Agent Mode accepts only these uploads: PNG, JPEG, WebP, GIF, PDF, TXT, Markdown, CSV, HTML, XML, CSS,
