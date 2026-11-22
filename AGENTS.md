@@ -608,88 +608,111 @@ second plugin next to the installed one and lose his presets.
       of the panel warns too; after Apply the footer of the panel says «„Застосувати“: N с · AI-заливка:
       …» and the warning (`commitApplyPayloadToPhotoshop`, `fillTimeText`, `cpuFallbackText`).
   - Checks: the new groups `fallback` and `fastwin`; `timing` is left out of the comparisons with v3.2.1;
-    `check_http` asserts `cpu_fallback` of `/health`; the window test has 14 new scenarios (94) and the
+    `check_http` asserts `cpu_fallback` of `/health`; the window test has 12 new scenarios (92) and the
     settings test 5 new cases (54). In the window test `scenario()` ticks the detailed preview unless the
     scenario says `detail: false` - everything written before 4.10.0 tests the detailed preview - and
-    `release()` happens where the pointer was last. `tests/try_defects.py` holds the 51 deliberate
-    defects of 4.10.0 (19 in the engine and the server, 32 in the panel).
+    `release()` happens where the pointer was last. `tests/try_defects.py` holds the 54 deliberate
+    defects of 4.10.0 (19 in the engine and the server, 35 in the panel).
 
 ## 3. Current state — update this at the end of every session
 
-> **4.10.0 IS IN PROGRESS and this section is not rewritten yet** (it describes the state after 4.9.0).
-> Done and pushed (`61243ed`): "Детальний перегляд" (checkbox of the big window, off by default) holds the
-> window pictures of 2160 px and the exact picture by itself; off means pictures of the working size
-> (`previewLong` 1080) and no background run. The trace of a stroke fills the gap between two mouse events.
-> A GPU error in the AI fill or the matting costs one run instead of the session (`_lama_on_cpu`,
-> `cpu_fallback`), and the answer says how long the fill took and where it ran (`stats["timing"]`). New check
-> groups `fallback` and `fastwin`, 7 panel scenarios, 5 settings cases.
-> NOT done: the version number (still 4.9.0 everywhere), the manual, `README.md`, `tests/README.md`, the list
-> of deliberate defects (still that of 4.9.0), `.ccx` and ZIP, the full check run, the release, the reply.
-> Delete this note when the section is rewritten.
-_Last updated: 2026-11-22, by the agent of the first session, after releasing 4.9.0._
+_Last updated: 2026-11-22, by the agent of the first session, after releasing 4.10.0._
 
-- **Released:** 4.9.0, tag `cvp2-v4.9.0`, as a pre-release. Direct download:
-  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.9.0/CleanVinylPro2.zip`
-- **Owner's progress:** 4.2.0 to 4.8.0 have been installed and work on his PC (program in
+- **Released:** 4.10.0, tag `cvp2-v4.10.0`, as a pre-release. Direct download:
+  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.10.0/CleanVinylPro2.zip`
+- **Owner's progress:** 4.2.0 to 4.9.0 have been installed and work on his PC (program in
   `D:\Plugin Photoshop\CleanVinylPro2`, models in `D:\model AI fotoshop`, LaMa on `CUDAExecutionProvider`,
   Python 3.12.10). So the `.bat` files, the installer, the GPU, the real models and the panel HAVE run on
-  Windows. The old program (`D:\CleanVinylPro`) is removed from his PC. He wrote about 4.8.0 with three
-  points - a seam left on the floor, a rim around the person, single hairs (section 1); 4.9.0 answers
-  them. He said nothing about the questions that went with 4.8.0 (zoom keys, right mouse button, the
-  time of the exact picture, the speed of the brush); his screenshot shows the big window of 4.8.0 at
-  work. **He has not reported on 4.9.0 yet.**
+  Windows. The old program (`D:\CleanVinylPro`) is removed from his PC. His report on 4.9.0 (2026-11-22,
+  section 1) is about speed only: the brush is very slow and leaves dots, a preview takes 60 to 400
+  seconds, the soft face of the earlier window is fine, speed is what matters; 4.10.0 answers it. He said
+  nothing about what 4.9.0 was made for (the line right of the dress, the rim, the hairs) and the zoom
+  keys do not matter to him. **He has not reported on 4.10.0 yet.**
   The path to the plugin list of Creative Cloud (Stock & Marketplace → Plugins → Manage plugins → the three
   dots → Uninstall; the same list opens from Photoshop with Plugins → Manage Plugins) is in section 6 of
   the manual since 4.8.0. Whether his Creative Cloud shows these names in English or in Ukrainian is not
   known.
-- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (40 results in
-  1,881 s; 80 scenarios of the panel test and 49 cases of the settings test among them) on
+- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (42 results in
+  2,644 s; 92 scenarios of the panel test and 54 cases of the settings test among them) on
   2026-11-22, with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4, with nothing running next to it.
-  (A first run, started next to a run of the hair defects, was killed for memory in the group `exact`
-  after 22 results: 2.4 GB for that group alone. One heavy job at a time - section 4.)
-  Deliberate defects for what is new in 4.9.0 (`tests/try_defects.py`), put in one by one: 35
-  (29 in the engine - `edge` 5, `cyc` 1, `process` 1, `line` 4, `hair` 16, `http` 1,
-  `quick` 1 - and 6 in the panel). All are caught by the checks as they are now, each by the check of
-  the rule it breaks. They ran in a copy of the tree in three passes: the first list of 36 (31 caught, 1,731 s); the
-  35 of the list after the checks were repaired (34 caught, 1,667 s - the one that was not caught is
-  no defect any more, below); and, after the last two changes of the engine, the 18 `hair:` defects
-  once more (18 caught; 2,205 s next to another run, about 20 minutes alone). The 7 `edge:`, 4
-  `line:` and 6 `panel:` defects ran before those last changes, which touch only the hair tool.
-  Holes that the defects found while 4.9.0 was built, all closed:
-  - a dead straight strong hair was never taken, and two defects ("a line that leaves the searched zone
-    is a hair", "a line that reaches the frame border is a hair") changed nothing: the pole of the check
-    was turned away by ANOTHER rule, for a wrong reason. Next to a strong line the kernels that cross it
-    leave faint centre pixels, and those point across it (43 % of the piece pointed away, 45 % is
-    needed). The direction is weighed by strength now; the check has a dead straight vertical hair,
-    which must go, and a pole in its place, which must stay.
-  - "the seam tool works inside the zone of the corner's thin line" was let through: the check drew its
-    line in the middle of the step, inside the strip that the seam search skips anyway. There is a frame
-    with the line 38 px beside the middle now.
-  - "around a hair the repair is shown an average of the backdrop" was let through: the check looked at
-    what the inpainting is given from 8 px off the person, beyond the protected band (about 7 px at
-    protection 70 in a 2000 px frame). It looks from 5 px now (the guard strip is 4 px).
-  - a rule could not be told from its absence, so it was taken out with its two defects: the hair repair
-    blended at full strength inside the protected band (25 % against 52 % of the contrast over the
-    outer 4 px of the band; one of the two defects had been "caught" by a difference of 0.0 levels).
-  - with that rule gone, "the light refresh gets the hair marks at the size of the real frame" was not
-    caught either, and rightly: the drawing now only asks whether there are marks and resizes them, so
-    nothing visible changes. It left the list; the line stays in `_quick_preview` with a comment.
-  - not found by a defect but by comparing the slider at 0 and at 100 on frame 3417: with one hair
-    marked, every repair of the frame was shown another source picture. Cured (`HAIR_SRC_NEAR`), with a
-    check (dust next to the legs must come out pixel for pixel as with the slider at 0) and a defect.
-  - not found by a defect either, but by looking at the marks on 3417 in a stretched view: the clearest
-    hair on top of the head stayed at 100, two pixels too short (`HAIR_MIN_LEN`, section 2). No drawn
-    hair of the check lies between 0.07 and 0.09 head widths; the check was left as it is.
-  Defects that cannot be caught and are NOT in the list (said in a comment of `try_defects.py`):
-  `HAIR_AWAY` removed alone; either half of the strength test of a piece (`HAIR_MEAN`, the peak) in
-  the scenes of the check.
-  Holes found while earlier versions were built are told in the history of this file (4.8.0: at
-  `0f4cb46`). Two of their lessons stay rules: read the reason after "<-" of every caught defect - when
-  it names another rule than the one the defect breaks, the check that should have noticed is too weak;
-  and a new rule can empty an older scenario, so run ALL the defects again after the last change.
-  The runners of earlier versions are gone or replaced (4.8.0: 71 defects, in the history at `0f4cb46`;
-  4.7.0: 29, at `c3be3ed`; 4.6.0: 34, at `50bae15`; 4.5.0: 71 and 4.4.0: 41, never committed); their
-  checks are still in `tests/run_checks.py`.
+  Deliberate defects for what is new in 4.10.0 (`tests/try_defects.py`), put in one by one: 54 (19 in the
+  engine and the server - `fallback` 14, `fastwin` 4, `http` 1 - and 35 in the panel). All are caught
+  by the checks as they are now, each by the check of the rule it breaks. They ran in a copy of the tree:
+  the 19 of the engine and the server in 745 s, the 35 of the panel in 164 s, both after the last change
+  of the files they touch.
+  Holes found while 4.10.0 was built, all closed:
+  - "all processors but one" could not be told from "one thread" here: the sandbox has two processors.
+    `check_fallback` now tells the engine of eight (`os.cpu_count` replaced for the call) and asks for 7;
+  - nothing looked at what `_create_cpu_session` does with the number: the check now calls it with a
+    stand-in for `ort.SessionOptions` / `ort.InferenceSession` and reads `intra_op_num_threads`;
+  - "the processor fails as well" was tried only with a processor session that fails at once; a version
+    that went back to the GPU and skipped the tile would have passed. There is a session now that fails
+    after its first tile (`BrokenLater`), and the check counts how often the GPU was asked;
+  - the warning "the fill ran on the processor" was written into the note field of the window, where the
+    note of the automatic preset replaced it a moment later, and behind the "preview is out of date"
+    text it never showed. The scenario found it; the warning has its own field (`sessState.cpuWarn`);
+  - the first way of keeping the trace of a stroke that waits for the server left it on screen when that
+    stroke was the last one; the scenario with three strokes found it (`maskEditsWaiting`).
+  Holes found while earlier versions were built are told in the history of this file (4.9.0: at
+  `78a08b8`; 4.8.0: at `0f4cb46`). Their lessons stay rules: read the reason after "<-" of every caught
+  defect - when it names another rule than the one the defect breaks, the check that should have noticed
+  is too weak; read the NUMBERS in that reason; a new rule can empty an older scenario, so run ALL the
+  defects again after the last change; and a defect that changes nothing visible does not belong in the
+  list.
+  The runners of earlier versions are gone or replaced (4.9.0: 35 defects, in the history at `78a08b8`;
+  4.8.0: 71, at `0f4cb46`; 4.7.0: 29, at `c3be3ed`; 4.6.0: 34, at `50bae15`; 4.5.0: 71 and 4.4.0: 41,
+  never committed); their checks are still in `tests/run_checks.py`.
+- **What was measured for 4.10.0** (stand-in networks, the two processors of the sandbox, frame
+  `0Q5A3411` at the working size 720 x 1080; an indication of the server's share only - what Photoshop
+  needs to take the answer and to show two JPEGs cannot be measured here):
+
+  | window pictures | a stroke on the server | answer to a stroke | answer of the start |
+  |---|---|---|---|
+  | 2160 px («Детальний перегляд») | 225-274 ms | 1.75 MB | about 3.2 MB |
+  | 1080 px (the fast window) | 147-183 ms | 0.54 MB | about 0.85 MB |
+
+  - That is for the first strokes of a small brush (radius 28). 40 such strokes side by side, 1080 px:
+    150-200 ms at first, 250-290 ms once 8.6 % of the window is painted; Apply after them 1.4 s.
+  - A wide brush (radius 60) over the whole left floor, 30 strokes, the bright green growing from 3.5 %
+    to 17 % of the window: 289, 297, 341, 485, 560, 609, 434 ms at strokes 1, 5, 10, 15, 20, 25, 30 with
+    1080 px and 323, 311, 407, 522, 618, 509, 545 ms with 2160 px. So with a large painted area the
+    server needs the same time for either size: the whole connected painted zone is filled anew with
+    every stroke (`_brush_fill`). **4.10.0 does not shorten that part.**
+  - Where 250 ms of such a stroke go (1080 px, 8.6 % painted): `_brush_fill` 119 ms, the two JPEGs 94 ms
+    (57 of them the mask picture `_encode_overlay_jpg`, which travels with every answer although the
+    mask view is usually off), the step-back history 25 ms.
+  - How to measure again (the probe scripts were not kept): `H.make_engine(E, sil)`,
+    `eng.start_session(img, 8, dict(H.STD, speedMode="quality", cycCurve=65, previewLong=1080))`, then
+    time `eng.edit_session_mask(sid, "stroke", pts, radius, False, False, 45.0, 1.0)` with `pts` a list
+    of `{"x": .., "y": .., "norm": True}`; `cProfile` around ten of them.
+- **Decided by the agent alone for 4.10.0** (he left the choice - «або зменш або верни»; no option card
+  was shown; change it if he says otherwise):
+  - the fast window comes back as the DEFAULT, and what 4.8.0 brought stays as a checkbox («Детальний
+    перегляд (повільніше)»). An existing installation gets the fast window too: the setting did not
+    exist before, so nothing keeps the behaviour of 4.8.0 for him;
+  - the size of the window pictures changes with the next opening of the window, not at once;
+  - after a GPU error the processor session gets all processors but one;
+  - the warning stays in the corner of the photo for 20 s; the time line of the settings and the time in
+    the footer after Apply are always written, not only when something is slow;
+  - a mouse release at (0, 0) counts as "no place";
+  - the server's own time for a stroke was left as it is (above), and so was the mask picture that
+    travels with every answer: both are named in the reply as the next steps if the brush is still slow.
+- **Not run in Photoshop yet (4.10.0):** all of it. In particular:
+  - whether the brush is fast for him now. The assumption is that Photoshop needed long to take and show
+    two JPEGs of 2160 x 3240 per answer, and that a background run started after every stroke; neither
+    was seen;
+  - whether Photoshop really drops mouse moves while the window is busy (read from «робе точки або
+    тянути поленьку»), and whether `mouseup` carries the place of the pointer there. If it does not, the
+    end point is simply not added and a stroke is what it was in 4.9.0;
+  - the GPU: whether an error such as "out of memory" leaves the GPU session usable for the next run (if
+    not, every run falls back and the warning shows every time - visible now, and a restart of the
+    server cures it as before); how fast LaMa is on his processor with all cores but one; that the
+    second copy of a model fits into his RAM;
+  - **whether a GPU error is what made his previews take 60-400 s at all.** It is the one cause found in
+    the code that gives such times; nothing from his PC confirms it. The time line («Останній
+    розрахунок… (відеокарта|процесор)») was built so that his next screenshot answers it;
+  - the look of the new checkbox, the time line and the longer footer text in the panel (drawn only in
+    jsdom).
 - **What 4.9.0 gives on his frames** (stand-in networks, section 4: the same engine code as on his PC,
   but another silhouette and another fill - an indication, not a proof):
   - `0Q5A3417` (automatic preset «Темний дальній план»): the thin line right of the dress is gone
@@ -723,7 +746,8 @@ _Last updated: 2026-11-22, by the agent of the first session, after releasing 4.
     `cornerHair` are request parameters without a switch in the panel;
   - the thin line of a joint is taken only where the corner tool works on that joint; nothing new
     happens with «Циклорама» at 0.
-- **Not run in Photoshop yet (4.9.0):** all of it. In particular:
+- **Not confirmed about 4.9.0** (it runs on his PC - his report of 2026-11-22 is about its speed - but he
+  wrote nothing about the cleaning). Still unknown:
   - the rim along the hem and the shoe with the REAL matte. The tone gate follows the matte of the real
     network and the edges of the photo; here the silhouette of 3417 was a GrabCut outline corrected by
     hand (MediaPipe alone is not usable on that frame). Where the real matte is soft over a wide stretch
@@ -833,20 +857,25 @@ _Last updated: 2026-11-22, by the agent of the first session, after releasing 4.
   - of 4.5.0, still unconfirmed: opening the backup folder from the panel, the look of the new buttons,
     the one-time preset moves. (Ctrl+Z works in Photoshop: he confirmed it.)
 - **Merging:** pull request #1 (`arena/33f1ced8-cleanvinylpro-beta` into `main`) is open and deliberately not
-  merged yet: fixes that follow his report on 4.9.0 should come from the session that knows the code. He
+  merged yet: fixes that follow his report on 4.10.0 should come from the session that knows the code. He
   asked what merging into `main` means and was told: the version is already published and can be downloaded;
   merging only marks it on GitHub as the main one and changes nothing on his PC; he should write «зливай»
   when he wants it. Merge it when he writes that or when the session ends (section 6). If `main` already
   contains this file, that has happened. Merging also removes the folder `CleanVinylPro/` from `main`.
 
-### Open questions (ask when he reports on 4.9.0)
+### Open questions (ask when he reports on 4.10.0)
 
-- New with 4.9.0: is the rim along the hem and the shoe gone on his PC? Is the line right of the dress
+- New with 4.10.0: is the brush fast now, and is its trace a line? What does the time line say after a
+  computation and after «Застосувати» - how many seconds, «відеокарта» or «процесор» (a screenshot is
+  best)? Did the warning about the processor ever show? Does he paint whole areas of floor with the
+  brush (the reading of his ellipse, section 1)? If the window is still slow, WHICH step is slow: the
+  opening, a slider, a stroke, «Застосувати»?
+- From 4.9.0, not answered: is the rim along the hem and the shoe gone on his PC? Is the line right of the dress
   gone? Does the hair slider take the hairs he meant - and does it take anything it should not (a thin
   earring, a chain, a ribbon)? He was asked for a screenshot with the hairs circled.
-- From 4.8.0, not answered: do Ctrl + «+» / «−» / 0 and the right mouse button work in Photoshop? Is the
-  window sharp enough now, also zoomed in? Did the brush get slower? How long does the exact picture take
-  to come? Does the photo look grainy in a small window?
+- From 4.8.0: the zoom keys do not matter to him (2026-11-22); the brush did get slower and the exact
+  picture took 60-400 s (hence 4.10.0). Not answered: does the right mouse button drag the photo? Does
+  the photo look grainy in a small window with «Детальний перегляд» on?
 - From 4.7.0, not answered: is the soft edge as soft as he wants (the fade is one brush radius;
   `BRUSH_SOFT_BAND`)? Is the one mode fast enough on his PC? (The old program is removed: that went through.)
 - Answered after 4.5.0: Ctrl+Z works in Photoshop; the corner on a black backdrop must go completely;
@@ -870,12 +899,18 @@ _Last updated: 2026-11-22, by the agent of the first session, after releasing 4.
   needs his frames with the hairs marked and the real LaMa to judge the fill;
 - rewriting the history so that the 666 MB of the removed original program really leave GitHub (needs a force
   push of `main`; ask him first, and do it only at the very start of a session);
-- a switch "update nothing until I press a button" for the big window;
+- if the brush is still slow after 4.10.0 (named in the reply): (a) send the mask picture only while the
+  mask view is on - it is half of every answer and 57 of 250 ms on the server; the panel must then ask
+  for it when «Маска» is pressed; (b) fill only what a stroke changed instead of the whole painted zone
+  (the server's time grows with the painted area - section 3, «What was measured for 4.10.0»); the
+  window and the layer must stay the same picture, which the group `brush` checks; (c) draw the stroke
+  in the panel at once and let the server's picture replace it (not named to him);
+- a switch "update nothing until I press a button" for the big window (the fast window of 4.10.0 still
+  makes the light refresh by itself);
 - a softness slider for the brush instead of the two buttons; a helper `.bat` that removes the old program
   (neither was offered to him in words; both came up while 4.7.0 was built);
 - the visible part of the frame at full resolution when the view is zoomed in (named in the release notes
-  of 4.8.0 as the next step if the sharper window is not enough); a switch for the size of the window
-  pictures (not offered in words);
+  of 4.8.0 as the next step if the sharper window is not enough);
 - a turnkey preset, a wall/floor switch, batch processing.
 
 ### Ideas worth doing when the installer is touched next
@@ -983,6 +1018,13 @@ _Last updated: 2026-11-22, by the agent of the first session, after releasing 4.
     asks for longer hairs and may leave it;
   - a light hair is not asked what it grows out of (a dark one must grow out of something dark), so a
     thin light line that touches the head on a dark wall is taken.
+- The brush and large areas (measured for 4.10.0): every stroke fills the whole connected painted zone
+  anew, so a stroke takes the longer the more is painted - here 0.3 s with 3 % of the window painted and
+  0.6 s with 15 %, on two slow processors. Many strokes side by side over a floor are one zone. The size
+  of the window pictures does not change this.
+- A GPU error (4.10.0): the tile that failed and the rest of that run are computed by the processor,
+  which is many times slower than the GPU - one slow run, with a warning, instead of every run slow
+  without a word. Nothing tries the GPU a second time within the same run.
 - The stain stage reaches about 2 % of the frame. At the default 65 a round stain of 1 % of the frame height
   loses 85 %, one of 2.4 % loses 70 %, one of 4 % half, one of 6 % a fifth; from 10 % up it is taken for light
   and stays. A small soft shadow is evened like a stain of its size (a drawn one of 8 % of the height kept
@@ -1016,17 +1058,17 @@ python3 -m venv /tmp/cvenv
 /tmp/cvenv/bin/pip install numpy opencv-python-headless fastapi uvicorn httpx Pillow
 npm install --prefix tests jsdom@24      # for the panel test; the folder is git-ignored
 
-# the checks: the quick run takes about 30 minutes and ends with "ALL CHECKS PASSED"
+# the checks: the quick run takes 30 to 45 minutes here and ends with "ALL CHECKS PASSED"
 /tmp/cvenv/bin/python tests/run_checks.py
 /tmp/cvenv/bin/python tests/run_checks.py install bat    # only the groups named
 /tmp/cvenv/bin/python tests/run_checks.py --full         # more random cases
 
-# the deliberate defects of the latest version: about 28 minutes for 4.9.0 (a `hair` defect takes a minute,
-# the one that runs `quick` 4.5); it patches engine.py in place - run those in a copy of the tree (below)
+# the deliberate defects of the latest version: about 15 minutes for 4.10.0 (12.5 for the 19 of the engine and
+# the server, 3 for the 35 of the panel); it patches engine.py in place - run those in a copy of the tree (below)
 /tmp/cvenv/bin/python tests/try_defects.py               # ends with "N of N defects caught"
-/tmp/cvenv/bin/python tests/try_defects.py edge: line:   # only the defects whose name or group has these words
-/tmp/cvenv/bin/python tests/try_defects.py panel:        # only the defects of the panel (half a minute; they
-                                                         # go into a copy of the plugin folder by themselves)
+/tmp/cvenv/bin/python tests/try_defects.py fallback: fastwin:   # only the defects whose name or group has these words
+/tmp/cvenv/bin/python tests/try_defects.py panel:        # only the defects of the panel (they go into a copy
+                                                         # of the plugin folder by themselves)
 /tmp/cvenv/bin/python tests/try_defects.py --list
 
 # after ANY change inside CleanVinylPro2: the .ccx first, because it is inside the ZIP
@@ -1245,6 +1287,30 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
 - Read the NUMBERS in the reason of a caught defect, not only its words: one defect of 4.9.0 was "caught"
   by a difference of 0.0 levels (a threshold on a quantity that the rule did not move). The rule could
   not be told from its absence and was taken out.
+
+- A key that `process` puts into EVERY `stats` breaks the comparisons with v3.2.1 (`hair_px` of 4.9.0 is
+  only there when the tool is on; `timing` of 4.10.0 is left out in three comparisons of
+  `run_checks.py`: search for `"timing"`).
+- A check that depends on the machine proves nothing on another one: "all processors but one" is one
+  thread on the two processors of the sandbox, exactly what the old code gave. Fix the number inside the
+  check (`os.cpu_count = lambda: 8` around the call).
+- The window has ONE line for notes in the corner of the photo (`updatePreviewBadge`): what is written
+  into `sessState.note` is replaced by the next note (the automatic preset writes one right after the
+  start) and hidden by the "out of date" texts. Something that must be read gets its own field and its
+  own place in the order of that function.
+- jsdom lays nothing out: `offsetWidth` is 0 and every rectangle is what the test says. A scenario that
+  places things on the photo sets `previewSize` equal to the stage rectangle (400 x 600) and defines
+  `offsetWidth` / `offsetHeight` of `dlgStage` itself.
+- `tests/plugin_settings.test.js` has two harnesses (`run` and `runMoves`); both take
+  `buildSettingsSnapshot` / `applySettingsSnapshot` out of `main.js`, so whatever those two functions
+  call must exist in both.
+- `grep -c "await scenario("` is not the number of scenarios (some are made in loops); the test prints
+  the number. In that test `env.server.disk` is null unless the scenario passes `disk`: read the bodies
+  of the POST `/settings` requests instead.
+- Nothing compares version numbers as text, so 4.10.0 after 4.9.0 is safe: the panel and the `.bat` files
+  only ask whether the server's version EQUALS their own. Keep it that way.
+- The date in the instructions of a session can be days behind: the clock of the sandbox (`date -u`),
+  the commit dates and the names of his screenshots agree with each other; use those.
 
 ## 5. What the owner can send you
 
