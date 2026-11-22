@@ -1132,9 +1132,11 @@ def check_smoke():
         bad.append(f"no smoke in the frame, the switch on: {wall_w * 100:.1f}% of the wall and {ring_w * 100:.1f}% of the ring around the person are 'smoke'")
     # the slider: under SMOKE_SOFT_FROM only wisps count, higher up it reaches thinner smoke
     got_lo = float(word_map(thin, ENG.SMOKE_SOFT_FROM - 1.0)[in_thin].mean())
+    got_60 = float(word_map(thin, 60.0)[in_thin].mean())
     got_80, got_95 = float(word_map(thin)[in_thin].mean()), float(word_map(thin, 95.0)[in_thin].mean())
-    if got_lo > 0.02 or got_80 < 0.75 or got_95 < got_80:
-        bad.append(f"thin smoke by the slider: {got_lo * 100:.0f}% of the cloud under {ENG.SMOKE_SOFT_FROM:.0f}, {got_80 * 100:.0f}% at 80, {got_95 * 100:.0f}% at 95")
+    if got_lo > 0.02 or got_80 < 0.75 or got_60 > got_80 - 0.1 or got_95 < got_80 + 0.03:
+        bad.append(f"thin smoke by the slider: {got_lo * 100:.0f}% of the cloud under {ENG.SMOKE_SOFT_FROM:.0f}, {got_60 * 100:.0f}% at 60, "
+                   f"{got_80 * 100:.0f}% at 80, {got_95 * 100:.0f}% at 95 (every step up must reach thinner smoke)")
     note += f", {got_80 * 100:.0f}% of its cloud at 80 and {got_95 * 100:.0f}% at 95"
     # one direction is not smoke: the soft rim of a pool of light on the wall
     r_pool = np.sqrt((xx - 0.30 * w) ** 2 + (yy - 0.30 * h) ** 2)
@@ -1192,9 +1194,10 @@ def check_smoke():
     cv2.line(shapes, (420, 200), (455, 200), 1, 14)           # 4: a short piece
     cv2.line(shapes, (60, 300), (260, 300), 1, 14)            # 5: a bent one
     cv2.line(shapes, (260, 300), (260, 390), 1, 14)
+    cv2.ellipse(shapes, (450, 911), (611, 611), 0, 257.7, 282.3, 1, 10)   # 6: a thin arc - a tendril, not a line
     left = H.make_engine(E, sil)._smoke_without_lines(shapes > 0)
     probes = {"thin straight band": (190, 75, False), "cloud": (470, 80, True), "thick band": (190, 200, True),
-              "short piece": (437, 200, True), "bent band": (160, 300, True)}
+              "short piece": (437, 200, True), "bent band": (160, 300, True), "thin arc": (450, 300, True)}
     wrong = [name for name, (px, py, stays) in probes.items() if bool(left[py, px]) != stays]
     if wrong:
         bad.append(f"_smoke_without_lines: only a thin straight band of wisps is a line; wrong for: {', '.join(wrong)}")

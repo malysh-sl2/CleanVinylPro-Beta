@@ -119,7 +119,9 @@ written here and in the repository.
   line in the settings, copied along; whether it was a question is not known, the reply explains the
   setting in two sentences; (4) «інколи лінія залишається» - sometimes a line stays: either the wall-floor
   line or a floor joint on some frames (the answer to question 3 of the reply to 4.9.0), or the trace of
-  the brush on the photo; not confirmed, the reply asks for the frame as shot and a screenshot;
+  the brush on the photo; not confirmed, the reply asks for the frame as shot and a screenshot (one cause
+  was found and removed in 4.11.0 - with the smoke slider at 95-100 % the corner line of a light frame was
+  itself "smoke" and the corner tool left it - whether that is HIS line is not known);
   (5) smoke on a light backdrop is understood badly: where there is more of it the program knows it,
   where there is less it does not, and when he presses "there is smoke" the program answers that there
   is none; (6) a question: what is a "GPU failure" (the words of the 4.10.0 warning) and how to check for
@@ -632,20 +634,99 @@ second plugin next to the installed one and lose his presets.
     `release()` happens where the pointer was last. `tests/try_defects.py` holds the 54 deliberate
     defects of 4.10.0 (19 in the engine and the server, 35 in the panel).
 
+- **4.11.0** — smoke on a light backdrop, after his report on 4.10.0 («недобре розуміє де дим на світлому
+  фоні удебільше розуміє де менше ні і я нажимаю що є дим воно каже ні нема»). Decided alone, no option
+  card. NO FRAME WITH SMOKE is among his files: everything below was tuned on smoke DRAWN over his seven
+  frames (fractal noise, see section 4) and has never seen real smoke.
+  - **What was wrong.** The search of 4.4.0 knows smoke by its fine wisps (band-pass 5 - 35 px of the
+    1024 px copy), which only thick smoke has; on a light backdrop the same smoke has about a third of the
+    contrast. With `smokeAuto` the protection worked only when the wisps proved smoke (`SMOKE_MIN_SHARE`,
+    `SMOKE_MIN_CLOUD`), otherwise the window answered «Диму в кадрі не знайдено…» to the user's own tick.
+    A medium cloud drawn over his light frame 1 gave share 0.0216 and largest 0.0053: "no smoke".
+  - **The switch is the user's word.** The panel sends `smokeFaint: true` (and still `smokeAuto: true`,
+    which a server before 4.11.0 obeys). With it `_smoke_auto` is false whatever was sent, no evidence is
+    asked for at any value of the slider, and thin smoke is looked for as well. `stats["smoke"]` carries
+    `faint`; `k_maps` and `_clean_signature` carry the key. Without `smokeFaint` the engine does exactly
+    what 4.10.0 did (the checks against v3.2.1 and the old presets rely on that).
+  - **Thin smoke = soft structure without a direction** (`_smoke_soft_structure`): the smaller eigenvalue
+    of the structure tensor of the smoothed lightness, at `SMOKE_SOFT_SCALES` = 2.5 / 5 / 10 px, each on a
+    copy reduced so that the scale is 2.5 px there; measure = scale * sqrt(lambda2), and lambda2 must be
+    at least `SMOKE_SOFT_MIN_RATIO` = 0.10 of lambda1. A straight edge has one direction and leaves
+    nothing. Two things had to be added before that held on real frames:
+    - the light is taken out first (`SMOKE_SOFT_FLATTEN` = 40 px, on a quarter-size copy): the fall-off
+      of the light along the wall CROSSED by the wall-floor line has two directions too, and read as
+      smoke all along the line (12 % of the test frame of the checks at 80 %);
+    - past the frame border the values are continued as they came to it (`_continued_past_border`:
+      mirrored about the border value). With the usual mirrored border the smoothing bends every slope
+      at the border, and both ends of every line that reaches the border were "smoke".
+  - **The slider** (`_smoke_by_word`): threshold `SMOKE_SOFT_AT_FULL` = 0.30 at 100 %, +0.003 per percent
+    down to `SMOKE_SOFT_USUAL` = 80 (0.36), +0.006 per percent below (0.48 at 60); under `SMOKE_SOFT_FROM`
+    = 40 only the wisps count. His backdrops themselves give up to about 0.30 (at 0.30 a fifth of frame 1
+    is "smoke", at 0.315 nothing): the thresholds are ABSOLUTE and sit right above the unevenness of HIS
+    backdrops - a rougher backdrop or more grain will show more false smoke at the same value.
+  - **What is believed where** (`SMOKE_FLOOR_FROM` = 0.70 of the height, the line below which the dust
+    search does not listen to the smoke map anyway): above it every cloud of wisps and every soft area;
+    below it - the floor next to the feet, where footprints and shadows are soft structure of the same
+    kind - a piece counts only when it hangs together (`SMOKE_PIECE_GAP` = 17 px) with at least
+    `SMOKE_SOFT_MIN_AREA` = 0.4 % of the frame above the line, or holds a cloud of wisps that proves smoke
+    alone. At 100 % everything counts, the floor too («дим стелиться всюди»). So what 4.4.0 gave stays:
+    dirt next to the feet is cleaned with the tick on, at any value under 100.
+  - **A line is not smoke.** (a) `_smoke_without_lines`: a cloud of wisps that is a thin straight band
+    (`SMOKE_LINE_WIDTH` 30 px across at most, `SMOKE_LINE_ASPECT` 4 times as long, filling its box by
+    `SMOKE_LINE_FILL` 0.60) is dropped. In 4.10.0 with the slider at 95-100 % ("trust") the wisps along
+    the wall-floor corner of his light frame 1 were smoke, the corner tool was gated there and the LINE
+    STAYED (steepest change 0.67-0.69 levels/px left of 0.69-0.89; with the tick off 0.03-0.31). This
+    may be his «інколи лінія залишається» - not confirmed. (b) The tools for lines get their own map:
+    `_smoke_zone_small` returns (all the smoke, its thick part = the clouds of wisps); the second goes to
+    `_corner_line_of_frame`, `_detect_vinyl_seam_mask` and `_apply_cyclorama_curve` as `smoke_lines_s`
+    (sixth element of the `maps` record of the stage cache, `"smoke_lines_s"` of the analysis). The dust
+    search, the stains and the hair search keep the whole map. Without `smokeFaint` both maps are one.
+    The price, measured: under thin smoke the corner goes (0.44 -> 0.08 levels/px on the test frame),
+    and the smoke in the zone of the cove keeps 39 % (test frame, cloud centred on the corner) to
+    76-79 % (his frame 1, drawn haze) of its curls - the cove estimates its correction from the picture
+    WITH the smoke. Giving the tools the whole map keeps 98-99 % of the smoke and leaves the line under
+    it. The manual says so and offers «Циклорама 0 %» to who prefers the smoke.
+  - **Panel.** `smokeNoteText` has a branch for answers that carry `faint`: with the tick on it says the
+    share kept and which way the slider goes («…21 % кадру програма бере за дим і не чистить. Частину
+    диму все одно зачищено — потягніть «Захист диму» вище (до 100 %); береже бруд — нижче.»), nothing
+    kept: «…не розпізнала в кадрі диму… до 100 %», off: «…увесь фон чиститься як звичайний — і дим, якщо
+    він там є». An answer without `faint` (a server before 4.11.0) gets the old notes. Two tooltips.
+  - **Measured** (GrabCut silhouettes, stand-in fill - indications only). Share of the frame taken for
+    smoke on his frames WITHOUT smoke at 60 / 80 / 95 / 98 / 100: frame 1: 0 / 0 / 0 / 0 / 24.0; 3384:
+    1.1 / 2.0 / 2.3 / 2.4 / 19.7; 2: 0 / 0 / 0 / 0 / 24.3; 3: 0 / 0.7 / 0.7 / 0.7 / 17.9; 3413: 0 / 0 / 0
+    / 0 / 17.9; 3411: 0 / 0 / 0 / 0 / 13.5; 3417: 5.7 / 7.8 / 14.1 / 16.2 / 31.5 (the rim of the lamp's
+    light). Curls kept after cleaning, by curl contrast >= 6 / 3-6 / 1.5-3 / 0.7-1.5 / 0.3-0.7 levels:
+    frame 1, one cloud of density 0.25 - tick off or 4.10.0 at 80: 80 / 59 / 55 / 60 / 59 %; 4.10.0 at
+    95: 87 / 75 / 62 / 61 / 48; now at 80: 96 / 95 / 89 / 76 / 58; at 95: 96 / 95 / 91 / 90 / 55; at 100:
+    96 / 96 / 92 / 92 / 60. Frame 1, haze of density 0.08 over the whole frame - 4.10.0: 96 / 86 / 50 /
+    50 / 39; now at 80: 98 / 98 / 89 / 71 / 45; at 95: 96 / 96 / 92 / 84 / 82. Frame 2 (dark), density
+    0.25 - 4.10.0 at 80: 98 / 87 / 63 / 60 / 55; now at 80: 100 / 91 / 83 / 96 / 67. The maps take
+    about 0.68 s instead of 0.51 s (2 CPUs).
+  - Checks: `check_smoke` covers every rule above with drawn thin smoke (soft billows of two levels, no
+    wisps), a soft line across the wall, the seam at 100 %, the corner with and without thin smoke over
+    it and the window answers; the random walks of `stage`, `quick` and `session` toggle `smokeFaint`;
+    the window test has 4 new scenarios (96; its stand-in server mirrors the rules, `smokeOld` plays a
+    server before 4.11.0). `tests/try_defects.py` holds the deliberate defects of 4.11.0.
+
 ## 3. Current state — update this at the end of every session
 
-_Last updated: 2026-11-22, by the agent of the first session, after releasing 4.10.0._
+_Last updated: by the agent of the first session, after releasing 4.11.0 (the answer to his report of
+2026-11-22 on 4.10.0)._
 
-- **Released:** 4.10.0, tag `cvp2-v4.10.0`, as a pre-release. Direct download:
-  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.10.0/CleanVinylPro2.zip`
-- **Owner's progress:** 4.2.0 to 4.9.0 have been installed and work on his PC (program in
+- **Released:** 4.11.0, tag `cvp2-v4.11.0`, as a pre-release. Direct download:
+  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.11.0/CleanVinylPro2.zip`
+- **Owner's progress:** 4.2.0 to 4.10.0 have been installed and work on his PC (program in
   `D:\Plugin Photoshop\CleanVinylPro2`, models in `D:\model AI fotoshop`, LaMa on `CUDAExecutionProvider`,
   Python 3.12.10). So the `.bat` files, the installer, the GPU, the real models and the panel HAVE run on
   Windows. The old program (`D:\CleanVinylPro`) is removed from his PC. His report on 4.9.0 (2026-11-22,
   section 1) is about speed only: the brush is very slow and leaves dots, a preview takes 60 to 400
   seconds, the soft face of the earlier window is fine, speed is what matters; 4.10.0 answers it. He said
   nothing about what 4.9.0 was made for (the line right of the dress, the rim, the hairs) and the zoom
-  keys do not matter to him. **He has not reported on 4.10.0 yet.**
+  keys do not matter to him. His report on 4.10.0 (the same day, section 1): the brush is fast and draws a
+  line; one computation took 30 s, of them the AI fill 15 s for 121 tiles ON THE VIDEO CARD; smoke on a
+  light backdrop is understood badly and the tick is answered with "no smoke"; «інколи лінія залишається»;
+  what is a "GPU failure" and how to check for one. 4.11.0 answers the smoke; the rest was answered in
+  words (reply #19). **He has not reported on 4.11.0 yet.**
   The path to the plugin list of Creative Cloud (Stock & Marketplace → Plugins → Manage plugins → the three
   dots → Uninstall; the same list opens from Photoshop with Plugins → Manage Plugins) is in section 6 of
   the manual since 4.8.0. Whether his Creative Cloud shows these names in English or in Ukrainian is not
@@ -881,13 +962,19 @@ _Last updated: 2026-11-22, by the agent of the first session, after releasing 4.
   when he wants it. Merge it when he writes that or when the session ends (section 6). If `main` already
   contains this file, that has happened. Merging also removes the folder `CleanVinylPro/` from `main`.
 
-### Open questions (ask when he reports on 4.10.0)
+### Open questions (ask when he reports on 4.11.0)
 
-- New with 4.10.0: is the brush fast now, and is its trace a line? What does the time line say after a
-  computation and after «Застосувати» - how many seconds, «відеокарта» or «процесор» (a screenshot is
-  best)? Did the warning about the processor ever show? Does he paint whole areas of floor with the
-  brush (the reading of his ellipse, section 1)? If the window is still slow, WHICH step is slow: the
-  opening, a slider, a stroke, «Застосувати»?
+- New with 4.11.0: does the tick keep his smoke on a light backdrop now, what share of the frame does the
+  note name, and where does he end up with the slider? A frame AS SHOT with smoke on a light backdrop and
+  a screenshot of the window were asked for - until one comes NOTHING about smoke is verified on a real
+  frame. Which line «інколи залишається»: the wall-floor line, a floor joint or the trace of the brush;
+  on which frames; was the smoke tick on (a frame as shot and a screenshot were asked for)? Under thin
+  smoke the corner tool now takes the line and makes the smoke around it smoother - is that what he
+  wants, or should the smoke win there?
+- From 4.10.0, answered: the brush is fast and draws a line; the time line read «30 с · AI-заливка: 121
+  пл. за 15 с (відеокарта)». Not answered: does he paint whole areas of floor with the brush (the reading
+  of his ellipse, section 1); was «Автовивантаження моделей із VRAM.» in his message a question (the
+  reply explained the setting anyway); why a computation took 60-400 s before 4.10.0 (never found out).
 - From 4.9.0, not answered: is the rim along the hem and the shoe gone on his PC? Is the line right of the dress
   gone? Does the hair slider take the hairs he meant - and does it take anything it should not (a thin
   earring, a chain, a ribbon)? He was asked for a screenshot with the hairs circled.
@@ -986,6 +1073,21 @@ _Last updated: 2026-11-22, by the agent of the first session, after releasing 4.
 - Smoke: the soft rim of a broad shadow reads as wisps. On a drawn frame with such a shadow and the
   protection ON, smoke was "found" and the whole shadow was protected (nothing cleaned in it). With the
   built-in presets the protection is off, so only the note "smoke was seen" can be wrong.
+- Smoke by the user's word (4.11.0) HAS NEVER SEEN REAL SMOKE. Its thresholds are absolute numbers tuned
+  on smoke drawn over seven frames (section 2, «4.11.0»); a rougher backdrop or more grain will give more
+  false smoke at the same slider value. Known on his frames: on `0Q5A3417` the rim of the lamp's light is
+  taken for smoke (5.7 % of the frame at 60 %, 7.8 at 80, 16 at 98); curls weaker than about 0.7 levels
+  are kept only in part below 95 %; at 100 % 13-32 % of a frame WITHOUT smoke is protected, so dust
+  stays there.
+- Smoke and the wall-floor corner (4.11.0). Under THIN smoke the corner tool works: the line goes and
+  the smoke in the zone of the cove keeps 40-80 % of its curls (the cove estimates its correction from
+  the picture with the smoke in it). Under THICK smoke nothing is touched and the line stays; where the
+  gate of the cove ends at the rim of thick smoke the tone moves by the size of the correction over the
+  soft edge of the map (on dense smoke drawn over frame 1 the column profile across the line was steeper
+  after the tool than before: 1.1-1.3 against 0.56 levels/px). Not looked into. A cove that takes only
+  what is constant ALONG the line would keep the smoke and remove the line; not built.
+- Thin smoke that lies on the floor only (nothing of it above 70 % of the frame height) is protected
+  only at 100 %: below that it cannot be told from footprints.
 - 8-bit frames: the tone stages round without dithering. On a backdrop without noise (his black JPEG: 96 %
   of neighbouring pixels are equal) the one-level contour lines of a gradient change their course where
   the corner tool or the stain stage worked. It shows only when the darks are stretched about thirty times;
@@ -1281,6 +1383,27 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   shadows), or the fine pass finds it and the rule under test is never asked (`_shadow_frame`).
 - `STD` of the test harness has the smoke protection ON. On a drawn frame with a soft-rimmed shadow smoke
   is then "found" and nothing in the shadow is cleaned. Checks about shadows pass `smokeOn=False`.
+  `STD` does not send `smokeFaint`: a check of the new smoke rules passes `smokeAuto=True, smokeFaint=True`
+  as the panel does.
+- A measure of "structure without a direction" (the smaller eigenvalue of a structure tensor) answers
+  wherever two straight things cross - the fall-off of the light and a line - and along every mirrored
+  border. 4.11.0 takes the slow light out first and continues the values past the border
+  (`_continued_past_border`). Before trusting such a measure on smoke, try it on a straight soft line
+  across a vignetted frame, up to both frame edges.
+- A threshold of a check that leaned on a false alarm broke when the false alarm was cured (12 % of the
+  test frame was "smoke" until the light was taken out; the check wanted "more than 8 % protected").
+  Thresholds of a check must come from what was DRAWN into the frame.
+- Drawn smoke. The wisps of the old smoke check (noise blurred 10 px, 6 levels) are DENSE smoke: the old
+  search protects them in full. Thin smoke for a check is soft billows (noise blurred 22 px, 2 levels of
+  RMS, in a soft oval). The probes used fractal smoke: 7 octaves of bicubic-enlarged Gaussian grids
+  (largest billow 0.22 of the long side, weight 2^(-0.75 k)), bent by a slow flow, squashed by
+  1 / (1 + exp(-1.6 n)), times a soft elliptic envelope and a density (0.9 dense, 0.25 medium, 0.08
+  thin), laid over in linear light with the colour (238, 240, 243), people in front. "Curl contrast" =
+  local RMS (Gaussian 40) of the band-pass (6 - 45 px) of smoky minus plain. Never use a client frame in
+  a check.
+- `image_search` writes what it finds into `image-search/` INSIDE the repository: delete the folder
+  before a commit. It found no usable frame of studio smoke on a light backdrop (AI pictures, dark
+  backdrops, weddings).
 - MediaPipe as the stand-in silhouette misses a leg and a shoe under a dress, the train of a dress and a
   stool. What then looks like a fault of the engine (a cut shoe toe, a smudge on the train, a "joint" on
   the train) is the matte: fix the matte by hand first.
