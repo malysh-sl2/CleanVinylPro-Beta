@@ -496,11 +496,16 @@ second plugin next to the installed one and lose his presets.
     Never searched: the person with a guard strip (`HAIR_GUARD`, `_person_solid`), the fuzz beyond it
     (`HAIR_FRINGE`), the bodies of gear (`wide_only`), smoke. Every slider step below the one asked for is
     searched too (`HAIR_STEPS`), so a higher position never takes less. A mark is grown to about 13 px.
-  - The marks join the heal mask (`near_mask`; cache key `k_hair`, stage "hair"). With hairs to repair,
-    the inpainting is shown the photo right up to the person with the guard strip (`hair_solid`), not the
-    protected band painted over with a wide average of the backdrop. The repair itself obeys the
-    protected band like every repair, so the first pixels of a removed hair, next to the hairdo, stay.
-    (For a while the mark was blended at full strength inside the band; that gained a stub a few pixels
+  - The marks join the heal mask (`near_mask`; cache key `k_hair`, stage "hair"). Around a marked hair
+    (`HAIR_SRC_NEAR`, 16 px of the 1024 matte) the inpainting is shown the photo right up to the person
+    with the guard strip (`hair_solid`), not the protected band painted over with a wide average of the
+    backdrop: next to a head that average is not the tone of the wall right there. Everywhere else the
+    band is painted over as always, so every other repair of the frame is pixel for pixel what it is with
+    the slider at 0. (The first version showed the photo along the whole outline as soon as one hair was
+    marked: on 3417 that changed 515 px of the dust repairs below the head by more than one level, up to
+    5 - a tool that is asked for hairs must not touch the floor.) The repair itself obeys the protected
+    band like every repair, so the first pixels of a removed hair, next to the hairdo, stay. (For a
+    while the mark was blended at full strength inside the band; that gained a stub a few pixels
     shorter, no check could tell the two apart, and it was taken out.)
   - Traps met on the way - do not undo them: the cast-shadow map calls the wall next to a light hair a
     shadow, so it is not asked; the gear map flags a strong hair as a thin thing, so only its bodies
@@ -514,7 +519,7 @@ second plugin next to the installed one and lose his presets.
     моделі та країв» say what changed; one new rotating tip. `presets_defaults.json` is unchanged.
   - Checks: the new groups `edge`, `line` and `hair`; `_legacy()` sets `toneEdge=False`,
     `cornerHair=False`, `strayHair=0`; five new cases of the settings test and the scenario «the hair
-    slider…» of the window test. `tests/try_defects.py` holds the 35 deliberate defects of 4.9.0 (29 in
+    slider…» of the window test. `tests/try_defects.py` holds the 36 deliberate defects of 4.9.0 (30 in
     the engine, 6 in the panel).
 ## 3. Current state — update this at the end of every session
 

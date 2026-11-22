@@ -1928,6 +1928,7 @@ class CleanVinylEngine:
     HAIR_TAIL = 0.12             # head widths: the last stretch of a hair, which tells where it points
     HAIR_GOES_ON = 0.6           # a line is found on this share of the way from there to the end of the zone: no hair
     HAIR_STEPS = (0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875)   # the slider positions that are always searched too
+    HAIR_SRC_NEAR = 16.0         # px of the 1024 matte: this close to a marked hair the repair is shown the photo itself
 
     def _person_solid(self, tight_1024: np.ndarray, w: int, h: int) -> np.ndarray:
         """The person as the network drew it, with the guard strip of the hair search: bool, the size of the frame."""
@@ -4592,30 +4593,40 @@ class CleanVinylEngine:
                         # person. The band painted over with a wide average of the backdrop is good enough to keep
                         # the colours of the person out of a repair that ends before the band, and far too rough
                         # to repair next to: the tone of that average is not the tone of the wall right behind the
-                        # head. With hairs to repair, only the person as the network drew it is painted over, and
-                        # next to the outline with what lies right there.
+                        # head. Around a marked hair (HAIR_SRC_NEAR) only the person as the network drew it is
+                        # painted over, and next to the outline with what lies right there. Everywhere else the
+                        # band is painted over as always: the tool changes nothing about the other repairs.
                         solid_full = hair_solid
+                        fg_bad_s = cv2.resize(eff_fg_for_spots, (sw_s, sh_s_dim), interpolation=cv2.INTER_AREA) > 22
+                        hair_zone = hair_zone_s = None
                         if solid_full is not None:
-                            fg_bad_s = cv2.resize(solid_full.view(np.uint8) * np.uint8(255), (sw_s, sh_s_dim), interpolation=cv2.INTER_AREA) > 22
-                        else:
-                            fg_bad_s = cv2.resize(eff_fg_for_spots, (sw_s, sh_s_dim), interpolation=cv2.INTER_AREA) > 22
+                            k_z = 2 * max(1, int(round(self.HAIR_SRC_NEAR * max(sh_s_dim, sw_s) / 1024.0))) + 1
+                            hair_zone_s = cv2.dilate(
+                                (cv2.resize(near_mask * np.uint8(255), (sw_s, sh_s_dim), interpolation=cv2.INTER_AREA) > 0).view(np.uint8),
+                                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_z, k_z))) > 0
+                            hair_zone = cv2.resize(hair_zone_s.view(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0
+                            solid_s = cv2.resize(solid_full.view(np.uint8) * np.uint8(255), (sw_s, sh_s_dim), interpolation=cv2.INTER_AREA) > 22
+                            fg_bad_s = np.where(hair_zone_s, solid_s, fg_bad_s)
+                            del solid_s
                         hm_s = cv2.resize(heal_mask, (sw_s, sh_s_dim), interpolation=cv2.INTER_NEAREST) > 0
                         bg_valid = (~fg_bad_s) & (~hm_s)
                         if np.any(bg_valid) and np.any(fg_bad_s):
                             w_bg = bg_valid.astype(np.float32)
                             den_bg = cv2.GaussianBlur(w_bg, (0, 0), sigmaX=12.0, sigmaY=12.0) + 1e-4
                             fill_s = cv2.GaussianBlur(src_s * w_bg[:, :, None], (0, 0), sigmaX=12.0, sigmaY=12.0) / den_bg[:, :, None]
-                            if solid_full is not None:
+                            if hair_zone_s is not None:
                                 den_l = cv2.GaussianBlur(w_bg, (0, 0), sigmaX=2.5, sigmaY=2.5)
                                 fill_l = cv2.GaussianBlur(src_s * w_bg[:, :, None], (0, 0), sigmaX=2.5, sigmaY=2.5) / (den_l[:, :, None] + 1e-4)
-                                near_l = np.clip(den_l / 0.25, 0.0, 1.0)[:, :, None]
+                                near_l = (np.clip(den_l / 0.25, 0.0, 1.0) * hair_zone_s)[:, :, None]
                                 fill_s = fill_l * near_l + fill_s * (1.0 - near_l)
                                 del den_l, fill_l, near_l
                             fill_full = cv2.resize(np.clip(fill_s, 0, 255).astype(np.uint8), (w, h), interpolation=cv2.INTER_LINEAR)
-                            fg_m_full = solid_full if solid_full is not None else (eff_fg_for_spots > 22)
+                            fg_m_full = eff_fg_for_spots > 22
+                            if hair_zone is not None:
+                                fg_m_full = np.where(hair_zone, solid_full, fg_m_full)
                             heal_src_u8 = img_rgb_u8.copy()
                             heal_src_u8[fg_m_full] = fill_full[fg_m_full]
-                        del solid_full
+                        del solid_full, hair_zone, hair_zone_s
                     if fast_mode:
                         lama_f32, tiles_run, small_specks_healed = self._run_fast_inpaint(
                             heal_src_u8, heal_mask, progress_cb=progress_cb, size_scale=render_scale

@@ -4916,6 +4916,28 @@ def check_hair():
     core = cv2.erode(sil_full, np.ones((7, 7), np.uint8)) > 0
     if not st.get("hair_px") or float(np.abs(comp - frame.astype(np.float32))[core].max()) > 0.0:
         bad.append(f"with the usual clean: hair_px {st.get('hair_px')}, the person changed by {np.abs(comp - frame.astype(np.float32))[core].max():.1f}")
+    # The tool changes nothing about the other repairs. Around a marked hair the inpainting is shown the photo
+    # right up to the person; everywhere else the protected band is painted over with the backdrop as always.
+    # So dust next to the legs, far below the hairs, must be repaired pixel for pixel as with the slider at 0.
+    dusty, specks = frame.copy(), np.zeros(frame.shape[:2], np.uint8)
+    off_p = cv2.distanceTransform((sil_full == 0).astype(np.uint8), cv2.DIST_L2, 5)
+    ys_d, xs_d = np.nonzero((off_p > 10) & (off_p < 16) & (np.arange(frame.shape[0])[:, None] > 0.62 * frame.shape[0]))
+    for i in np.random.default_rng(5).choice(ys_d.size, 24, replace=False):
+        cv2.circle(dusty, (int(xs_d[i]), int(ys_d[i])), 2, (70, 70, 70), -1)
+        cv2.circle(specks, (int(xs_d[i]), int(ys_d[i])), 2, 1, -1)
+    low = int(0.55 * frame.shape[0])
+    for mode in ("fast", "quality"):
+        pd = dict(H.STD, smokeOn=False, cycCurve=0, scuffs=0, seamOn=False, speedMode=mode)
+        o_off, st_off = _quiet(eng.process, dusty, 8, pd)
+        o_on, st_on = _quiet(eng.process, dusty, 8, dict(pd, strayHair=100))
+        seen = dusty[..., :3].astype(np.float32).mean(axis=2)
+        left = float(np.abs(_comp(dusty, o_off)[..., :3].mean(axis=2) - 150.0)[specks > 0].mean() / max(1e-6, np.abs(seen - 150.0)[specks > 0].mean()))
+        if left > 0.5 or not st_on.get("hair_px"):
+            bad.append(f"{mode}, dust next to the legs: the scene judges nothing ({100 * left:.0f}% of the dust left with the slider at 0, hair_px {st_on.get('hair_px')} at 100)")
+        elif not np.array_equal(o_on[low:], o_off[low:]):
+            diff = np.abs(_comp(dusty, o_on) - _comp(dusty, o_off)).max(axis=2)[low:]
+            bad.append(f"{mode}, dust next to the legs: with the hair slider at 100 its repair is another one than at 0 "
+                       f"({int((diff > 0).sum())} px, up to {float(diff.max()):.1f} levels)")
 
     # The big window: the slider moved after the window opened gives the frame of a window opened with that value,
     # the quick way and the full way; back at 0 nothing is left of it.
@@ -4956,7 +4978,7 @@ def check_hair():
         bad.append(f"window: slider moved from 100 to 1: hair_px {q['stats'].get('hair_px')} (a window opened at 1: {px1}), or the layer differs")
     if px1 == r["stats"].get("hair_px"):
         bad.append(f"window: the slider at 1 and at 100 marks the same {px1} px in the frame of this check")
-    report("hair", not bad, "; ".join(notes) + "; the person untouched; slider at 0: nothing looked for; the big window: light refresh and full recompute == opened with that value"
+    report("hair", not bad, "; ".join(notes) + "; the person untouched; dust far from the hairs repaired as with the slider at 0; slider at 0: nothing looked for; the big window: light refresh and full recompute == opened with that value"
            if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
