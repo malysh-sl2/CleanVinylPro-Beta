@@ -85,6 +85,16 @@ Part 2 - what this program does differently from v3.2.1, each with its own measu
   fastwin   the fast window (since 4.10.0): a start request that asks for pictures of the working size gets them,
             also with the automatic preset and after a stroke; without the request the pictures are the large
             ones; an Apply that computes the real frame says what its AI fill took and where it ran
+  mix       the mixer brush (since 4.12.0): the open backdrop is blended towards a smooth copy of itself - about
+            half of the grain and of the blotches at 50, the blotches gone at 100 while a share of the grain
+            always stays; the person, the gear, the shadow and protected smoke are not brushed over, the slow light
+            stays; switched off it changes nothing; in the window another strength re-uses the smooth copy, Apply
+            computes the frame anew, the light refresh shows the brush
+  restart   the newest values win (since 4.12.0): a recompute the window waits for stops as soon as a newer one is
+            asked for, answers "superseded" and leaves the session as it was; the newer run gives the frame of a
+            run that was never disturbed and re-uses the stages the stopped one had finished; a request
+            overtaken while it waited computes nothing; a light refresh gives way the same way; a brush stroke
+            stops nothing
 
 Part 3 - the program around the engine:
   server    settings migration, binary packets, one version everywhere; the name a person reads has no 2 (since
@@ -158,7 +168,7 @@ def _legacy(p: dict) -> dict:
     """The parameters under which the engine must still give the pixels of v3.2.1 (see the header)."""
     return dict(p, speedMode="quality", smokeOn=False, cycCurve=0, dressSmooth=False, scuffs=0, seamJoin=False,
                 grainLocal=False, previewQuality=90, gearBody=False, shadowSpots=False, brushSoft=False, previewLong=1080,
-                toneEdge=False, cornerHair=False, strayHair=0)
+                toneEdge=False, cornerHair=False, strayHair=0, mixOn=False)
 
 
 def _legacy_window(p: dict) -> dict:
@@ -258,11 +268,11 @@ def _mutate(p, rng):
         k = str(rng.choice(["spots", "scuffs", "blur", "cycCurve", "feather", "seam", "edge", "smoke", "grain", "master",
                             "seamOn", "smokeOn", "shadow", "removeStands", "fracFine", "fracMed", "fracLarge",
                             "cleanPasses", "speedMode", "autoFractions", "same", "blur", "cycCurve", "scuffs", "blur",
-                            "feather", "spots", "smokeAuto", "seamJoin", "cycCurve", "scuffs", "smokeFaint"]))
+                            "feather", "spots", "smokeAuto", "seamJoin", "cycCurve", "scuffs", "smokeFaint", "mixOn", "mix"]))
         if k == "same":
             continue
         if k in ("seamOn", "smokeOn", "shadow", "removeStands", "fracFine", "fracMed", "fracLarge", "autoFractions",
-                 "smokeAuto", "seamJoin", "smokeFaint"):
+                 "smokeAuto", "seamJoin", "smokeFaint", "mixOn"):
             p[k] = not bool(p.get(k, False))
         elif k == "cleanPasses":
             p[k] = 3 - int(p.get(k, 1))
@@ -1267,6 +1277,88 @@ def check_smoke():
     if st.get("recomputed") is not True or full["n"] != before + 1:
         bad.append(f"Apply with the same values and 'smokeFaint' back must compute the real frame anew: "
                    f"recomputed={st.get('recomputed')}, {full['n'] - before} full computation(s)")
+
+    # ---- Thick smoke is not gear (4.12.0) ----
+    # The owner's first frame with real smoke (0Q5A2507): the brightest part of the cloud has strong edges, was
+    # taken for studio gear and, with "remove the stands" on, was painted over.
+    def curls(seed_c, sigma, steep):
+        n = cv2.GaussianBlur(np.random.default_rng(seed_c).standard_normal((h, w)).astype(np.float32), (0, 0), sigma)
+        return 1.0 / (1.0 + np.exp(-steep * n / float(n.std())))
+
+    def drawn(lowkey):
+        """(frame, silhouette, zones): thick smoke with strong soft edges, and three dark things that are gear."""
+        base_d, sil_d = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=21, lowkey=lowkey)
+        env = oval(0.80, 0.30, 0.15, 0.13, 30)
+        out_d = np.clip(base_d.astype(np.float32) + (90.0 * cv2.GaussianBlur(curls(5, 14.0, 6.0) * env, (0, 0), 3.0))[..., None], 0, 255)
+        rnd = np.random.default_rng(3)
+        stand = np.zeros((h, w), np.float32)     # a stand in focus: a pole, a crossbar, two feet
+        for (xa, ya), (xb, yb), thick in (((0.20, 0.14), (0.20, 0.50), 9), ((0.14, 0.20), (0.26, 0.26), 7),
+                                         ((0.20, 0.50), (0.13, 0.58), 7), ((0.20, 0.50), (0.27, 0.58), 7)):
+            cv2.line(stand, (int(w * xa), int(h * ya)), (int(w * xb), int(h * yb)), 1.0, thick)
+        pole = np.zeros((h, w), np.float32)      # a soft dark pole from the top border: out of focus, but straight
+        cv2.line(pole, (int(w * 0.40), 0), (int(w * 0.40), int(h * 0.20)), 1.0, 34)
+        knot = np.zeros((h, w), np.float32)      # a knot of hard dark pieces: no direction at all, every edge hard
+        kx, ky = int(w * 0.58), int(h * 0.12)
+        for _ in range(26):
+            ang, xk, yk, half = rnd.uniform(0, np.pi), kx + rnd.integers(-80, 81), ky + rnd.integers(-80, 81), rnd.integers(18, 46)
+            cv2.line(knot, (int(xk - half * np.cos(ang)), int(yk - half * np.sin(ang))),
+                     (int(xk + half * np.cos(ang)), int(yk + half * np.sin(ang))), 1.0, int(rnd.integers(5, 10)))
+        for _ in range(8):
+            cv2.circle(knot, (int(kx + rnd.integers(-80, 81)), int(ky + rnd.integers(-80, 81))), int(rnd.integers(8, 16)), 1.0, -1)
+        stand, pole, knot = cv2.GaussianBlur(stand, (0, 0), 0.8), cv2.GaussianBlur(pole, (0, 0), 5.0), cv2.GaussianBlur(knot, (0, 0), 0.8)
+        out_d = out_d * (1.0 - (0.90 if lowkey else 0.85) * np.clip(stand + pole + knot, 0, 1)[..., None])
+        near_z = lambda m: cv2.dilate((m > 0.5).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0  # noqa: E731
+        return out_d.astype(np.uint8), sil_d, {"cloud": env > 0.6, "stand": near_z(stand), "pole": near_z(pole), "knot": near_z(knot)}
+
+    def gear_maps(frame_d, sil_d, word, **consts):
+        """(gear that is kept, gear marked for removal, smoke, thick smoke) at the size of the frame."""
+        eng_g = H.make_engine(E, sil_d)
+        for name_c, value_c in consts.items():
+            setattr(eng_g, name_c, value_c)
+        fg_g, core_g = eng_g._clean_fg_mask(np.clip(sil_d * 255, 0, 255).astype(np.uint8), w, h, 70.0)
+        lines_g = {}
+        keep_g, rem_g, sm_g, _ = eng_g._compute_protection_maps_small(frame_d, fg_g, core_g, 80.0, True, True, smoke_auto=True,
+                                                                     gear_body=True, smoke_faint=word, lines_out=lines_g)
+        up = lambda m: cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR) > 100  # noqa: E731
+        return up(keep_g), up(rem_g), up(sm_g), up(lines_g["smoke"])
+
+    dark_f, dark_sil, zd = drawn(True)
+    keep_g, rem_g, sm_g, thick_g = gear_maps(dark_f, dark_sil, False)
+    old_rem = float(rem_g[zd["cloud"]].mean())
+    if float(keep_g[zd["cloud"]].mean()) < 0.8 or old_rem < 0.5:
+        bad.append(f"the thick cloud of this check must be one that is gear without the user's word: {keep_g[zd['cloud']].mean() * 100:.0f}% "
+                   f"of it gear, {old_rem * 100:.0f}% marked for removal")
+    keep_g, rem_g, sm_g, thick_g = gear_maps(dark_f, dark_sil, True)
+    shares = lambda m, z: float(m[zd[z]].mean())  # noqa: E731
+    if shares(rem_g, "cloud") > 0.0 or shares(keep_g, "cloud") > 0.02 or shares(sm_g, "cloud") < 0.97 or shares(thick_g, "cloud") < 0.97:
+        bad.append(f"thick smoke with the user's word: {shares(rem_g, 'cloud') * 100:.1f}% marked for removal, {shares(keep_g, 'cloud') * 100:.0f}% gear, "
+                   f"{shares(sm_g, 'cloud') * 100:.0f}% smoke, {shares(thick_g, 'cloud') * 100:.0f}% thick smoke")
+    for name_z in ("stand", "knot"):
+        if shares(keep_g, name_z) < 0.97 or shares(rem_g, name_z) < 0.9 or shares(sm_g, name_z) > 0.3:
+            bad.append(f"real gear next to smoke ({name_z}) must stay gear: {shares(keep_g, name_z) * 100:.0f}% kept as gear, "
+                       f"{shares(rem_g, name_z) * 100:.0f}% marked for removal, {shares(sm_g, name_z) * 100:.0f}% smoke")
+    light_f, light_sil, zl = drawn(False)
+    keep_l, rem_l, sm_l, _ = gear_maps(light_f, light_sil, True)
+    if float(sm_l[zl["cloud"]].mean()) < 0.97 or float(sm_l[zl["pole"]].mean()) > 0.1 or float(keep_l[zl["pole"]].mean()) < 0.97:
+        bad.append(f"a light wall: the cloud {sm_l[zl['cloud']].mean() * 100:.0f}% smoke; a soft straight pole must stay gear: "
+                   f"{sm_l[zl['pole']].mean() * 100:.0f}% of it smoke, {keep_l[zl['pole']].mean() * 100:.0f}% gear")
+    # ...and what the layer does, with "remove the stands" on
+    def cleaned_d(**over):
+        eng_d = H.make_engine(E, dark_sil)
+        out_d, st_d = _quiet(eng_d.process, dark_f, 8, dict(H.STD, spots=0, seamOn=False, speedMode="fast", removeStands=True, **over))
+        res_d = _comp(dark_f, out_d)
+        change = np.abs(res_d - dark_f.astype(np.float32)).mean(axis=2)
+        return texture(res_d, zd["cloud"].astype(np.float32)) / texture(dark_f, zd["cloud"].astype(np.float32)), change
+
+    left_old, _ = cleaned_d(smokeAuto=True)
+    left_new, change = cleaned_d(smokeAuto=True, smokeFaint=True)
+    if left_old > 0.85:
+        bad.append(f"without the user's word the stands tool must paint over the thick cloud of this check ({left_old * 100:.0f}% of its texture left)")
+    if left_new < 0.99 or float(change[zd["cloud"]].max()) > 1.0:
+        bad.append(f"'remove the stands' with the smoke switch on: {left_new * 100:.0f}% of the thick smoke left, changed by up to {change[zd['cloud']].max():.0f} levels")
+    if float(change[zd["stand"]].mean()) < 5.0 or float(change[zd["knot"]].mean()) < 5.0:
+        bad.append(f"...and the real gear must still be removed: the stand changed by {change[zd['stand']].mean():.1f} levels, the knot by {change[zd['knot']].mean():.1f}")
+    note += f"; thick smoke is not gear: {left_new * 100:.0f}% left with 'remove the stands' on (without the word: {left_old * 100:.0f}%, {old_rem * 100:.0f}% marked for removal)"
     report("smoke", not bad, note if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
@@ -2852,6 +2944,360 @@ def check_fallback():
     report("fallback", not bad, f"a GPU error costs one run: the processor finishes it ({tiles} tiles, same pixels, all processors but one - 7 threads "
            f"of 8), the answer says where the fill ran and why, the next run is on the GPU again; fill and silhouette" if not bad
            else "wrong:\n  " + "\n  ".join(bad))
+
+
+def check_mix():
+    """
+    "Мікс-пензель" (4.12.0, mixOn / mix): the cleaned backdrop is blended towards a smooth copy of itself - what
+    the owner does by hand with the mixer brush after the cleaning. See MIX_SIGMA of engine.py.
+    """
+    bad = []
+    w, h = 1500, 2000
+    img, sil = H.make_studio_image(w, h, n_dust=40, n_hair=3, seed=33)
+
+    def soft_noise(seed_n, sigma, std, size=(h, w)):
+        n = cv2.GaussianBlur(np.random.default_rng(seed_n).standard_normal(size).astype(np.float32), (0, 0), sigma)
+        return n * (std / float(n.std()))
+
+    # the frame of most questions: blotches all over the backdrop (something to smooth) and a stand
+    stand = np.zeros((h, w), np.float32)
+    cv2.line(stand, (int(w * 0.06), int(h * 0.46)), (int(w * 0.06), int(h * 0.60)), 1.0, 9)
+    stand = cv2.GaussianBlur(stand, (0, 0), 0.8)
+    frame = np.clip((img.astype(np.float32) + soft_noise(9, 9.0, 2.5)[..., None]) * (1.0 - 0.85 * stand[..., None]), 0, 255).astype(np.uint8)
+    on_stand = stand > 0.5
+    # ...and one with a cloud of smoke on a clean backdrop (with the user's word that the frame has smoke, blotches
+    # all over the backdrop ARE smoke, and so are soft dust marks)
+    clean_img, clean_sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=21)
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    env = np.exp(-(((xx - 0.80 * w) / (0.13 * w)) ** 2 + ((yy - 0.28 * h) / (0.11 * h)) ** 2))
+    smoky = np.clip(clean_img.astype(np.float32) + (soft_noise(5, 22.0, 4.0) * env)[..., None], 0, 255).astype(np.uint8)
+    cloud = env > 0.6
+    person = cv2.resize(sil, (w, h), interpolation=cv2.INTER_LINEAR) > 0.5
+    wall = np.zeros((h, w), bool)
+    wall[int(h * 0.08):int(h * 0.40), int(w * 0.05):int(w * 0.27)] = True
+    quiet = dict(H.STD, speedMode="fast", smokeOn=False, spots=0, seamOn=False, scuffs=0)
+
+    def band(a, lo, hi):
+        g = a.astype(np.float32).mean(axis=2)
+        return (cv2.GaussianBlur(g, (0, 0), lo) if lo > 0 else g) - cv2.GaussianBlur(g, (0, 0), hi)
+
+    def left(res, ref, zone, lo, hi):
+        return float(np.sqrt((band(res, lo, hi)[zone] ** 2).mean()) / np.sqrt((band(ref, lo, hi)[zone] ** 2).mean()))
+
+    def run(image=frame, silhouette=sil, bit=8, **over):
+        eng = H.make_engine(E, silhouette)
+        out, stats = _quiet(eng.process, image, bit, dict(quiet, **over))
+        return out, stats
+
+    plain, _ = run()
+    off, _ = run(mixOn=False, mix=80)
+    if not np.array_equal(plain, off):
+        bad.append("the mixer brush switched off must change nothing, whatever its strength says")
+    if ENG._tone_stages_on(dict(scuffs=0, blur=0, cycCurve=0, mixOn=True, mix=50)) is not True \
+            or ENG._tone_stages_on(dict(scuffs=0, blur=0, cycCurve=0, mixOn=False, mix=50)) is not False \
+            or ENG._mix_strength(dict(mixOn=True, mix=250)) != 100.0 or ENG._mix_strength(dict(mixOn=True)) != 50.0:
+        bad.append("the mixer brush is a stage of the whole backdrop while it is on; its strength is 50 unless said, and 100 at most")
+    base = _comp(frame, plain)
+    out50, _ = run(mixOn=True, mix=50)
+    out100, _ = run(mixOn=True, mix=100)
+    res50, res100 = _comp(frame, out50), _comp(frame, out100)
+    g50, b50 = left(res50, base, wall, 0, 1.5), left(res50, base, wall, 4, 20)
+    g100, b100 = left(res100, base, wall, 0, 1.5), left(res100, base, wall, 4, 20)
+    if not (0.40 <= g50 <= 0.72 and 0.40 <= b50 <= 0.75):
+        bad.append(f"at 50 the open backdrop keeps about half of its grain and of its blotches: {g50 * 100:.0f}% / {b50 * 100:.0f}%")
+    if not (b100 <= 0.45 and b100 < b50 - 0.15 and g100 < g50):
+        bad.append(f"at 100 the blotches go and the grain is thinned further: {g100 * 100:.0f}% / {b100 * 100:.0f}% (at 50: {g50 * 100:.0f}% / {b50 * 100:.0f}%)")
+    light = float(np.abs(cv2.GaussianBlur(res100.mean(axis=2) - base.mean(axis=2), (0, 0), 60.0))[wall].max())
+    if light > 0.5:
+        bad.append(f"the slow light of the backdrop must stay as it is: it moved by {light:.2f} levels")
+    if float(np.abs(res100 - base)[person].max()) > 0.0 or int(out100[..., 3][person].max()) != 0:
+        bad.append("the person must not be touched, and the layer must not cover it")
+    if float((out100[..., 3] > 128)[wall].mean()) < 0.99:
+        bad.append("the layer must cover the open backdrop where the brush went")
+    if float(np.abs(res100 - base)[on_stand].mean()) > 0.3:
+        bad.append(f"gear is not brushed over: a stand changed by {np.abs(res100 - base)[on_stand].mean():.1f} levels")
+    eng = H.make_engine(E, sil)
+    fg_u8, core_u8 = eng._clean_fg_mask(np.clip(sil * 255, 0, 255).astype(np.uint8), w, h, 70.0)
+    shadow_s = eng._compute_protection_maps_small(frame, fg_u8, core_u8, 80.0, False, True)[3]
+    shadow = (cv2.resize(shadow_s, (w, h), interpolation=cv2.INTER_LINEAR) > 160) & ~person
+    in_shadow = left(res100, base, shadow, 4, 20)
+    if int(shadow.sum()) < 20000 or in_shadow < 0.9:
+        bad.append(f"the shadow under the person is not brushed over: {in_shadow * 100:.0f}% of its texture left ({int(shadow.sum())} px)")
+    # smoke: with the protection on the cloud is left alone, without it the brush goes over it like over any backdrop
+    as_shot = _comp(smoky, run(smoky, clean_sil)[0])
+    smoke_off = left(_comp(smoky, run(smoky, clean_sil, mixOn=True, mix=100)[0]), as_shot, cloud, 11, 44)
+    kept_s = _comp(smoky, run(smoky, clean_sil, mixOn=True, mix=100, smokeOn=True, smokeAuto=True, smokeFaint=True)[0])
+    smoke_on = left(kept_s, as_shot, cloud, 11, 44)
+    wall_s = left(kept_s, as_shot, wall, 0, 1.5)
+    if smoke_off > 0.6 or smoke_on < 0.97 or wall_s > 0.6:
+        bad.append(f"smoke: {smoke_on * 100:.0f}% of the cloud's texture left with the protection on (without it: {smoke_off * 100:.0f}%); "
+                   f"the grain of the wall away from it: {wall_s * 100:.0f}%")
+    # 16 bit: the same blend; and the grain that stays at full strength (in 8 bit the rounding hides it)
+    img16, sil16 = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=33, bit16=True)
+    wall16 = np.zeros((h, w), bool)
+    wall16[int(h * 0.08):int(h * 0.40), int(w * 0.05):int(w * 0.30)] = True
+
+    def grain16(out):
+        a = out[:, :, 3:4].astype(np.float32) / 32768.0
+        shown = (img16[:, :, :3].astype(np.float32) * (1.0 - a) + out[:, :, :3].astype(np.float32) * a) * (255.0 / 32768.0)
+        return float(np.sqrt((band(shown, 0, 1.5)[wall16] ** 2).mean()))
+
+    g_plain = grain16(run(img16, sil16, 16)[0])
+    g_half = grain16(run(img16, sil16, 16, mixOn=True, mix=50)[0]) / g_plain
+    g_full = grain16(run(img16, sil16, 16, mixOn=True, mix=100)[0]) / g_plain
+    g_most = grain16(run(img16, sil16, 16, mixOn=True, mix=80)[0]) / g_plain
+    floor = ENG.MIX_GRAIN_MIN
+    if not (0.42 <= g_half <= 0.62) or not (floor - 0.06 <= g_full <= floor + 0.12) or not (floor - 0.06 <= g_most <= g_half):
+        bad.append(f"16 bit: grain left at 50 / 80 / 100: {g_half * 100:.0f}% / {g_most * 100:.0f}% / {g_full * 100:.0f}% "
+                   f"(a half at 50; never under {floor * 100:.0f}% - a backdrop without grain shows bands)")
+
+    # ---- the big window (a frame large enough for the light refresh)
+    w, h = 2600, 1740
+    img, sil = H.make_studio_image(w, h, n_dust=30, n_hair=3, seed=5, rgba=True)
+    frame = img.copy()
+    frame[..., :3] = np.clip(img[..., :3].astype(np.float32) + soft_noise(9, 9.0, 2.5, (h, w))[..., None], 0, 255).astype(np.uint8)
+    win = dict(quiet, speedMode="quality", mixOn=True, mix=50)
+    eng = H.make_engine(E, sil)
+    r1 = _quiet(eng.start_session, frame, 8, dict(win))
+    sid = r1["session_id"]
+    r2 = _quiet(eng.recompute_session, sid, dict(win, mix=90), True, None, False)
+    ref = H.make_engine(E, sil)
+    _quiet(ref.start_session, frame, 8, dict(win, mix=90))
+    if "mix" not in r2["stats"].get("reused_stages", []) or not np.array_equal(eng._active_session["cleaned_base_rgba"], ref._active_session["cleaned_base_rgba"]):
+        bad.append(f"another strength: the smooth copy is re-used ({r2['stats'].get('reused_stages')}) and the frame is the one of a fresh run")
+    r3 = _quiet(eng.recompute_session, sid, dict(win, mix=90, feather=25), True, None, False)
+    ref = H.make_engine(E, sil)
+    _quiet(ref.start_session, frame, 8, dict(win, mix=90, feather=25))
+    if "mix" in r3["stats"].get("reused_stages", []) or not np.array_equal(eng._active_session["cleaned_base_rgba"], ref._active_session["cleaned_base_rgba"]):
+        bad.append("another transition next to the person: the smooth copy is made anew, the frame is the one of a fresh run")
+    # Apply that brings only another strength (or only the switch) must compute the real frame anew
+    for label, changed in (("another strength", dict(win, mix=30)), ("the switch off", dict(win, mixOn=False))):
+        eng = H.make_engine(E, sil)
+        sid = _quiet(eng.start_session, frame, 8, dict(win))["session_id"]
+        full = _count_full_frames(eng)
+        layer, mask, st = _quiet(eng.apply_session, sid, 100.0, False, False, 45.0, None, dict(changed))
+        ref = H.make_engine(E, sil)
+        sid_r = _quiet(ref.start_session, frame, 8, dict(changed))["session_id"]
+        layer_r, mask_r, _ = _quiet(ref.apply_session, sid_r, 100.0, False, False, 45.0)
+        if st.get("recomputed") is not True or full["n"] != 1 or not np.array_equal(layer, layer_r) or not np.array_equal(mask, mask_r):
+            bad.append(f"Apply with {label}: recomputed={st.get('recomputed')}, {full['n']} full computation(s), the layer of a fresh window: "
+                       f"{np.array_equal(layer, layer_r)}")
+    # the light refresh draws the brush too, and close to what the real frame gives
+    eng = H.make_engine(E, sil)
+    sid = _quiet(eng.start_session, frame, 8, dict(win, mixOn=False))["session_id"]
+    before = eng._active_session["clean_base_small_bgr"].copy()
+    q = _quiet(eng.recompute_session, sid, dict(win, mix=100), True, None, True)
+    light_pic = eng._active_session["clean_base_small_bgr"].copy()
+    _quiet(eng.recompute_session, sid, dict(win, mix=100), True, None, False)
+    exact_pic = eng._active_session["clean_base_small_bgr"]
+    ph, pw = light_pic.shape[:2]
+    wall_p = np.zeros((ph, pw), bool)
+    wall_p[int(ph * 0.08):int(ph * 0.40), int(pw * 0.05):int(pw * 0.25)] = True
+    moved = float(np.abs(light_pic.astype(np.float32) - before.astype(np.float32))[wall_p].mean())
+    off_by = float(np.abs(light_pic.astype(np.float32) - exact_pic.astype(np.float32))[wall_p].mean())
+    if q.get("quick") is not True or moved < 0.4 or off_by > 0.6:
+        bad.append(f"the light refresh must show the brush: quick={q.get('quick')}, the wall changed by {moved:.2f} levels, "
+                   f"{off_by:.2f} levels away from the exact picture")
+    report("mix", not bad,
+           f"the mixer brush at 50 / 100: grain {g50 * 100:.0f}% / {g100 * 100:.0f}%, blotches {b50 * 100:.0f}% / {b100 * 100:.0f}% left on the open "
+           f"backdrop (16 bit: grain {g_half * 100:.0f}% / {g_full * 100:.0f}%, never under {floor * 100:.0f}%); the person, the gear, the shadow "
+           f"({in_shadow * 100:.0f}% left) and protected smoke ({smoke_on * 100:.0f}%, unprotected {smoke_off * 100:.0f}%) are not brushed over; the "
+           "slow light stays; switched off: nothing changes; the window: another strength re-uses the smooth copy, Apply computes "
+           f"anew, the light refresh shows it ({off_by:.2f} levels from the exact picture)"
+           if not bad else "wrong:\n   " + "\n   ".join(bad))
+
+
+def check_restart():
+    """
+    The newest values win (4.12.0): a recompute the window waits for gives way to a newer one - see
+    recompute_session of engine.py. Nothing depends on timing: the older run is held at one of its progress points
+    until the newer request has been made.
+    """
+    bad, reused = _quiet(_restart_cases)
+    report("restart", not bad,
+           "a recompute that the window waits for stops as soon as a newer one is asked for and answers 'superseded' with the "
+           "session untouched; the newer one gives the frame of a run that was never disturbed and re-uses the finished stages "
+           f"({', '.join(reused) or 'none'}); a request overtaken while it waited computes nothing; a light refresh gives way the "
+           "same way; a brush stroke made meanwhile stops nothing"
+           if not bad else "wrong:\n   " + "\n   ".join(bad))
+
+
+def _restart_cases():
+    import hashlib
+    import threading
+
+    bad = []
+    w, h = 2600, 1740
+    img, sil = H.make_studio_image(w, h, n_dust=70, n_hair=6, seed=5, rgba=True)
+    base = dict(H.STD, speedMode="quality", smokeAuto=True, autoFractions=False)
+    first = dict(base, spots=88, scuffs=80, blur=25)    # what the bar is running for
+    newer = dict(first, scuffs=40)                      # the user moved a slider meanwhile
+    newest = dict(first, scuffs=55, blur=10)
+    stroke_pts = [{"x": 0.30, "y": 0.80, "norm": 1}, {"x": 0.36, "y": 0.83, "norm": 1}]
+
+    def state(eng):
+        s = eng._active_session
+        hsh = hashlib.sha1()
+        for key in ("cleaned_base_rgba", "core_mask_u8", "clean_base_small_bgr", "clean_paint_small_bgr",
+                    "auto_mask_small_u8", "repair_mask_small_u8", "user_paint_u8", "user_erase_u8"):
+            hsh.update(np.ascontiguousarray(s[key]).tobytes())
+        hsh.update(repr((bool(s["base_stale"]), sorted(s["params"].items()), len(s["history"]["undo"]))).encode())
+        return hsh.hexdigest()
+
+    def pictures(ans):
+        return ans.get("comp_jpg_b64"), ans.get("overlay_jpg_b64")
+
+    def opened():
+        eng = H.make_engine(E, sil)
+        return eng, eng.start_session(img, 8, dict(base))["session_id"]
+
+    def recompute(eng, sid, params, quick=False, cb=None):
+        return eng.recompute_session(sid, dict(params), True, cb, quick, False)
+
+    class Gate:
+        """A progress callback that holds the run at its first progress point from `pct` on, until open()."""
+        def __init__(self, pct):
+            self.pct, self.reached, self.go, self.used, self.gave_up = pct, threading.Event(), threading.Event(), False, False
+
+        def __call__(self, pct, txt):
+            if not self.used and pct >= self.pct:
+                self.used = True
+                self.reached.set()
+                if not self.go.wait(45):   # (the limit matters only when the engine is broken)
+                    self.gave_up = True
+
+    def in_thread(fn):
+        box = {}
+
+        def run():
+            try:
+                box["ans"] = fn()
+            except BaseException as exc:  # noqa: B036
+                box["err"] = exc
+            box["at"] = time.perf_counter()
+
+        th = threading.Thread(target=run, daemon=True)
+        th.start()
+        return th, box
+
+    def held(eng, sid, params, pct, quick=False):
+        """A recompute the window waits for, held in its middle: (gate, thread, box of its answer)."""
+        gate = Gate(pct)
+        th, box = in_thread(lambda: recompute(eng, sid, params, quick=quick, cb=gate))
+        if not gate.reached.wait(120):
+            gate.go.set()
+            th.join(120)
+            raise RuntimeError(f"the run did not reach its middle: {box}")
+        return gate, th, box
+
+    def asked(eng, seq):
+        """Wait until the engine has counted the request number `seq` (it then waits for its turn)."""
+        for _ in range(1500):
+            if eng._fg_seq >= seq:
+                return True
+            time.sleep(0.01)
+        return False
+
+    def idle(eng):
+        return (not eng._compute_lock.locked() and not eng.lock.locked() and eng._active_jobs == 0
+                and eng._compute_waiters == 0 and getattr(eng._bg_local, "check", None) is None)
+
+    def gave_way(ans):
+        return isinstance(ans, dict) and ans.get("superseded") is True and "comp_jpg_b64" not in ans and "rev" not in ans
+
+    # ---- what an undisturbed window gives for the newer values (from the picture of the first scan)
+    eng, sid = opened()
+    start_state = state(eng)
+    ref_newer = recompute(eng, sid, newer)
+    ref_newer_state = state(eng)
+    eng, sid = opened()
+    ref_newest = recompute(eng, sid, newest)
+    ref_newest_state = state(eng)
+
+    # ---- 1. the bar is running, a slider is moved: the run stops, the newer one gives the undisturbed frame
+    eng, sid = opened()
+    seq0 = eng._fg_seq
+    gate, th1, box1 = held(eng, sid, first, 79)
+    before = state(eng)
+    th2, box2 = in_thread(lambda: recompute(eng, sid, newer))
+    if not asked(eng, seq0 + 2):
+        bad.append("the newer request was not counted while the older run was held")
+    gate.go.set()
+    th1.join(120)
+    th2.join(240)
+    a1, a2 = box1.get("ans"), box2.get("ans")
+    if gate.gave_up or not gave_way(a1):
+        bad.append(f"the older run must answer 'superseded' without pictures: {box1.get('err') or (a1 and sorted(a1))}")
+    if not isinstance(a2, dict) or a2.get("superseded") or pictures(a2) != pictures(ref_newer) or state(eng) != ref_newer_state:
+        bad.append(f"the newer run must give the pictures and the session of an undisturbed recompute: {box2.get('err') or (a2 and sorted(a2))}")
+    if before != start_state:
+        bad.append("a run that is held in its middle has already changed the session")
+    if not (box1.get("at", 9e9) <= box2.get("at", 0)):
+        bad.append("the older run must have answered before the newer one")
+    if not idle(eng):
+        bad.append("after the two runs a lock is still held, or the safe-place hook is still set")
+    reused = [s for s in ((a2 or {}).get("stats") or {}).get("reused_stages", []) if not s.startswith("preview:")]
+    if not ({"fg", "maps", "detect"} <= set(reused)):
+        bad.append(f"the newer run must re-use what the stopped run had finished (the person, the maps, the search): {reused}")
+    n_full = _count_full_frames(eng)
+    again = recompute(eng, sid, newer)   # the same values once more: an ordinary recompute, the same pictures
+    if pictures(again) != pictures(ref_newer) or n_full["n"] != 1:
+        bad.append("after a stopped run an ordinary recompute must still work")
+
+    # ---- 2. two newer requests while the first is held: only the last one computes
+    eng, sid = opened()
+    seq0 = eng._fg_seq
+    full = _count_full_frames(eng)
+    gate, th1, box1 = held(eng, sid, first, 79)
+    th2, box2 = in_thread(lambda: recompute(eng, sid, newer))
+    asked(eng, seq0 + 2)
+    th3, box3 = in_thread(lambda: recompute(eng, sid, newest))
+    asked(eng, seq0 + 3)
+    gate.go.set()
+    for th in (th1, th2, th3):
+        th.join(240)
+    a1, a2, a3 = box1.get("ans"), box2.get("ans"), box3.get("ans")
+    if not gave_way(a1) or not gave_way(a2):
+        bad.append(f"both overtaken requests must answer 'superseded': {a1 and sorted(a1)} / {a2 and sorted(a2)}")
+    if not isinstance(a3, dict) or pictures(a3) != pictures(ref_newest) or state(eng) != ref_newest_state:
+        bad.append("the last request must give the frame of an undisturbed recompute for its values")
+    if full["n"] != 2 or not idle(eng):
+        bad.append(f"the frame must be started for the first and the last request only: {full['n']} time(s); idle {idle(eng)}")
+
+    # ---- 3. a light refresh gives way the same way
+    eng, sid = opened()
+    ref_light = recompute(eng, sid, newer, quick=True)
+    ref_light_state = state(eng)
+    eng, sid = opened()
+    seq0 = eng._fg_seq
+    gate, th1, box1 = held(eng, sid, first, 30, quick=True)
+    th2, box2 = in_thread(lambda: recompute(eng, sid, newer, quick=True))
+    asked(eng, seq0 + 2)
+    gate.go.set()
+    th1.join(120)
+    th2.join(240)
+    a1, a2 = box1.get("ans"), box2.get("ans")
+    if not gave_way(a1) or not isinstance(a2, dict) or a2.get("quick") is not True or pictures(a2) != pictures(ref_light) \
+            or state(eng) != ref_light_state or not idle(eng):
+        bad.append(f"a light refresh overtaken by a newer one: 'superseded', then the pictures of an undisturbed light refresh: "
+                   f"{a1 and sorted(a1)} / {a2 and a2.get('quick')}")
+
+    # ---- 4. a brush stroke made while the bar is running stops nothing: the frame is finished, then the stroke is drawn
+    eng, sid = opened()
+    recompute(eng, sid, first)
+    eng.edit_session_mask(sid, "stroke", stroke_pts, 24.0, False, False, 45.0)
+    ref_stroke_state = state(eng)
+    eng, sid = opened()
+    gate, th1, box1 = held(eng, sid, first, 79)
+    th2, box2 = in_thread(lambda: eng.edit_session_mask(sid, "stroke", stroke_pts, 24.0, False, False, 45.0))
+    time.sleep(0.3)
+    gate.go.set()
+    th1.join(240)
+    th2.join(120)
+    a1 = box1.get("ans")
+    if not isinstance(a1, dict) or a1.get("superseded") or not a1.get("comp_jpg_b64") or state(eng) != ref_stroke_state or not idle(eng):
+        bad.append(f"a brush stroke must not stop the recompute: {box1.get('err') or (a1 and sorted(a1))}; {box2.get('err')}")
+    return bad, sorted(reused)
 
 
 def check_fastwin():
@@ -5414,7 +5860,7 @@ GROUPS = [("convert", check_convert), ("process", check_process), ("stage", chec
           ("format", check_format), ("scene", check_scene), ("stains", check_stains), ("seam", check_seam), ("mask", check_mask),
           ("brush", check_brush),
           ("dark", check_dark), ("gear", check_gear), ("shadow", check_shadow), ("undo", check_undo),
-          ("exact", check_exact), ("sharp", check_sharp),
+          ("exact", check_exact), ("restart", check_restart), ("mix", check_mix), ("sharp", check_sharp),
           ("edge", check_edge), ("line", check_line), ("hair", check_hair),
           ("server", check_server), ("http", check_http),
           ("folders", lambda: IC.check_folders(report)), ("install", lambda: IC.check_install(report)),

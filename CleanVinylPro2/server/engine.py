@@ -6456,7 +6456,8 @@ class CleanVinylEngine:
         st_b = cv2.resize(stand_u8, (bw, bh), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
         sh_b = cv2.GaussianBlur(cv2.resize(shadow_u8, (bw, bh), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0, (25, 25), 0)
         sm_b = cv2.resize(smoke_u8, (bw, bh), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
-        open_w = (1.0 - 0.88 * st_b) * (1.0 - np.clip(sh_b * 1.35, 0.0, 1.0)) * (1.0 - np.clip(sm_b * 1.25, 0.0, 1.0))
+        open_w = ((1.0 - np.clip(st_b * 1.25, 0.0, 1.0)) * (1.0 - np.clip(sh_b * 1.35, 0.0, 1.0))
+                  * (1.0 - np.clip(sm_b * 1.25, 0.0, 1.0)))
         src_w = (fg_b < 0.08).astype(np.float32) * open_w
         sigma = max(1.5, self.MIX_SIGMA * max(bw, bh))
         num = cv2.GaussianBlur(small_b * src_w[..., None], (0, 0), sigmaX=sigma, sigmaY=sigma)

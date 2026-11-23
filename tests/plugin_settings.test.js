@@ -44,6 +44,11 @@ let activePresetId = "std", makeMaskDefault = false, fracAuto = true, fracAutoUs
 let deletedDefaultIds = [], knownDefaultIds = [], presetsList = [], appliedPresetMoves = [];
 const sessState = { brushSize: 24, brushSoft: true };
 let detailPreview = false;
+let mixEnabled = false;
+const sliders = { gSlMix: 50 };
+function getSliderVal(id) { return sliders[id]; }
+function setSliderVal(id, v) { sliders[id] = Math.max(0, Math.min(100, Math.round(Number(v) || 0))); return sliders[id]; }
+function updateSliderVisuals() {}
 function sayInWindow() {}
 function updateRecomputeButton() {}
 function scheduleExactPreview() {}
@@ -69,6 +74,8 @@ module.exports = function run(snapshot) {
   settingsMigrated = false;
   fracAuto = fracAutoUser = autoPreset = true;
   detailPreview = false;
+  mixEnabled = false;
+  sliders.gSlMix = 50;
   sessState.brushSoft = true;
   pills.forEach((p) => (p.active = Number(p.dataset.sec) === 120));
   applySettingsSnapshot(snapshot);
@@ -142,6 +149,23 @@ for (const [name, snapshot, expDetail] of detailKeys) {
     console.log("FAIL " + name + " -> " + JSON.stringify(r.saved));
   }
 }
+// 4.12.0: the mixer brush is the user's own switch, kept with the settings - off, at 50, unless they say otherwise
+// [name, saved file, expected in the file written back: mixOn, mixStrength]
+const mixKeys = [
+  ["nothing saved yet: the mixer brush is off, at 50", {}, false, 50],
+  ["a file of 4.11.0 (no word of it): off, at 50", { schemaVersion: 5, detailPreview: false, brushSoft: true }, false, 50],
+  ["the mixer brush was ticked, at 70", { schemaVersion: 5, mixOn: true, mixStrength: 70 }, true, 70],
+  ["it was unticked, the strength stays", { schemaVersion: 5, mixOn: false, mixStrength: 35 }, false, 35],
+  ["a strength out of range is brought into it", { schemaVersion: 5, mixOn: true, mixStrength: 250 }, true, 100],
+  ["broken values are ignored", { schemaVersion: 5, mixOn: "yes", mixStrength: "strong" }, false, 50]
+];
+for (const [name, snapshot, expOn, expStrength] of mixKeys) {
+  const r = run(snapshot);
+  if (r.saved.mixOn !== expOn || r.saved.mixStrength !== expStrength) {
+    failed++;
+    console.log("FAIL " + name + " -> " + JSON.stringify(r.saved));
+  }
+}
 // [name, saved file, expected in the file written back: brushSoft, speedMode]
 const brushKeys = [
   ["nothing saved yet: the soft edge", {}, true],
@@ -172,7 +196,9 @@ const DEFAULT_IDLE_UNLOAD_SEC = 120, LEGACY_IDLE_UNLOAD_SEC = 30, SETTINGS_SCHEM
 let deletedDefaultIds = [], knownDefaultIds = [], presetsList = [], appliedPresetMoves = [];
 const sessState = { brushSize: 24 };
 let detailPreview = false;
+let mixEnabled = false;
 function setDetailPreview(on) { detailPreview = !!on; }
+function updateSliderVisuals() {}
 const sliders = {};
 function el() { return null; }
 function getSliderVal(id) { return sliders[id] ?? 0; }
@@ -344,8 +370,10 @@ if (!sceneConst) throw new Error("AUTO_PRESET_BY_SCENE not found in main.js");
 const sceneCode = `
 ${sceneConst[0]}
 let presetsList = [];
+let mixEnabled = false;
 function presetRequestParams(p) { return Object.assign({}, p.cfg); }
 function clampSliderVal(id, v) { return v; }
+function getSliderVal(id) { return id === "gSlMix" ? 50 : 0; }
 ${grab("buildScenePresets")}
 ${grab("normalizedPresetConfig")}
 module.exports = { scene: (presets) => { presetsList = presets; return buildScenePresets(); }, norm: normalizedPresetConfig, map: AUTO_PRESET_BY_SCENE };
@@ -372,6 +400,7 @@ ${sliderTables[0]}
 const sliderDisabled = {};
 const badges = {};
 let seamEnabled = true, smokeEnabled = false, dressSmoothEnabled = false, fracFine = true, fracMed = true, fracLarge = true, cleanPasses = 1;
+let mixEnabled = false;
 const speedMode = "quality";
 function el(id) { return /^(gVal|dlgVal)/.test(id) ? (badges[id] = badges[id] || { textContent: "" }) : null; }
 function updateFractionButtonsUI() {}
@@ -389,7 +418,8 @@ ${grab("previewSettingsSignature")}
 module.exports = {
   ids: ALL_SLIDER_IDS, map: SLIDER_VAL_MAP, state: sliderState, read: readCurrentConfig, norm: normalizedPresetConfig, apply: applyConfig,
   sig: previewSettingsSignature, badge: (id) => (badges[id] ? badges[id].textContent : null),
-  set: (id, v) => { setSliderVal(id, v); updateSliderVisuals(); }
+  set: (id, v) => { setSliderVal(id, v); updateSliderVisuals(); },
+  mix: (on) => { mixEnabled = !!on; updateSliderVisuals(); }
 };
 `;
 const modHair = { exports: null };
@@ -416,6 +446,21 @@ moveCase("moving the hair slider makes the preview out of date; back at its valu
 moveCase("every built-in preset leaves the hair tool off (in the plugin and on the server)",
   defaultsNow.every((p) => hair.norm(p.cfg).strayHair === 0) && pluginPresets.every((p) => hair.norm(p.cfg).strayHair === 0), null);
 
-const total = cases.length + newKeys.length + detailKeys.length + brushKeys.length + moveCases;
+// 4.12.0: the mixer brush - a slider with a switch; the strength counts only while the switch is on
+const sigMixOff = hair.sig();
+hair.set("gSlMix", 80);
+moveCase("the mixer brush switched off: 'Вимк.', and its slider does not make the preview out of date",
+  hair.badge("gValMix") === "Вимк." && hair.sig() === sigMixOff && hair.read().mixOn === false && hair.read().mix === 80, { badge: hair.badge("gValMix") });
+hair.mix(true);
+const sigMix80 = hair.sig();
+hair.set("gSlMix", 40);
+moveCase("switched on: the value is shown, the switch and the strength both make the preview out of date",
+  hair.badge("gValMix") === "40%" && sigMix80 !== sigMixOff && hair.sig() !== sigMix80 && hair.read().mixOn === true && hair.read().mix === 40, { badge: hair.badge("gValMix") });
+moveCase("a preset says nothing of the mixer brush: what it would send carries the user's own switch, and applying it leaves the switch alone",
+  defaultsNow.every((p) => p.cfg.mixOn === undefined && p.cfg.mix === undefined && hair.norm(p.cfg).mixOn === true && hair.norm(p.cfg).mix === 40) &&
+  (hair.apply(defaultsNow[0].cfg), hair.read().mixOn === true && hair.read().mix === 40), null);
+hair.mix(false);
+
+const total = cases.length + newKeys.length + detailKeys.length + mixKeys.length + brushKeys.length + moveCases;
 console.log(failed ? `plugin settings migration: ${failed} of ${total} cases FAILED` : `plugin settings migration: ${total} cases pass`);
 process.exit(failed ? 1 : 0);
