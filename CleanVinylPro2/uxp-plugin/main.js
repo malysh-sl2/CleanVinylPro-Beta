@@ -117,6 +117,10 @@ const STROKE_DOT_MIN_PX = 3;
 const STROKE_DOTS_PER_MOVE = 120;
 const STROKE_DOTS_MAX = 1500;
 let dressSmoothEnabled = false;
+// "Мікс-пензель" (since 4.12.0): after the cleaning the server goes over the backdrop the way a retoucher does with
+// a wide soft mixer brush. The switch and its strength (slider gSlMix) are the user's own, like "Make Mask": no
+// preset changes them, so the tick stays as it was put for every frame and every preset.
+let mixEnabled = false;
 let cleanPasses = 1;
 // How the found defects are closed. One way is left: the full AI fill (what used to be the mode "✦ Якісний").
 // The fast mode and its button were removed in 4.7.0 at the owner's request; a "fast" kept in settings or presets
@@ -217,9 +221,6 @@ let sessState = {
   // Steps of the mask edits (brush, eraser, fill, clear, invert) that can be taken back / made again. The server
   // keeps the history and says the two numbers with every answer about the mask.
   history: { undo: 0, redo: 0 },
-  pendingRecompute: false,
-  pendingRecomputePreserve: true,
-  pendingRecomputeQuick: false,
   previewTimer: null,      // the light refresh of the preview that waits for its moment
   previewBusy: false,      // a light refresh is running right now
   previewSyncedSig: "",    // the settings the preview on screen was made for
@@ -265,7 +266,7 @@ let exactJobs = new Set();
 // Custom Drag-Only Sliders
 const ALL_SLIDER_IDS = [
   "dlgSlBlend",
-  "gSlSpots", "gSlHair", "gSlScuffs", "gSlBlur", "gSlCyc", "gSlFeather",
+  "gSlSpots", "gSlHair", "gSlScuffs", "gSlBlur", "gSlMix", "gSlCyc", "gSlFeather",
   "gSlSeam", "gSlEdge", "gSlSmoke", "gSlGrain",
   "gSlDress", "gSlTurbo"
 ];
@@ -275,6 +276,7 @@ const SLIDER_VAL_MAP = {
   gSlHair: "gValHair",
   gSlScuffs: "gValScuffs",
   gSlBlur: "gValBlur",
+  gSlMix: "gValMix",
   gSlCyc: "gValCyc",
   gSlFeather: "gValFeather",
   gSlSeam: "gValSeam",
@@ -291,6 +293,7 @@ const sliderState = {
   gSlHair: 0,
   gSlScuffs: 65,
   gSlBlur: 0,
+  gSlMix: 50,
   gSlCyc: 0,
   gSlFeather: 60,
   gSlSeam: 85,
@@ -542,6 +545,8 @@ function readCurrentConfig() {
     strayHair: getSliderVal("gSlHair"),
     scuffs: getSliderVal("gSlScuffs"),
     blur: getSliderVal("gSlBlur"),
+    mixOn: mixEnabled,
+    mix: getSliderVal("gSlMix"),
     cycCurve: getSliderVal("gSlCyc"),
     feather: getSliderVal("gSlFeather"),
     seamOn: seamEnabled,
@@ -585,6 +590,9 @@ function normalizedPresetConfig(cfg) {
     strayHair: clampSliderVal("gSlHair", c.strayHair ?? 0),
     scuffs: clampSliderVal("gSlScuffs", c.scuffs ?? 65),
     blur: clampSliderVal("gSlBlur", c.blur ?? 0),
+    // (the mixer brush is not a matter of the preset: every set carries what the user has put)
+    mixOn: mixEnabled,
+    mix: getSliderVal("gSlMix"),
     cycCurve: clampSliderVal("gSlCyc", c.cycCurve ?? 0),
     feather: clampSliderVal("gSlFeather", c.feather ?? 60),
     seamOn: flag(c.seamOn, true),
@@ -660,7 +668,10 @@ function applyPreset(p) {
 
 // The current values as a preset stores them (the AUTO button of the fractions is part of the recipe)
 function presetConfigToSave() {
-  return Object.assign(readCurrentConfig(), { fracAuto });
+  const cfg = Object.assign(readCurrentConfig(), { fracAuto });
+  delete cfg.mixOn;  // (the mixer brush is the user's own switch, not a part of any preset - see mixEnabled)
+  delete cfg.mix;
+  return cfg;
 }
 
 // What the server would be sent if this preset were on the controls
@@ -720,7 +731,7 @@ function updateRecomputeButton() {
   if (note) {
     note.textContent = detailPreview
       ? "Перегляд перераховується сам: щойно відпустите повзунок — швидко, а потім точно, для всього кадру (поки рахується, у кутку фото написано «уточнюється»). Жодної кнопки натискати не треба."
-      : "Щойно відпустите повзунок — вікно показує швидкий перегляд. Точний кадр, для всього фото, рахує «Застосувати».";
+      : "Щойно відпустите повзунок — вікно показує швидкий перегляд. Точний кадр, для всього фото, рахує «Застосувати» або кнопка «↻ Перерахувати» внизу вікна.";
   }
   const btn = el("gBtnRecompute");
   if (!btn) return;
@@ -805,6 +816,8 @@ function updateSliderVisuals() {
       badge.textContent = seamEnabled ? v + "%" : "Вимк.";
     } else if (id === "gSlSmoke") {
       badge.textContent = smokeEnabled ? v + "%" : "Вимк.";
+    } else if (id === "gSlMix") {
+      badge.textContent = mixEnabled ? v + "%" : "Вимк.";
     } else if (id === "gSlDress") {
       badge.textContent = dressSmoothEnabled ? v + "%" : "Вимк.";
     } else if (id === "gSlHair") {
@@ -827,6 +840,14 @@ function updateSliderVisuals() {
   if (el("dlgChkSmoke")) el("dlgChkSmoke").checked = smokeEnabled;
   if (el("dlgWrapSmoke")) el("dlgWrapSmoke").classList.toggle("active", smokeEnabled);
   setSliderDisabled("gSlSmoke", !smokeEnabled);
+
+  if (el("gBtnMix")) {
+    el("gBtnMix").textContent = mixEnabled ? "Увімк." : "Вимк.";
+    el("gBtnMix").className = "toggle-pill" + (mixEnabled ? " on" : "");
+  }
+  if (el("dlgChkMix")) el("dlgChkMix").checked = mixEnabled;
+  if (el("dlgWrapMix")) el("dlgWrapMix").classList.toggle("active", mixEnabled);
+  setSliderDisabled("gSlMix", !mixEnabled);
 
   if (el("gBtnDress")) {
     el("gBtnDress").textContent = dressSmoothEnabled ? "Увімк." : "Вимк.";
@@ -868,6 +889,8 @@ function buildSettingsSnapshot() {
     fracAutoNow: fracAuto,    // ...and what the active preset made of it
     autoPreset,
     detailPreview,
+    mixOn: mixEnabled,
+    mixStrength: getSliderVal("gSlMix"),
     brushSize: sessState.brushSize,
     brushSoft: sessState.brushSoft,
     deletedDefaultIds: Array.from(new Set(deletedDefaultIds)),
@@ -906,8 +929,11 @@ function applySettingsSnapshot(s) {
   if (typeof s.detailPreview === "boolean") setDetailPreview(s.detailPreview, false);
   if (typeof s.brushSize === "number" && s.brushSize >= 4) sessState.brushSize = Math.round(s.brushSize);
   if (typeof s.brushSoft === "boolean") setBrushSoft(s.brushSoft, false);
+  if (typeof s.mixOn === "boolean") mixEnabled = s.mixOn;
+  if (typeof s.mixStrength === "number" && Number.isFinite(s.mixStrength)) setSliderVal("gSlMix", s.mixStrength);
   if (s.activePresetId && presetsList.some((p) => p.id === s.activePresetId)) activePresetId = s.activePresetId;
   if (s.cfg && typeof s.cfg === "object") applyConfig(s.cfg);
+  else updateSliderVisuals();
 }
 
 function appendNewDefaultPresets() {
@@ -1970,6 +1996,55 @@ function adjustBrushSize(delta) {
   scheduleSaveSettings();
 }
 
+// "[" makes the brush smaller, "]" larger - the keys of Photoshop. Which of the two is this key ("down" / "up"; ""
+// for any other)? The key is told by its place on the keyboard first (e.code): with the Ukrainian layout the same
+// two keys type "х" and "ї" (with the Russian one "х" and "ъ"), and the owner works with that layout. Hosts differ
+// in what they say about a key, so its character (e.key) and its number (e.keyCode) are asked as well.
+function brushKeyOf(e) {
+  const code = String(e.code || "");
+  const k = String(e.key || "").toLowerCase();
+  const n = Number(e.keyCode || e.which || 0);
+  if (code === "BracketLeft" || k === "[" || k === "{" || k === "х" || n === 219) return "down";
+  if (code === "BracketRight" || k === "]" || k === "}" || k === "ї" || k === "ъ" || n === 221) return "up";
+  return "";
+}
+
+// One press of "[" or "]": a small step for a small brush, a larger one for a large brush (as in Photoshop).
+function brushKeyStep() {
+  const s = sessState.brushSize;
+  return s < 20 ? 2 : s < 60 ? 5 : s < 120 ? 10 : 20;
+}
+
+// ------------------------------------------------------------------
+// Check boxes with a caption or an icon
+// ------------------------------------------------------------------
+// The box around a check box is a <div data-check="id of the check box">, not a <label>: Photoshop draws the text
+// of a <label> in its own size and colour, whatever the style sheet says (the owner's screenshot of 2026-11-23:
+// large grey captions that ran over the rows below), and whether a click on a <label> reaches its check box
+// there was never seen. A click anywhere in the box ticks the check box and does what a click on the check box
+// itself does - without a made-up "change" event, which a host may or may not deliver.
+const checkHandlers = {};
+
+function onCheck(id, fn) {
+  const node = el(id);
+  if (!node) return;
+  checkHandlers[id] = fn;
+  node.addEventListener("change", fn);
+}
+
+function bindCheckBoxes() {
+  const boxes = document.querySelectorAll ? document.querySelectorAll("[data-check]") : [];
+  Array.prototype.forEach.call(boxes, (box) => {
+    const id = box.getAttribute("data-check");
+    box.addEventListener("click", (e) => {
+      const input = el(id);
+      if (!input || e.target === input || input.disabled) return;  // (the check box itself ticks by itself)
+      input.checked = !input.checked;
+      if (checkHandlers[id]) checkHandlers[id]();
+    });
+  });
+}
+
 // The two buttons under the brush size: the upper one is the soft edge, the lower one the hard edge
 function updateBrushEdgeUI() {
   if (el("dlgBrushSoft")) el("dlgBrushSoft").classList.toggle("active", sessState.brushSoft);
@@ -2284,7 +2359,7 @@ function previewSettingsSignature() {
   return JSON.stringify([
     c.spots, c.scuffs, c.blur, c.cycCurve, c.feather, !!c.seamOn, c.seam, c.edge, !!c.smokeOn, c.smoke, c.grain,
     !!c.shadow, !!c.removeStands, c.master, !!c.fracFine, !!c.fracMed, !!c.fracLarge, c.cleanPasses, c.speedMode,
-    c.strayHair
+    c.strayHair, !!c.mixOn, c.mixOn ? c.mix : 0
   ]);
 }
 
@@ -2637,11 +2712,11 @@ function updatePreviewBadge() {
       cls += " visible";
     } else if (!activeDragSliderId && !sessState.recomputing && stale) {
       if (sessState.exactError) {
-        text = `Перегляд не вдалося оновити: ${sessState.exactError}. Спробуйте кнопку «↻ Перерахувати зараз» у налаштуваннях. «Застосувати» врахує нові значення й без цього.`;
+        text = `Перегляд не вдалося оновити: ${sessState.exactError}. Спробуйте кнопку «↻ Перерахувати» внизу вікна. «Застосувати» врахує нові значення й без цього.`;
       } else if (sessState.quickUnsupported || sessState.bgUnsupported) {
         text = "Перегляд ще зі старими значеннями. Запущено стару версію сервера — перезапустіть його (restart_gpu_server.bat). Оновити зараз: кнопка «↻ Перерахувати зараз» у налаштуваннях.";
       } else {
-        text = "Перегляд не оновився. Натисніть «↻ Перерахувати зараз» у налаштуваннях. «Застосувати» врахує нові значення й без цього.";
+        text = "Перегляд не оновився. Натисніть «↻ Перерахувати» внизу вікна. «Застосувати» врахує нові значення й без цього.";
       }
       cls += " visible stale";
     } else if (sessState.exactError && !sessState.exactShown) {
@@ -2699,21 +2774,26 @@ function refreshPreviewAfterClick(force) {
 }
 
 // quick = true: light refresh, only the preview is redrawn, nothing blocks the window.
-// quick = false: full recompute of the real frame with the progress card - the button "↻ Перерахувати зараз".
+// quick = false: full recompute of the real frame with the progress card - the buttons "↻ Перерахувати".
 // (The exact picture that comes by itself is runExactPreview: the same computation in the background.)
+//
+// The newest values win (since 4.12.0). A call that comes while another one is on its way does not wait for it:
+// the new request goes out at once, the server stops the older run at its next safe place (it answers
+// {superseded: true}; a server before 4.12.0 finishes it first) and whatever the older request brings back is
+// dropped. While the progress card is up the newer run is a full one as well - the user is waiting for the exact
+// picture - and the bar starts from the beginning.
+let recomputeRun = 0;  // the number of the newest call; only that call may touch the window
+
 async function recomputeInteractiveSession(preserveEdits = true, quick = false) {
   if (!sessState.id) return false;
-  if (sessState.recomputing) {
-    // One more run right after the current one. A full request outranks a light one.
-    sessState.pendingRecomputeQuick = sessState.pendingRecompute ? (sessState.pendingRecomputeQuick && !!quick) : !!quick;
-    sessState.pendingRecompute = true;
-    sessState.pendingRecomputePreserve = preserveEdits;
-    return false;
-  }
+  const overtakes = sessState.recomputing;
+  quick = !!quick;
+  if (overtakes && !sessState.previewBusy) quick = false;  // the bar is running: it goes on, from the start
+  const run = ++recomputeRun;
+  const newest = () => run === recomputeRun;
   cancelPreviewTimer();
   cancelExactTimer();
   sessState.exactError = "";
-  quick = !!quick;
   sessState.recomputing = true;
   sessState.previewBusy = quick;
   sessState.previewForce = false;
@@ -2723,18 +2803,20 @@ async function recomputeInteractiveSession(preserveEdits = true, quick = false) 
   if (quick) {
     updatePreviewBadge();
   } else {
-    updateProgressUI(18, "Перерахунок маски та фону...", "modal");
+    stopProgressPolling();
+    updateProgressUI(18, overtakes ? "Значення змінилися — перераховую спочатку..." : "Перерахунок маски та фону...", "modal");
     startProgressPolling(jobId, "modal");
   }
 
-  let aborted = false;
   let done = false;
   let timeoutId = null;
+  let ctrl = null;
   try {
     if (typeof AbortController !== "undefined") {
-      recomputeAbortCtrl = new AbortController();
+      ctrl = new AbortController();
+      recomputeAbortCtrl = ctrl;  // ("Скасувати" on the progress card stops the newest run)
       timeoutId = setTimeout(() => {
-        try { if (recomputeAbortCtrl) recomputeAbortCtrl.abort(); } catch (_) {}
+        try { ctrl.abort(); } catch (_) {}
       }, 90000);
     } else {
       recomputeAbortCtrl = null;
@@ -2750,7 +2832,7 @@ async function recomputeInteractiveSession(preserveEdits = true, quick = false) 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     };
-    if (recomputeAbortCtrl) fetchOpts.signal = recomputeAbortCtrl.signal;
+    if (ctrl) fetchOpts.signal = ctrl.signal;
 
     const r = await fetch(`${SERVER_URL}/session/recompute`, fetchOpts);
     if (!r.ok) {
@@ -2759,12 +2841,15 @@ async function recomputeInteractiveSession(preserveEdits = true, quick = false) 
       throw new Error(msg);
     }
     const d = await r.json();
-    if (sessState.id === sid) {
+    if (!newest()) return false;  // a newer call is on its way: this answer is for values that are gone
+    if (d.superseded) {
+      // (the server gave way to a request this window did not make - nothing to show; the badge says the rest)
+    } else if (sessState.id === sid) {
       if (quick && typeof d.quick !== "boolean" && !sessState.quickUnsupported) {
         // An older server build: it ignored "quick" and recomputed in full. Stop asking it after every slider.
         sessState.quickUnsupported = true;
         if (el("dlgHoverHint")) {
-          el("dlgHoverHint").textContent = "Запущено стару версію сервера: перезапустіть його (restart_gpu_server.bat), щоб перегляд оновлювався сам.";
+          el("dlgHoverHint").textContent = "Запущено стару версію сервера: перезапустіть його (restart_gpu_server.bat), щоб перегляд оновлювався швидко.";
         }
       }
       if (typeof d.exact !== "boolean") sessState.bgUnsupported = true;  // an older server: no background recompute
@@ -2773,10 +2858,10 @@ async function recomputeInteractiveSession(preserveEdits = true, quick = false) 
       updateStageVisibility();
     }
   } catch (err) {
+    if (!newest()) return false;
     sessState.presetNote = null;
     sessState.smokeNote = false;
     if (err && err.name === "AbortError") {
-      aborted = true;
       if (el("dlgHoverHint")) el("dlgHoverHint").textContent = quick ? "Оновлення перегляду перервано." : "Перерахунок скасовано.";
     } else {
       const msg = (quick ? "Помилка оновлення перегляду: " : "Помилка перерахунку: ") + (err && err.message ? err.message : String(err));
@@ -2785,33 +2870,29 @@ async function recomputeInteractiveSession(preserveEdits = true, quick = false) 
     }
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
-    recomputeAbortCtrl = null;
-    if (!quick && !sessState.isApplying) {
-      // (while "Застосувати" is running the progress card belongs to it)
-      stopProgressPolling();
-      hideProgressUI("modal");
+    if (newest()) {
+      if (recomputeAbortCtrl === ctrl) recomputeAbortCtrl = null;
+      if (!quick && !sessState.isApplying) {
+        // (while "Застосувати" is running the progress card belongs to it)
+        stopProgressPolling();
+        hideProgressUI("modal");
+      }
+      sessState.recomputing = false;
+      sessState.previewBusy = false;
     }
-    sessState.recomputing = false;
-    sessState.previewBusy = false;
   }
 
-  const again = sessState.pendingRecompute;
-  const nextPreserve = sessState.pendingRecomputePreserve;
-  const nextQuick = sessState.pendingRecomputeQuick;
-  sessState.pendingRecompute = false;
-  sessState.pendingRecomputeQuick = false;
-  const alive = sessState.open && sessState.id === sid && !sessState.isApplying;
-  if (again && !aborted && alive) {
-    if (!nextQuick) {
-      await recomputeInteractiveSession(nextPreserve, false);
-    } else if (done && lightPreviewAvailable() && !previewMatchesSettings()) {
-      await recomputeInteractiveSession(nextPreserve, true);
-    }
-  }
   // The light picture is on screen: its exact version follows by itself after a quiet moment.
   if (sessState.open && sessState.id === sid) scheduleExactPreview();
   else updatePreviewBadge();
   return done;
+}
+
+// The exact picture at once, with the progress card: the two buttons "↻ Перерахувати" and the smoke switch (what
+// smoke is decides what gets cleaned at all, and the owner asked for the recompute to start by itself).
+function recomputeExactNow() {
+  if (!sessState.open || !sessState.id || sessState.isApplying) return Promise.resolve(false);
+  return recomputeInteractiveSession(true, false);
 }
 
 async function closeServerSession() {
@@ -2921,8 +3002,8 @@ async function openInteractiveWorkspace() {
   sessState.scanAborted = false;
   sessState.isApplying = false;
   cancelPreviewTimer();
-  sessState.pendingRecompute = false;
-  sessState.pendingRecomputeQuick = false;
+  recomputeRun += 1;  // (a recompute of the window before, still on its way, must not touch this window)
+  sessState.recomputing = false;
   sessState.previewBusy = false;
   sessState.previewSyncedSig = "";
   sessState.previewForce = false;
@@ -3070,7 +3151,9 @@ async function openInteractiveWorkspace() {
     cancelPreviewTimer();
     cancelExactTimer();
     stopExactPolling();
-    sessState.pendingRecompute = false;
+    recomputeRun += 1;  // (whatever a recompute of this window still brings back is for nobody)
+    sessState.recomputing = false;
+    sessState.previewBusy = false;
     sessState.presetNote = null;
     sessState.smokeNote = false;
     showPreviewNote("");
@@ -3103,7 +3186,6 @@ async function applyInteractiveResultToPhotoshop() {
   // the server computes the full-size frame for them - once, here. A light refresh still waiting is not needed.
   cancelPreviewTimer();
   cancelExactTimer();
-  sessState.pendingRecompute = false;
   updatePreviewBadge();
   const applyParams = readCurrentConfig();
   applyParams.autoFractions = fracAuto;
@@ -3769,6 +3851,7 @@ function panTo(clientX, clientY) {
 }
 
 function initEvents() {
+  bindCheckBoxes();
   // Custom drag-only sliders
   ALL_SLIDER_IDS.forEach((id) => {
     const node = el(id);
@@ -3901,14 +3984,14 @@ function initEvents() {
   });
 
   if (el("gChkDetail")) {
-    el("gChkDetail").addEventListener("change", () => {
+    onCheck("gChkDetail", () => {
       setDetailPreview(el("gChkDetail").checked);
       scheduleSaveSettings();
     });
     setDetailPreview(detailPreview, false);  // the box and the button show the value the settings brought
   }
 
-  el("dlgChkAutoPreset").addEventListener("change", () => {
+  onCheck("dlgChkAutoPreset", () => {
     setAutoPreset(el("dlgChkAutoPreset").checked);
     scheduleSaveSettings();
     if (el("dlgHoverHint")) {
@@ -3918,7 +4001,7 @@ function initEvents() {
     }
   });
 
-  el("dlgChkDress").addEventListener("change", async () => {
+  onCheck("dlgChkDress", async () => {
     dressSmoothEnabled = !!el("dlgChkDress").checked;
     updateSliderVisuals();
     scheduleSaveSettings();
@@ -3930,20 +4013,32 @@ function initEvents() {
     }
   });
 
-  el("dlgChkSmoke").addEventListener("change", async () => {
+  onCheck("dlgChkSmoke", () => {
     smokeEnabled = !!el("dlgChkSmoke").checked;
     updateSliderVisuals();
     scheduleSaveSettings();
     askSmokeNote();
-    refreshPreviewAfterClick(false);
-    // (what the server finds is said once the refreshed preview is back - see smokeNoteText)
+    // The frame is recomputed at once, with the progress card (until 4.12.0: a light refresh, which the owner did
+    // not take for a recompute - "I press the smoke tick and it does not recompute").
+    // (what the server finds is said once the picture is back - see smokeNoteText)
     const live = sessState.open && sessState.id;
     sayInWindow(smokeEnabled
-      ? "✓ Захист диму увімкнено" + (live ? " — шукаю дим у кадрі й оновлюю перегляд…" : "")
-      : "Захист диму вимкнено (повзунок у налаштуваннях неактивний)" + (live ? " — оновлюю перегляд…" : ""));
+      ? "✓ Захист диму увімкнено" + (live ? " — шукаю дим у кадрі й перераховую…" : "")
+      : "Захист диму вимкнено (повзунок у налаштуваннях неактивний)" + (live ? " — перераховую…" : ""));
+    recomputeExactNow();
   });
 
-  el("dlgChkMakeMask").addEventListener("change", () => {
+  onCheck("dlgChkMix", () => {
+    mixEnabled = !!el("dlgChkMix").checked;
+    updateSliderVisuals();
+    scheduleSaveSettings();
+    requestPreviewRefresh(PREVIEW_DELAY_CLICK_MS, false);
+    sayInWindow(mixEnabled
+      ? `✓ Мікс-пензель увімкнено (${getSliderVal("gSlMix")}%): після чистки фон розгладжується. Силу змінює повзунок у налаштуваннях.`
+      : "Мікс-пензель вимкнено: фон лишається таким, яким його залишила чистка.");
+  });
+
+  onCheck("dlgChkMakeMask", () => {
     makeMaskDefault = !!el("dlgChkMakeMask").checked;
     scheduleSaveSettings();
   });
@@ -4022,6 +4117,15 @@ function initEvents() {
   });
 
   // Gear Fine Controls inside Popover
+  if (el("gBtnMix")) {
+    el("gBtnMix").addEventListener("click", () => {
+      mixEnabled = !mixEnabled;
+      updateSliderVisuals();
+      scheduleSaveSettings();
+      requestPreviewRefresh(PREVIEW_DELAY_CLICK_MS, false);
+      sayInWindow(mixEnabled ? `✓ Мікс-пензель увімкнено (${getSliderVal("gSlMix")}%)` : "Мікс-пензель вимкнено");
+    });
+  }
   el("gBtnSeam").addEventListener("click", () => {
     seamEnabled = !seamEnabled;
     updateSliderVisuals();
@@ -4033,11 +4137,11 @@ function initEvents() {
     updateSliderVisuals();
     scheduleSaveSettings();
     askSmokeNote();
-    requestPreviewRefresh(PREVIEW_DELAY_CLICK_MS, false);
     const live = sessState.open && sessState.id;
     sayInWindow(smokeEnabled
-      ? "✓ Захист диму увімкнено" + (live ? " — шукаю дим у кадрі й оновлюю перегляд…" : "")
-      : "Захист диму вимкнено" + (live ? " — оновлюю перегляд…" : ""));
+      ? "✓ Захист диму увімкнено" + (live ? " — шукаю дим у кадрі й перераховую…" : "")
+      : "Захист диму вимкнено" + (live ? " — перераховую…" : ""));
+    recomputeExactNow();  // (as the tick at the top of the window: the same switch)
   });
   el("gBtnDress").addEventListener("click", async () => {
     dressSmoothEnabled = !dressSmoothEnabled;
@@ -4045,11 +4149,11 @@ function initEvents() {
     scheduleSaveSettings();
     if (sessState.open && sessState.id) await sendDressPreviewUpdate();
   });
-  el("gChkShadow").addEventListener("change", () => {
+  onCheck("gChkShadow", () => {
     scheduleSaveSettings();
     requestPreviewRefresh(PREVIEW_DELAY_CLICK_MS, false);
   });
-  el("gChkRemoveStands").addEventListener("change", () => {
+  onCheck("gChkRemoveStands", () => {
     scheduleSaveSettings();
     requestPreviewRefresh(PREVIEW_DELAY_CLICK_MS, false);
   });
@@ -4066,6 +4170,16 @@ function initEvents() {
       el("dlgHoverHint").textContent = `✓ Зміни збережено у «${active.name}» та оновлено прев’ю`;
     }
   });
+  // The same on the bottom bar, always at hand (the owner asked for it: "pull the recompute button out").
+  // The settings stay open if they are: the values can be changed while the bar is running, and the run then
+  // starts over with them.
+  if (el("dlgBtnRecompute")) {
+    el("dlgBtnRecompute").addEventListener("click", () => {
+      if (sessState.isApplying) return;
+      sayInWindow("↻ Перераховую точний кадр для значень на повзунках…");
+      recomputeExactNow();
+    });
+  }
   el("gBtnSavePreset").addEventListener("click", async () => {
     disarmPresetReset();
     await saveCurrentConfigToActivePreset(true);
@@ -4250,14 +4364,15 @@ function initEvents() {
         return;
       }
     }
-    if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return;
+    if (typing) return;  // (a check box that was clicked last does not swallow the keys of the tools)
+    const brushKey = (e.ctrlKey || e.metaKey || e.altKey) ? "" : brushKeyOf(e);
     if (e.code === "Space") {
       sessState.spaceDown = true;
       vp.style.cursor = "grab";
-    } else if (e.key === "[") {
-      adjustBrushSize(-6);
-    } else if (e.key === "]") {
-      adjustBrushSize(6);
+    } else if (brushKey) {
+      e.preventDefault();
+      adjustBrushSize(brushKey === "down" ? -brushKeyStep() : brushKeyStep());
+      sayInWindow(`Розмір пензля: ${sessState.brushSize} (клавіші [ та ] — менше й більше)`);
     } else if (e.key === "b" || e.key === "B" || e.key === "и" || e.key === "И") {
       setActiveTool("brush");
     } else if (e.key === "e" || e.key === "E" || e.key === "у" || e.key === "У") {
@@ -4314,7 +4429,6 @@ function initEvents() {
   el("dlgBtnCancelScan").addEventListener("click", () => {
     if (sessState.recomputing && !sessState.previewBusy && !sessState.isApplying && sessState.id) {
       // a full recompute is running: stop waiting for it, the window stays open
-      sessState.pendingRecompute = false;
       try { if (recomputeAbortCtrl) recomputeAbortCtrl.abort(); } catch (_) {}
       stopProgressPolling();
       hideProgressUI("modal");

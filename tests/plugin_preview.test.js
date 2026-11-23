@@ -112,8 +112,15 @@ function makeEnv(serverOpts = {}) {
     rev: 0,                // the number of the pictures last sent
     exact: true,           // the real frame is behind them
     shown: "",             // the settings those pictures belong to
-    bgSeen: { started: 0, finished: 0, superseded: 0, skipped: 0 }
+    bgSeen: { started: 0, finished: 0, superseded: 0, skipped: 0 },
+    // The newest values win (4.12.0) - the rule of engine.py: a recompute the window waits for stops as soon as
+    // another one is asked for and answers {superseded: true}. false = a server before 4.12.0: it finishes the
+    // older one first and only then starts the newer one.
+    newestWins: true,
+    fgSeen: { superseded: 0 }
   }, serverOpts);
+  const fgRuns = new Set();          // recomputes the window waits for that have not answered yet
+  let fgQueue = Promise.resolve();   // (a server before 4.12.0: one after another)
   if (!server.quickAware) server.bgAware = false;   // (a build that old knows neither)
   const W = 4, H = 6;
 
@@ -259,13 +266,39 @@ function makeEnv(serverOpts = {}) {
             if (refineOnly && server.ownMask) return skipped();   // (drawn while the frame was being computed)
             server.bgSeen.finished++;
             rec.outcome = "done";
+          } else if (server.newestWins) {
+            fgRuns.forEach((older) => older.giveWay());
+            const mine = {};
+            const outcome = await new Promise((resolve, reject) => {
+              mine.giveWay = () => resolve("superseded");
+              fgRuns.add(mine);
+              waitOrAbort(server.recomputeDelay, init.signal).then(() => resolve("done"), reject);
+            }).finally(() => fgRuns.delete(mine));
+            if (outcome === "superseded") {
+              server.fgSeen.superseded++;
+              rec.outcome = "superseded";
+              return reply({ ok: true, session_id: body.session_id, superseded: true });
+            }
+            if (server.failRecompute > 0) {
+              server.failRecompute--;
+              return reply({ ok: false, error: "test failure" }, 500);
+            }
           } else {
-            await waitOrAbort(server.recomputeDelay, init.signal);
+            const before = fgQueue;
+            let release;
+            fgQueue = new Promise((r2) => { release = r2; });
+            try {
+              await before;
+              await waitOrAbort(server.recomputeDelay, init.signal);
+            } finally {
+              release();
+            }
             if (server.failRecompute > 0) {
               server.failRecompute--;
               return reply({ ok: false, error: "test failure" }, 500);
             }
           }
+          rec.outcome = rec.outcome || "done";
           const quick = !background && server.quickAware && !!body.quick && Number(p.cleanPasses || 1) < 2;
           server.rev++;
           server.exact = !quick;
@@ -467,6 +500,14 @@ function makeEnv(serverOpts = {}) {
     // ...and what the window asked for by itself: the exact picture, in the background
     exacts: () => requests.filter((r) => r.path === "/session/recompute" && isBackground(r)),
     click: (id, more) => mouse(el(id), "click", 0, more),
+    // a key pressed with the focus on `target` (the document unless said otherwise); what = { key, code, keyCode, ... }
+    // (jsdom does not take "keyCode" from the description of the event: it is put on the event afterwards)
+    keyDown(what, target) {
+      const ev = new w.KeyboardEvent("keydown", Object.assign({ bubbles: true, cancelable: true }, what));
+      if (what.keyCode !== undefined) Object.defineProperty(ev, "keyCode", { get: () => what.keyCode });
+      (target || doc).dispatchEvent(ev);
+      return ev;
+    },
     check: (id, on) => { el(id).checked = on; el(id).dispatchEvent(new w.Event("change", { bubbles: true })); },
     press: (id, x, more) => mouse(el(id), "mousedown", x, more),
     move: (x, more) => mouse(doc, "mousemove", x, more),
@@ -667,20 +708,39 @@ async function main() {
     if (rs[0]) expect(rs[0].body.params.spots === 90 && rs[0].body.params.scuffs === 45, "both values in one refresh: " + JSON.stringify(rs[0].body.params));
   });
 
-  await scenario("a slider moved while a refresh is running gives exactly one more refresh", { recomputeDelay: 900 }, async (env, expect) => {
+  await scenario("a slider moved while a refresh is running: the refresh starts over at once with both values", { recomputeDelay: 900 }, async (env, expect) => {
     await env.open();
     await env.drag("gSlSpots", 90);
     await sleep(700);                       // the first refresh is on its way now
     expect(env.recomputes().length === 1, "first refresh expected");
     await env.drag("gSlCyc", 60);           // changed while the server is busy
+    await sleep(500);                       // (the first one would still be running: it takes 900 ms)
+    let rs = env.recomputes();
+    expect(rs.length === 2 && rs[1].body.quick === true, `the second refresh must be on its way without waiting for the first: ${rs.length}`);
+    expect(rs[0].done && rs[0].outcome === "superseded", "the server must have stopped the first one: " + rs[0].outcome);
     await env.settle(3200);
-    const rs = env.recomputes();
+    rs = env.recomputes();
     expect(rs.length === 2, `two recomputes expected, got ${rs.length}`);
     if (rs[1]) {
       expect(rs[1].body.params.spots === 90 && rs[1].body.params.cycCurve === 60, "the second refresh must carry both values");
-      expect(rs[1].t >= rs[0].tDone, "the second refresh must start after the first one has answered");
     }
-    expect(env.state("previewMatchesSettings()") === true, "the preview must end up to date");
+    expect(env.state("previewMatchesSettings()") === true && env.state("sessState.recomputing") === false, "the preview must end up to date, nothing left running");
+  });
+
+  await scenario("...with a server before 4.12.0: the older refresh is finished first, its picture is not shown, the newer one is", { recomputeDelay: 900, newestWins: false }, async (env, expect) => {
+    await env.open();
+    await env.drag("gSlSpots", 90);
+    await sleep(700);                       // the first refresh is on its way now
+    await env.drag("gSlCyc", 60);
+    await sleep(900);                       // the first one has answered by now, with a whole picture for the old values
+    const rs = env.recomputes();
+    expect(rs.length === 2 && rs[0].done && rs[0].outcome === "done" && !rs[1].done,
+      `the first answered in full, the second is still running: ${rs.length} requests, ${rs.map((r) => r.outcome + "/" + r.done).join(" ")}`);
+    expect(env.state("previewMatchesSettings()") === false, "the picture of the first one is for values that are gone: it must not count as up to date");
+    expect(env.state("sessState.recomputing") === true && env.badge().includes("Оновлюю"), "the window is still waiting for the newer one: " + env.badge());
+    await env.settle(3500);
+    expect(env.recomputes().length === 2 && env.state("previewMatchesSettings()") === true,
+      `the newer one ends up on screen, nothing more is asked: ${env.recomputes().length} requests, up to date ${env.state("previewMatchesSettings()")}`);
   });
 
   await scenario("a slider returned to its value, Blend and Clothing sliders do not recompute", {}, async (env, expect) => {
@@ -700,7 +760,7 @@ async function main() {
     await env.settle(600);
     env.click("dlgFracFine");
     await env.settle(600);
-    env.check("dlgChkSmoke", true);
+    env.check("gChkShadow", false);
     await env.settle(600);
     const rs = env.recomputes();
     expect(rs.length === 3, `three recomputes expected, got ${rs.length}`);
@@ -708,8 +768,8 @@ async function main() {
     if (rs.length === 3) {
       expect(rs[0].body.params.removeStands === true, "stands removal must be on in the first");
       expect(rs[1].body.params.fracFine === false && rs[1].body.params.autoFractions === false, "fine fraction off, auto off in the second");
-      expect(rs[0].body.params.smokeOn === false && rs[1].body.params.smokeOn === false, "smoke protection is off until it is asked for");
-      expect(rs[2].body.params.smokeOn === true, "smoke protection on in the third");
+      expect(rs.every((r) => r.body.params.smokeOn === false), "smoke protection is off until it is asked for");
+      expect(rs[2].body.params.shadow === false, "the shadows switch in the third");
     }
     env.click("dlgFracAuto");               // AUTO again: the settings look the same, the server must still be asked
     await env.settle(600);
@@ -1945,11 +2005,11 @@ async function main() {
       await env.settle(300);
       expect(env.badge() === "", "a frame without smoke opens without a word about smoke: " + env.badge());
       env.check("dlgChkSmoke", true);                        // "I shot with smoke"
-      expect(env.hint().includes("увімкнено") && env.hint().includes("оновлюю перегляд"), "ticking the box must say at once that the preview is being refreshed: " + env.hint());
+      expect(env.hint().includes("увімкнено") && env.hint().includes("перераховую"), "ticking the box must say at once that the frame is being recomputed: " + env.hint());
       await env.settle(900);
       let rc = env.recomputes();
-      expect(rc.length === 1 && rc[0].body.params.smokeOn === true && rc[0].body.params.smokeFaint === true && rc[0].body.quick === true,
-        "one light refresh with the protection on, taken on the user's word");
+      expect(rc.length === 1 && rc[0].body.params.smokeOn === true && rc[0].body.params.smokeFaint === true && rc[0].body.quick === undefined,
+        "one recompute with the protection on, taken on the user's word");
       const denies = (t) => t.includes("не знайдено") || t.includes("нічого не змінює") || t.includes("той самий") || t.includes("немає");
       expect(env.badge().includes("Захист диму увімкнено") && env.badge().includes("не розпізнала") && env.badge().includes("до 100 %"),
         "nothing is kept yet: the note must say so and say what to do: " + env.badge());
@@ -1999,10 +2059,10 @@ async function main() {
       expect(env.badge() === "", "a frame without smoke opens without a word about smoke: " + env.badge());
       expect(env.of("/session/start")[0].body.params.smokeOn === false && !env.el("dlgChkSmoke").checked, "the window opens with the protection off");
       env.check("dlgChkSmoke", true);                        // "I shot with smoke"
-      expect(env.hint().includes("увімкнено") && env.hint().includes("оновлюю перегляд"), "ticking the box must say at once that the preview is being refreshed: " + env.hint());
+      expect(env.hint().includes("увімкнено") && env.hint().includes("перераховую"), "ticking the box must say at once that the frame is being recomputed: " + env.hint());
       await env.settle(900);
       let rc = env.recomputes();
-      expect(rc.length === 1 && rc[0].body.params.smokeOn === true && rc[0].body.quick === true, "one light refresh with the protection on");
+      expect(rc.length === 1 && rc[0].body.params.smokeOn === true && rc[0].body.quick === undefined, "one recompute with the protection on");
       expect(env.badge().includes("Перегляд оновлено") && env.badge().includes("не знайдено") && env.badge().includes("нічого не змінює") && env.badge().includes("95–100"),
         "the note must say that the preview was refreshed, that nothing changes and how to force the protection: " + env.badge());
       expect(env.hint() === env.badge(), "the same words must stay in the hint strip after the note is gone: " + env.hint());
@@ -2569,7 +2629,7 @@ async function main() {
     env.click("gPass2");
     await sleep(1400);
     expect(env.exacts().length === 0 && env.recomputes().length === 0, `2 passes have no light way and nothing may start by itself: ${env.exacts().length} / ${env.recomputes().length}`);
-    expect(env.badge().includes("Перерахувати зараз"), "the badge must name the button: " + env.badge());
+    expect(env.badge().includes("«↻ Перерахувати» внизу вікна"), "the badge must name the button: " + env.badge());
   });
 
   await scenario("'Детальний перегляд': ticked - the exact picture comes by itself and larger pictures are asked for; unticked - a background run stops; kept with the settings", { detail: false, bgDelay: 1500 }, async (env, expect) => {
@@ -2797,6 +2857,218 @@ async function main() {
     const a = env.of("/session/apply");
     expect(a.length === 1 && a[0].body.params && a[0].body.params.strayHair === 35,
       "Apply must carry the hair slider: " + (a[0] && a[0].body.params && a[0].body.params.strayHair));
+  });
+
+  // ------------------------------------------------------------------ 4.12.0: the owner's list of 2026-11-23
+  // "if I press the smoke tick it does not recompute", "pull the recompute button out", "while the bar is running
+  // and I press something, the recompute must start from the beginning", "[ smaller, ] larger", "a tick at the
+  // top: mixer brush" - and what his screenshot showed: the captions of the check boxes ran over the rows below.
+  await scenario("the smoke tick recomputes the frame at once, with the progress card; so does the switch in the settings", { recomputeDelay: 500, detail: false }, async (env, expect) => {
+    env.check("dlgChkAutoPreset", false);
+    await env.open();
+    env.check("dlgChkSmoke", true);
+    await sleep(120);
+    let rc = env.recomputes();
+    expect(rc.length === 1 && rc[0].body.quick === undefined && rc[0].body.jobId, "the tick asks for the real frame at once, with a progress job: " + JSON.stringify(rc.map((r) => r.body.quick)));
+    expect(env.progressCardVisible(), "the progress card must be up while the frame is computed");
+    await env.settle(1200);
+    expect(!env.progressCardVisible() && env.state("previewMatchesSettings()") === true && env.recomputes().length === 1, "one recompute, the card goes, the picture is up to date");
+    env.click("dlgBtnGear");
+    env.click("gBtnSmoke");                                  // the same switch, in the settings
+    await sleep(120);
+    rc = env.recomputes();
+    expect(rc.length === 2 && rc[1].body.quick === undefined && rc[1].body.params.smokeOn === false && env.progressCardVisible(), "the switch of the settings recomputes the same way");
+    await env.settle(1200);
+    expect(env.recomputes().length === 2 && env.exacts().length === 0, "nothing follows by itself");
+  });
+
+  await scenario("'↻ Перерахувати' on the bottom bar: the real frame with the progress card, the settings stay open", { recomputeDelay: 400, detail: false }, async (env, expect) => {
+    await env.open();
+    env.click("dlgBtnGear");
+    await env.drag("gSlSpots", 90);
+    await env.settle(900);
+    expect(env.recomputes().length === 1 && env.recomputes()[0].body.quick === true, "the slider gave its light refresh");
+    env.click("dlgBtnRecompute");
+    await sleep(100);
+    const rc = env.recomputes();
+    expect(rc.length === 2 && rc[1].body.quick === undefined && rc[1].body.params.spots === 90, "the button asks for the real frame with the values on the sliders");
+    expect(env.progressCardVisible(), "with the progress card");
+    expect(env.el("dlgGearPopover").classList.contains("visible"), "the settings must stay open: the values can be changed meanwhile");
+    await env.settle(900);
+    expect(!env.progressCardVisible() && env.state("sessState.exactShown") === true, "the exact picture is on screen, the card is gone");
+    expect(env.el("dlgBtnRecompute").textContent.includes("Перерахувати") && (env.el("dlgBtnRecompute").getAttribute("data-tip") || "").includes("спочатку"),
+      "the button says what it does, and that a change starts the run over");
+  });
+
+  await scenario("a change while the bar is running: the recompute starts over at once with the new values, the bar stays", { recomputeDelay: 900, detail: false }, async (env, expect) => {
+    env.check("dlgChkAutoPreset", false);
+    await env.open();
+    env.click("dlgBtnRecompute");
+    await sleep(300);
+    expect(env.recomputes().length === 1 && env.progressCardVisible(), "the first run is on its way");
+    env.check("gChkRemoveStands", true);                     // "I press something while the bar is running"
+    await sleep(400);                                        // (150 ms after the click the window asks again)
+    let rc = env.recomputes();
+    expect(rc.length === 2, `the new values must be asked for at once, not after the first run: ${rc.length} request(s)`);
+    expect(rc[1].body.quick === undefined && rc[1].body.jobId && rc[1].body.params.removeStands === true,
+      "the bar is running, so the new run is a full one too, with the new value");
+    expect(rc[0].done && rc[0].outcome === "superseded", "the server stopped the first run: " + rc[0].outcome);
+    expect(env.progressCardVisible() && env.state("sessState.recomputing") === true, "the progress card must stay up for the new run");
+    expect(env.el("dlgProgStage").textContent.length > 0, "the card says something");
+    env.check("dlgChkSmoke", true);                          // and once more, with the smoke tick
+    await sleep(100);
+    rc = env.recomputes();
+    expect(rc.length === 3 && rc[2].body.params.smokeOn === true && rc[2].body.params.removeStands === true && rc[1].outcome === "superseded",
+      "the smoke tick starts the run over as well, with everything that was changed");
+    await env.settle(2000);
+    expect(env.recomputes().length === 3 && !env.progressCardVisible() && env.state("previewMatchesSettings()") === true && env.state("sessState.recomputing") === false,
+      `three requests, the last one on screen: ${env.recomputes().length}, card ${env.progressCardVisible()}`);
+    expect(env.server.fgSeen.superseded === 2, "two runs gave way: " + env.server.fgSeen.superseded);
+  });
+
+  await scenario("...with a server before 4.12.0: the old run is finished first, its picture is dropped, the bar stays for the new one", { recomputeDelay: 700, newestWins: false, detail: false }, async (env, expect) => {
+    env.check("dlgChkAutoPreset", false);
+    await env.open();
+    env.click("dlgBtnRecompute");
+    await sleep(300);
+    env.check("gChkRemoveStands", true);
+    await sleep(650);                                        // the first run has answered in full by now
+    const rc = env.recomputes();
+    expect(rc.length === 2 && rc[0].done && rc[0].outcome === "done" && !rc[1].done, "the old server finished the first run and is on the second");
+    expect(env.progressCardVisible() && env.state("sessState.recomputing") === true, "the card must not go away with the answer of the old run");
+    expect(env.state("previewMatchesSettings()") === false, "the picture of the old run must not count as the one for the new values");
+    await env.settle(2000);
+    expect(env.recomputes().length === 2 && !env.progressCardVisible() && env.state("previewMatchesSettings()") === true, "the second run ends on screen");
+  });
+
+  await scenario("'[' makes the brush smaller and ']' larger - also with the Ukrainian layout, and after a check box was clicked", { detail: false }, async (env, expect) => {
+    await env.open();
+    const size = () => env.state("sessState.brushSize");
+    expect(size() === 28, "the brush starts at 28: " + size());
+    env.keyDown({ key: "]", code: "BracketRight" });
+    expect(size() === 33 && env.el("dlgBrushSizeVal").textContent === "33", `']' must make the brush larger by a step: 28 -> ${size()}`);
+    env.keyDown({ key: "[", code: "BracketLeft" });
+    expect(size() === 28, "'[' must make it smaller again: " + size());
+    env.keyDown({ key: "х", code: "BracketLeft" });          // the Ukrainian layout: the same key types "х"
+    env.keyDown({ key: "х", code: "BracketLeft" });
+    expect(size() === 18, "the key is told by its place on the keyboard: " + size());
+    env.keyDown({ key: "ї" });                               // ...and by its letter, when the host does not say the place
+    expect(size() === 20, "'ї' is the key of ']' in the Ukrainian layout (a small brush: a small step): " + size());
+    env.keyDown({ key: "ъ" });                               // the Russian layout
+    expect(size() === 25, "'ъ' is the key of ']' in the Russian layout: " + size());
+    env.keyDown({ keyCode: 219 });                           // a host that gives the number only
+    expect(size() === 20, "the number of the key works too: " + size());
+    env.keyDown({ keyCode: 221 });
+    expect(size() === 25, "...both ways: " + size());
+    env.el("dlgChkSmoke").focus();
+    env.keyDown({ key: "]", code: "BracketRight" }, env.el("dlgChkSmoke"));   // a check box was clicked last
+    expect(size() === 30, "a check box that has the focus must not swallow the key: " + size());
+    env.keyDown({ key: "]", code: "BracketRight", ctrlKey: true });
+    expect(size() === 30, "with Ctrl the key is not ours: " + size());
+    env.click("dlgBtnPresets");
+    env.keyDown({ key: "]", code: "BracketRight" }, env.el("dlgNewPresetName"));
+    expect(size() === 30, "inside a text field the key types its character: " + size());
+    for (let i = 0; i < 40; i++) env.keyDown({ code: "BracketLeft" });
+    expect(size() === 4, "the brush stops at its smallest size: " + size());
+    env.keyDown({ code: "BracketRight" });
+    expect(size() === 6, "a small brush changes by a small step: " + size());
+    for (let i = 0; i < 40; i++) env.keyDown({ code: "BracketRight" });
+    expect(size() === 180, "...and stops at its largest: " + size());
+    expect(env.hint().includes("180"), "the hint strip says the size: " + env.hint());
+    await env.settle(300);
+    expect(env.of("/session/mask-edit").length === 0 && env.recomputes().length === 0, "the keys ask the server for nothing");
+    expect(env.state("buildSettingsSnapshot().brushSize") === 180, "the size is kept with the settings");
+  });
+
+  await scenario("'Мікс-пензель': the tick at the top goes with every request, one light refresh; the strength is a slider of the settings", { detail: false }, async (env, expect) => {
+    env.check("dlgChkAutoPreset", false);
+    await env.open();
+    expect(env.of("/session/start")[0].body.params.mixOn === false, "the mixer brush is off until it is ticked");
+    expect(env.el("gValMix").textContent === "Вимк." && !env.el("dlgChkMix").checked, "both controls show 'off'");
+    env.check("dlgChkMix", true);
+    expect(env.hint().includes("Мікс-пензель увімкнено"), "the hint strip says what was switched on: " + env.hint());
+    await env.settle(900);
+    let rc = env.recomputes();
+    expect(rc.length === 1 && rc[0].body.quick === true && rc[0].body.params.mixOn === true && rc[0].body.params.mix === 50,
+      "one light refresh with the mixer brush at 50: " + JSON.stringify(rc.map((r) => [r.body.quick, r.body.params.mixOn, r.body.params.mix])));
+    expect(env.el("dlgWrapMix").classList.contains("active") && env.el("gBtnMix").textContent === "Увімк." && env.el("gValMix").textContent === "50%",
+      "the pill, the switch and the value of the settings follow the tick");
+    env.click("dlgBtnGear");
+    await env.drag("gSlMix", 80);
+    await env.settle(1100);
+    rc = env.recomputes();
+    expect(rc.length === 2 && rc[1].body.quick === true && rc[1].body.params.mix === 80, "the slider gives one light refresh with its value");
+    env.clickPreset("Дальній план");
+    await env.settle(1000);
+    rc = env.recomputes();
+    expect(env.el("dlgChkMix").checked && env.state('getSliderVal("gSlMix")') === 80 && rc[rc.length - 1].body.params.mixOn === true && rc[rc.length - 1].body.params.mix === 80,
+      "a preset does not touch the mixer brush: it is the user's own switch");
+    env.click("gBtnMix");                                    // the switch of the settings
+    await env.settle(900);
+    rc = env.recomputes();
+    expect(!env.el("dlgChkMix").checked && rc[rc.length - 1].body.params.mixOn === false, "switched off in the settings: the tick at the top follows, the refresh says so");
+    expect(env.el("gValMix").textContent === "Вимк.", "the value shows 'off' again");
+    env.check("dlgChkMix", true);
+    await sleep(60);
+    env.click("dlgBtnApply");
+    await env.settle(900);
+    const a = env.of("/session/apply");
+    expect(a.length === 1 && a[0].body.params.mixOn === true && a[0].body.params.mix === 80, "Apply carries the mixer brush");
+    const kept = env.state("buildSettingsSnapshot()");
+    expect(kept.mixOn === true && kept.mixStrength === 80 && kept.cfg.mixOn === true, "the tick and the strength are kept with the settings");
+    expect(env.state("presetConfigToSave()").mixOn === undefined && env.state("presetConfigToSave()").mix === undefined, "...and are not written into a preset");
+  });
+
+  await scenario("the mixer brush kept in the settings: the next window opens with it, the automatic preset carries it in every set",
+    { scene: { kind: "wide", framing: "wide", dark: false }, disk: { "user_settings.json": { schemaVersion: 5, activePresetId: "std", autoPreset: true, mixOn: true, mixStrength: 65 } } },
+    async (env, expect) => {
+      await env.open();
+      await env.settle(600);
+      const start = env.of("/session/start")[0];
+      expect(start.body.params.mixOn === true && start.body.params.mix === 65, "the first scan must carry the mixer brush: " + JSON.stringify([start.body.params.mixOn, start.body.params.mix]));
+      const sp = start.body.scenePresets || {};
+      expect(Object.keys(sp).length === 8 && Object.keys(sp).every((k) => sp[k].mixOn === true && sp[k].mix === 65), "...and so must every set of the automatic preset");
+      expect(env.el("dlgChkMix").checked && env.el("gValMix").textContent === "65%", "the controls show what the settings brought");
+      expect(env.state("previewMatchesSettings()") === true && env.recomputes().length === 0, "the picture of the first scan is for these values: nothing is asked again");
+    });
+
+  await scenario("settings of an older version say nothing of the mixer brush: it is off, at 50", { disk: { "user_settings.json": { schemaVersion: 5, activePresetId: "std", autoPreset: false } } }, async (env, expect) => {
+    await env.open();
+    expect(env.of("/session/start")[0].body.params.mixOn === false && env.of("/session/start")[0].body.params.mix === 50, "off, and 50 when it is switched on");
+  });
+
+  await scenario("a check box is ticked by a click anywhere in its box - the caption, the icon - and does its work once", { recomputeDelay: 150, detail: false }, async (env, expect) => {
+    env.check("dlgChkAutoPreset", false);
+    await env.open();
+    expect(env.doc.querySelectorAll("label").length === 0, "no <label> in the panel: Photoshop draws its text in its own size and colour");
+    const boxes = Array.from(env.doc.querySelectorAll("[data-check]")).map((b) => b.getAttribute("data-check")).sort().join();
+    expect(boxes === "dlgChkAutoPreset,dlgChkDress,dlgChkMakeMask,dlgChkMix,dlgChkSmoke,gChkDetail,gChkRemoveStands,gChkShadow", "every check box has its box: " + boxes);
+    env.click("dlgBtnGear");
+    const caption = env.el("gChkRemoveStands").parentNode.querySelector("span");
+    env.mouse(caption, "click", 0);                          // a click on the words
+    expect(env.el("gChkRemoveStands").checked === true, "a click on the caption must tick the check box");
+    await env.settle(700);
+    let rc = env.recomputes();
+    expect(rc.length === 1 && rc[0].body.params.removeStands === true, `...and do its work once: ${rc.length} request(s)`);
+    env.el("gChkRemoveStands").click();                      // a click on the check box itself
+    await env.settle(700);
+    rc = env.recomputes();
+    expect(env.el("gChkRemoveStands").checked === false && rc.length === 2 && rc[1].body.params.removeStands === false, `the check box itself: once as well, not twice: ${rc.length}`);
+    env.mouse(env.el("dlgWrapSmoke").querySelector("img"), "click", 0);   // the icon of the smoke pill
+    await env.settle(700);
+    rc = env.recomputes();
+    expect(env.el("dlgChkSmoke").checked === true && env.state("smokeEnabled") === true && rc.length === 3 && rc[2].body.params.smokeOn === true, "a click on the icon ticks the smoke box and recomputes");
+    env.mouse(env.el("dlgWrapMix").querySelector("span"), "click", 0);    // the word of the mixer pill
+    await env.settle(700);
+    rc = env.recomputes();
+    expect(env.el("dlgChkMix").checked === true && rc.length === 4 && rc[3].body.params.mixOn === true, "...and the mixer brush");
+    env.mouse(env.el("dlgChkMakeMask").parentNode, "click", 0);
+    expect(env.el("dlgChkMakeMask").checked === true && env.state("makeMaskDefault") === true, "'Make Mask' by a click on its box");
+    env.mouse(env.el("gChkDetail").parentNode.querySelector("span"), "click", 0);
+    expect(env.el("gChkDetail").checked === true && env.state("detailPreview") === true,
+      `'Детальний перегляд' by a click on its caption: ${env.el("gChkDetail").checked} / ${env.state("detailPreview")}`);
+    env.mouse(env.el("dlgChkAutoPreset").parentNode.querySelector("span"), "click", 0);
+    expect(env.el("dlgChkAutoPreset").checked === true && env.state("autoPreset") === true, "'Авто' of the presets by a click on its caption");
   });
 
   const failed = results.filter((r) => r.problems.length);

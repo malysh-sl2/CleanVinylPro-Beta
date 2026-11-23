@@ -215,6 +215,32 @@ class CleanVinylEngine:
     SMOKE_LINE_WIDTH = 30.0
     SMOKE_LINE_ASPECT = 4.0
     SMOKE_LINE_FILL = 0.60
+    # Thick smoke lit against a darker wall has strong edges, and a group of strong edges was studio gear: left
+    # out of the smoke search, and painted over when "remove the stands" was on (the owner's first frame with real
+    # smoke, 0Q5A2507: the brightest part of the cloud became a smear). With the user's word that the frame has
+    # smoke, a group of strong edges is smoke when it has no direction - soft structure of at least ..._SOFT
+    # (see _smoke_soft_structure, with nothing but the person left out) over ..._SHARE of it - and no hard edge:
+    # even its steepest edges (the ..._STEEP quantile of the slope and up) take ..._WIDTH pixels of the 1024 px
+    # copy to cross (the contrast within ..._SPAN pixels over the slope). A stand, a curtain, a softbox in focus
+    # cross in two or three; a shadow's edge and a straight curtain have a direction.
+    SMOKE_EDGE_SOFT = 1.0
+    SMOKE_EDGE_SHARE = 0.70
+    SMOKE_EDGE_WIDTH = 4.0
+    SMOKE_EDGE_STEEP = 0.80
+    SMOKE_EDGE_SPAN = 13
+    # "Мікс-пензель" (mixOn / mix, since 4.12.0): what the owner does by hand after the cleaning - a wide soft
+    # mixer brush over the whole backdrop. The cleaned frame is blended towards a smooth copy of itself, grain
+    # included: in his retouch of frame 2 the texture of the flat backdrop is at 0.40-0.57 of the frame as shot
+    # in EVERY band from the grain up to 100 px, which is what a blend does and a blur alone does not.
+    # MIX_SIGMA: how wide the smooth copy is smoothed, as a share of the long side (his brush leaves what is
+    # larger than about 100 px of a 5254 px frame). The person, the shadows, the gear and the smoke are left out.
+    # MIX_GRAIN_MIN: the share of the grain that stays whatever the strength. A backdrop without any grain shows
+    # the steps of 8 bits as bands (measured at 100 %: the texture of 6-40 px went UP to 1.5-1.75 of the frame's -
+    # that was the staircase); retouchers add noise after the mixer brush for the same reason. MIX_GRAIN_SIGMA:
+    # what counts as grain, px of the frame.
+    MIX_SIGMA = 0.016
+    MIX_GRAIN_MIN = 0.35
+    MIX_GRAIN_SIGMA = 1.5
 
     def __init__(self, models_dir: str, idle_unload_sec: float = DEFAULT_IDLE_UNLOAD_SEC, load_models: bool = True):
         """load_models=False builds the engine without touching the model files (used by tests/ with stub sessions)."""
@@ -233,6 +259,7 @@ class CleanVinylEngine:
         self._bg_local = threading.local()  # .check is set in the thread of a background recompute
         self._bg_follower = None            # the progress of the running background recompute also goes here
         self._bg_stop = 0                   # goes up each time the window asks background recomputes to stop
+        self._fg_seq = 0                    # goes up with every recompute the window waits for (see recompute_session)
         self._bg_runs = 0                   # background recomputes that were asked for and have not answered yet
         self._active_jobs = 0
         self._last_used_mono = time.monotonic()
@@ -1103,6 +1130,11 @@ class CleanVinylEngine:
             if gear_body and bool(valid_edge.any()):
                 valid_edge = valid_edge & self._edge_blobs_with_body(L, gx, gy, grad, strong_edges, labels, stats, valid_edge)
             edge_lut[1:] = valid_edge.astype(np.float32)
+        if smoke_faint and protect_smoke and smoke_strength > 5 and bool(any_lut.any()):
+            # the user's word that the frame has smoke: thick smoke is not gear (see SMOKE_EDGE_SOFT)
+            is_smoke = self._edge_groups_of_smoke(L, grad, strong_edges, fg_s, labels, stats, any_lut[1:] > 0)
+            edge_lut[1:][is_smoke] = 0.0
+            any_lut[1:][is_smoke] = 0.0
         stand_mask = edge_lut[labels]
         # every group of strong edges, gear or not: a shadow edge is no gear, and no smoke either (see B)
         edges_any = any_lut[labels]
@@ -1259,6 +1291,35 @@ class CleanVinylEngine:
                     "protected": round(float((smoke_mask > 0.5).mean()), 4),
                 })
         return smoke_mask, dense_mask
+
+    def _edge_groups_of_smoke(self, L: np.ndarray, grad: np.ndarray, strong_edges: np.ndarray, fg_s: np.ndarray,
+                              labels: np.ndarray, stats: np.ndarray, cand: np.ndarray) -> np.ndarray:
+        """
+        Which groups of strong edges are thick smoke and not gear: one flag per label 1..n (`cand`: the groups to
+        look at). Asked only when the user says that the frame has smoke. See SMOKE_EDGE_SOFT for the two things
+        that are measured. Everything on the 1024 copy, L in 0..255, grad as the Sobel sums of
+        _compute_protection_maps_small.
+        """
+        out = np.zeros(cand.shape, dtype=bool)
+        person_out = cv2.erode((fg_s < 0.06).astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
+        soft = self._smoke_soft_structure(L, person_out.astype(np.float32))
+        span = np.ones((self.SMOKE_EDGE_SPAN, self.SMOKE_EDGE_SPAN), np.uint8)
+        contrast = cv2.dilate(L, span) - cv2.erode(L, span)
+        for i in np.flatnonzero(cand):
+            x0, y0 = int(stats[i + 1, cv2.CC_STAT_LEFT]), int(stats[i + 1, cv2.CC_STAT_TOP])
+            bw, bh = int(stats[i + 1, cv2.CC_STAT_WIDTH]), int(stats[i + 1, cv2.CC_STAT_HEIGHT])
+            box = (slice(y0, y0 + bh), slice(x0, x0 + bw))
+            m = labels[box] == (i + 1)
+            if float((soft[box][m] >= self.SMOKE_EDGE_SOFT).mean()) < self.SMOKE_EDGE_SHARE:
+                continue   # (it has a direction: a curtain, a pole, the edge of a shadow)
+            edges = m & (strong_edges[box] > 0)
+            if not bool(edges.any()):
+                continue
+            slope = grad[box][edges] / 8.0   # levels per pixel
+            steep = slope >= float(np.quantile(slope, self.SMOKE_EDGE_STEEP))
+            width = contrast[box][edges][steep] / np.maximum(slope[steep], 1e-3)
+            out[i] = float(np.median(width)) >= self.SMOKE_EDGE_WIDTH
+        return out
 
     def _smoke_without_lines(self, wisp: np.ndarray) -> np.ndarray:
         """The clouds of wisps (bool) without those that are a thin straight band - a line (see SMOKE_LINE_WIDTH)."""
@@ -4472,6 +4533,7 @@ class CleanVinylEngine:
             spots_str = float(params.get("spots", 75))
             scuffs_str = float(params.get("scuffs", 65))
             blur_str = float(params.get("blur", 0))
+            mix_str = self._mix_strength(params)
             cyc_str = float(params.get("cycCurve", 0))
             feather_str = float(params.get("feather", 60))
             seam_on = bool(params.get("seamOn", True))
@@ -4525,7 +4587,8 @@ class CleanVinylEngine:
             else:
                 needs_lama_work = (has_any_frac and ((spots_eff > 0) or (seam_on and seam_eff > 0) or remove_stands)) or hair_eff > 0
 
-            need_bg_maps = (scuffs_eff > 0) or (blur_str > 0) or (cyc_str > 0) or (dress_strength > 0) or (custom_heal_mask is None)
+            need_bg_maps = ((scuffs_eff > 0) or (blur_str > 0) or (cyc_str > 0) or (dress_strength > 0) or (mix_str > 0)
+                            or (custom_heal_mask is None))
 
             # ---- Stage cache: every key lists exactly the inputs its stage reads (plus the key of the stage before it) ----
             sc = None
@@ -4590,6 +4653,8 @@ class CleanVinylEngine:
             k_cyc = (k_heal, cyc_str)
             k_scuffs = (k_cyc, scuffs_eff, tone_edge)
             k_blur = (k_scuffs, blur_str, (boost if blur_str > 0 else 0.0), (feather_str if blur_str > 0 else 0.0))
+            # (the strength of the mixer brush is not part of its key: the smooth copy is the same for every value)
+            k_mix = (k_blur, clean_passes, feather_str)
 
             def corner_of_this_run(line, fg_u8):
                 """
@@ -5214,6 +5279,42 @@ class CleanVinylEngine:
                     if out_cache is not None:
                         out_cache["heal_mask_pass2"] = spot2_mask  # repaired by the second pass (see _session_proxies)
                 del pass2_u8, spot2_mask
+
+            # "Мікс-пензель": the cleaned backdrop is blended towards a smooth copy of itself (see MIX_SIGMA)
+            if mix_str > 0:
+                mix_rec = _sc_get("mix", k_mix)
+                if mix_rec is None:
+                    _prog(88, "Мікс-пензель: розгладження фону...")
+                    mix_rec = self._mix_brush_small(cleaned_f32, eff_fg_for_spots, eff_stand_protect, smoke_s, shadow_s,
+                                                    feather_str, fast_mode)
+                    _sc_put("mix", k_mix, mix_rec)
+                self._checkpoint()
+                smooth_s, mix_w_s = mix_rec
+                mix_w = cv2.resize(mix_w_s, (w, h), interpolation=cv2.INTER_LINEAR)
+                blend = mix_w * np.float32(mix_str / 100.0)
+                smooth_full = cv2.resize(smooth_s, (w, h), interpolation=cv2.INTER_LINEAR)
+                smooth_full -= cleaned_f32
+                smooth_full *= blend[..., None]
+                if mix_str / 100.0 > 1.0 - self.MIX_GRAIN_MIN:
+                    # the blend would leave less grain than MIX_GRAIN_MIN: the missing part of it is put back
+                    # (in bands of rows: a second copy of a large frame is not needed for this)
+                    g_sig = max(0.8, self.MIX_GRAIN_SIGMA * float(render_scale))
+                    pad = int(np.ceil(3.0 * g_sig)) + 1
+                    for ys_m in range(0, h, 1024):
+                        ye_m = min(h, ys_m + 1024)
+                        a0, b0 = max(0, ys_m - pad), min(h, ye_m + pad)
+                        rows = cleaned_f32[a0:b0]
+                        grain = (rows - cv2.GaussianBlur(rows, (0, 0), g_sig))[ys_m - a0:ye_m - a0]
+                        grain *= np.maximum(blend[ys_m:ye_m] - np.float32(1.0 - self.MIX_GRAIN_MIN), 0.0)[..., None]
+                        smooth_full[ys_m:ye_m] += grain
+                    del grain, rows
+                del blend
+                cleaned_f32 += smooth_full
+                del smooth_full
+                np.clip(cleaned_f32, 0.0, 1.0, out=cleaned_f32)
+                # (the layer covers the backdrop wherever the brush went; how strongly is in the pixels themselves)
+                np.maximum(final_alpha, mix_w, out=final_alpha)
+                del mix_w
 
             # Optional Dress / Clothing Soft Wrinkle & Specular Smoothing (Skin/Hair/Edge Safe)
             dress_s_cached = None
@@ -6333,12 +6434,48 @@ class CleanVinylEngine:
         return bool(p.get("smokeOn", True)) and bool(p.get("smokeFaint", False))
 
     @staticmethod
+    def _mix_strength(p: dict) -> float:
+        """How strongly the mixer brush blends, 0..100; 0 when it is switched off ("mixOn") - see MIX_SIGMA."""
+        if not bool(p.get("mixOn", False)):
+            return 0.0
+        return float(np.clip(float(p.get("mix", 50)), 0.0, 100.0))
+
+    def _mix_brush_small(self, cleaned_f32: np.ndarray, fg_u8: np.ndarray, stand_u8: np.ndarray, smoke_u8: np.ndarray,
+                         shadow_u8: np.ndarray, feather_pct: float, fast_mode: bool) -> tuple[np.ndarray, np.ndarray]:
+        """
+        The mixer brush, prepared on a reduced copy: (the smooth copy of the backdrop, float RGB 0..1; where the
+        brush goes, 0..1). The frame is then blended towards the smooth copy by the strength of the tool.
+        The smooth copy is an average of the backdrop alone - the person, the gear, the shadows and the smoke
+        take no part in it and are not brushed over - so nothing bleeds into the backdrop next to them.
+        """
+        h, w = cleaned_f32.shape[:2]
+        scale_b = min(1.0, (950.0 if fast_mode else 1400.0) / max(h, w))
+        bw, bh = max(8, int(round(w * scale_b))), max(8, int(round(h * scale_b)))
+        small_b = cv2.resize(cleaned_f32, (bw, bh), interpolation=cv2.INTER_AREA).astype(np.float32)
+        fg_b = cv2.resize(fg_u8, (bw, bh), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+        st_b = cv2.resize(stand_u8, (bw, bh), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
+        sh_b = cv2.GaussianBlur(cv2.resize(shadow_u8, (bw, bh), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0, (25, 25), 0)
+        sm_b = cv2.resize(smoke_u8, (bw, bh), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
+        open_w = (1.0 - 0.88 * st_b) * (1.0 - np.clip(sh_b * 1.35, 0.0, 1.0)) * (1.0 - np.clip(sm_b * 1.25, 0.0, 1.0))
+        src_w = (fg_b < 0.08).astype(np.float32) * open_w
+        sigma = max(1.5, self.MIX_SIGMA * max(bw, bh))
+        num = cv2.GaussianBlur(small_b * src_w[..., None], (0, 0), sigmaX=sigma, sigmaY=sigma)
+        den = cv2.GaussianBlur(src_w, (0, 0), sigmaX=sigma, sigmaY=sigma)
+        smooth = np.clip(num / (den[..., None] + 1e-5), 0.0, 1.0)
+        # where the average had next to nothing to lean on (deep inside a shadow, the smoke, the gear) the frame stays
+        known = np.clip(den / 0.20, 0.0, 1.0)
+        brush = self._outward_transition_ramp(fg_b, feather_pct) * cv2.GaussianBlur(open_w, (21, 21), 0) * known
+        brush *= np.clip(1.0 - np.clip((fg_b - 0.15) / 0.66, 0.0, 1.0), 0.0, 1.0)
+        return smooth.astype(np.float32), np.clip(brush, 0.0, 1.0).astype(np.float32)
+
+    @staticmethod
     def _tone_stages_on(p: dict) -> bool:
         """
-        True when a stage that works on the whole backdrop takes part (stains, blur, corner). The layer then covers
-        the backdrop, not only the repaired zones - see _session_proxies.
+        True when a stage that works on the whole backdrop takes part (stains, blur, corner, the mixer brush). The
+        layer then covers the backdrop, not only the repaired zones - see _session_proxies.
         """
-        return float(p.get("scuffs", 65)) > 0 or float(p.get("blur", 0)) > 0 or float(p.get("cycCurve", 0)) > 0
+        return (float(p.get("scuffs", 65)) > 0 or float(p.get("blur", 0)) > 0 or float(p.get("cycCurve", 0)) > 0
+                or CleanVinylEngine._mix_strength(p) > 0)
 
     @staticmethod
     def _clean_signature(p: dict) -> tuple:
@@ -6352,6 +6489,7 @@ class CleanVinylEngine:
             bool(p.get("seamOn", True)), fl("seam", 85), fl("edge", 70),
             bool(p.get("smokeOn", True)), fl("smoke", 80), fl("grain", 90),
             CleanVinylEngine._smoke_auto(p), CleanVinylEngine._smoke_faint(p),
+            CleanVinylEngine._mix_strength(p),
             bool(p.get("seamJoin", True)), bool(p.get("grainLocal", True)),
             bool(p.get("gearBody", True)), bool(p.get("shadowSpots", True)),
             bool(p.get("toneEdge", True)), bool(p.get("cornerHair", True)),
@@ -6859,13 +6997,33 @@ class CleanVinylEngine:
         self._begin_job()
         try:
             if not background:
+                # The newest values win (since 4.12.0): a recompute that the window waits for stops at its next
+                # safe place as soon as another one is asked for - the user moved something while the bar was
+                # running - and answers {"superseded": True}. The session is as it was; the stages that were
+                # finished stay in the stage cache, so the newer run computes only what its values changed.
+                with self._state_lock:
+                    self._fg_seq += 1
+                    my_seq = self._fg_seq
                 with self._compute_turn(), self._session_lock:
                     sess = self._session_or_raise(session_id, stale_msg)
+                    if self._fg_seq != my_seq:
+                        return {"ok": True, "session_id": session_id, "superseded": True}
                     p, clean_params = self._recompute_params(sess, params)
-                    if bool(quick) and self._quick_preview_possible(sess, clean_params):
-                        computed = self._recompute_quick(sess, clean_params, progress_cb)
-                    else:
-                        computed = self._recompute_full(sess, clean_params, progress_cb)
+
+                    def newest_wins():
+                        if self._fg_seq != my_seq or self._active_session is not sess:
+                            raise JobSuperseded()
+
+                    self._bg_local.check = newest_wins
+                    try:
+                        if bool(quick) and self._quick_preview_possible(sess, clean_params):
+                            computed = self._recompute_quick(sess, clean_params, progress_cb)
+                        else:
+                            computed = self._recompute_full(sess, clean_params, progress_cb)
+                    except JobSuperseded:
+                        return {"ok": True, "session_id": session_id, "superseded": True}
+                    finally:
+                        self._bg_local.check = None
                     return self._recompute_commit(sess, p, computed, preserve_edits, t0)
 
             # A background run waits for its turn like everybody else (so an older background run gives way to a
