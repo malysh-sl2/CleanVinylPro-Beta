@@ -6460,14 +6460,56 @@ class CleanVinylEngine:
                   * (1.0 - np.clip(sm_b * 1.25, 0.0, 1.0)))
         src_w = (fg_b < 0.08).astype(np.float32) * open_w
         sigma = max(1.5, self.MIX_SIGMA * max(bw, bh))
-        num = cv2.GaussianBlur(small_b * src_w[..., None], (0, 0), sigmaX=sigma, sigmaY=sigma)
-        den = cv2.GaussianBlur(src_w, (0, 0), sigmaX=sigma, sigmaY=sigma)
-        smooth = np.clip(num / (den[..., None] + 1e-5), 0.0, 1.0)
+        smooth, den = self._plane_average(small_b, src_w, sigma)
         # where the average had next to nothing to lean on (deep inside a shadow, the smoke, the gear) the frame stays
         known = np.clip(den / 0.20, 0.0, 1.0)
         brush = self._outward_transition_ramp(fg_b, feather_pct) * cv2.GaussianBlur(open_w, (21, 21), 0) * known
         brush *= np.clip(1.0 - np.clip((fg_b - 0.15) / 0.66, 0.0, 1.0), 0.0, 1.0)
         return smooth.astype(np.float32), np.clip(brush, 0.0, 1.0).astype(np.float32)
+
+    @staticmethod
+    def _plane_average(img: np.ndarray, wgt: np.ndarray, sigma: float) -> tuple[np.ndarray, np.ndarray]:
+        """
+        The smooth copy of the mixer brush: at every pixel the value of the PLANE that fits best what `wgt` lets in
+        around it (Gaussian weights of `sigma`). Returns (float32 RGB 0..1, the plain weighted share that was
+        let in around each pixel).
+        A plain weighted average is one-sided next to the person, a shadow or smoke - it sees the backdrop on one
+        side only - and wherever the light of the backdrop changes it pulls the tone towards what lies further
+        away: 1.6 levels next to the person of the test frame at full strength, a faint rim. A plane follows
+        the slope, so the tone next to a thing is the tone that was there.
+        """
+        hh, ww = wgt.shape
+        w64 = wgt.astype(np.float64)
+        yy, xx = np.mgrid[0:hh, 0:ww].astype(np.float64)
+        xx /= sigma
+        yy /= sigma
+
+        def g(a):
+            return cv2.GaussianBlur(a, (0, 0), sigmaX=sigma, sigmaY=sigma)
+
+        s0 = g(w64)
+        sx, sy = g(w64 * xx), g(w64 * yy)
+        # the moments about the pixel itself
+        mx, my = sx - xx * s0, sy - yy * s0
+        mxx = g(w64 * xx * xx) - 2.0 * xx * sx + xx * xx * s0
+        myy = g(w64 * yy * yy) - 2.0 * yy * sy + yy * yy * s0
+        mxy = g(w64 * xx * yy) - xx * sy - yy * sx + xx * yy * s0
+        # (Cramer's rule for the first unknown of the 3 x 3 system - the value at the pixel)
+        c00 = mxx * myy - mxy * mxy
+        c01 = mxy * my - mx * myy
+        c02 = mx * mxy - mxx * my
+        det = s0 * c00 + mx * c01 + my * c02
+        # too little around a pixel to tell a slope (deep inside a thing, a narrow gap): the plain average there
+        firm = (det > 1e-4 * np.maximum(s0, 1e-9) ** 3) & (s0 > 0.05)
+        out = np.empty(img.shape, dtype=np.float32)
+        for ch in range(img.shape[2]):
+            f = img[:, :, ch].astype(np.float64) * w64
+            t0 = g(f)
+            tx, ty = g(f * xx) - xx * t0, g(f * yy) - yy * t0
+            plain = t0 / np.maximum(s0, 1e-9)
+            plane = (t0 * c00 + tx * c01 + ty * c02) / np.where(firm, det, 1.0)
+            out[:, :, ch] = np.where(firm, plane, plain)
+        return np.clip(out, 0.0, 1.0), s0.astype(np.float32)
 
     @staticmethod
     def _tone_stages_on(p: dict) -> bool:

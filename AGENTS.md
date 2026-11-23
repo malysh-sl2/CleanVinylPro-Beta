@@ -129,6 +129,29 @@ written here and in the repository.
   (see the entry «4.11.0» in section 2) - a frame as shot is asked for in the reply. No option card was
   shown. 4.11.0 answers this message. He did not write «зливай».
 
+- **2026-11-23, on 4.11.0** (two messages, three files; the first reply was stopped by him and he added
+  the second message). Files: `0Q5A2507 копия.jpg` - his FIRST FRAME WITH REAL SMOKE, as shot (3765 x 5648:
+  a woman in a red dress on a dark grey wall, a thick lit cloud at the right, haze at the left and on the
+  floor, a black curtain at the left edge); `0Q5A2507 копия 2.jpg` - what the program made of it (4.11.0,
+  preset «Зйомка з димом», «Прибирати стійки…» ticked: the unchanged zones of that file follow the smoke
+  map of 4.11.0, not that of 4.10.0); and a screenshot of the big window during a computation - the first
+  picture of the real window in Photoshop that was ever available. Verbatim:
+  «і ще якщо я нажимаю галочку здимом то не перераховує і ще витяни кноку десь перерахувати. ще збільшити
+  і зменшити розмір пензля зроби на [ -зменшити ] - збільшити.» and then «продож ЩЕ вкінці після чистки  я
+  прохожу мікс кістю ти неможеж це додати але додай галочу наверху мікс кість. але йде перерахунок іде
+  полоска якщо я нажимаю якус дію має перерахунок іти спочатку що треба перерахувати».
+  Read as: (1) the smoke tick does not recompute - it gave a light refresh without the progress bar,
+  which he does not take for a recompute; (2) pull the «Перерахувати» button out of the settings;
+  (3) `[` smaller, `]` larger for the brush (the keys existed, but only by their Latin character: with the
+  Ukrainian layout they type «х» and «ї»); (4) AFTER THE CLEANING HE GOES OVER THE BACKDROP WITH PHOTOSHOP'S
+  MIXER BRUSH - that is what his retouches show (asked since 4.4.0 as "does he want the wall smoothed");
+  he asks for a tick at the top that does it; (5) while the bar is running, an action must start the
+  recompute over, computing what has to be computed. What the frames showed without his saying it: the
+  brightest part of the cloud was painted over (thick smoke was "gear" and «Прибирати стійки» removed it).
+  What the screenshot showed: the captions of the check boxes are drawn large and grey by Photoshop and run
+  over the rows below; the time line read «17 с · AI-заливка: 38 пл. за 5,2 с (відеокарта)». No option
+  card was shown. 4.12.0 answers these messages. He did not write «зливай».
+
 ## 2. What is in the repository
 
 | Path | What it is | Rule |
@@ -710,14 +733,88 @@ second plugin next to the installed one and lose his presets.
     (96; its stand-in server mirrors the rules, `smokeOld` plays a server before 4.11.0).
     `tests/try_defects.py` holds the 30 deliberate defects of 4.11.0 (23 in the engine, 7 in the panel).
 
+- **4.12.0** — thick smoke, the mixer brush, a recompute that starts over, after his messages of
+  2026-11-23. Decided alone, no option card. The smoke part was made on ONE real frame (`0Q5A2507`).
+  - **Thick smoke is not gear.** Thick smoke lit against a darker wall has strong edges (Sobel sum > 26
+    on the 1024 px copy). Groups of strong edges were left out of the smoke search since 4.4.0 ("the
+    outline of a thing is no smoke") and, when they had a "body" or touched the left / right / top
+    border, were GEAR - and with «Прибирати стійки…» on, `stand_remove` took the dark wall inside those
+    groups (`L < 72`) and what touched the frame border: on his frame the top band of the cloud was
+    inpainted (his result: mean change 3.4 levels there, p95 12; the curtain was removed as it should).
+    With the user's word (`smokeFaint` and the switch on) `_edge_groups_of_smoke` now decides per group:
+    smoke when (a) it has no direction - `_smoke_soft_structure` computed with nothing but the person
+    left out is at least `SMOKE_EDGE_SOFT` = 1.0 over `SMOKE_EDGE_SHARE` = 0.70 of the group - and (b) it
+    has no hard edge - over the steepest fifth of its edge pixels (`SMOKE_EDGE_STEEP` = 0.80) the median
+    of "contrast within `SMOKE_EDGE_SPAN` = 13 px over the slope" is at least `SMOKE_EDGE_WIDTH` = 4 px.
+    Such a group leaves `stand_mask` and `edges_any`: it is searched for smoke like any backdrop (and
+    found as wisps, so it is THICK smoke), it is not kept as gear and never marked for removal.
+    Measured on `0Q5A2507` (GrabCut silhouette): the seven groups of the cloud: share 0.99-1.00, width
+    4.6-7.2 px, slope p90 4.5-9.0 levels/px; the black curtain: share 0.00 and 0.32; a shadow's edge:
+    share 0.00 (width 8-9 px - soft, but it has a direction). On his six other frames with the tick ON
+    the rule would also take five groups of real gear for smoke - out-of-focus things at the frame edge
+    (`0Q5A3413` left softbox: width 5.2; `0Q5A3417` left softbox 4.7; `0Q5A3384` 4.8, 4.8, 4.8): they
+    are then kept untouched as smoke, as they were kept as gear, but «Прибирати стійки…» no longer
+    removes them while the smoke tick is on (their black cores stay gear through the dark-border rule).
+    A cap on the slope (smoke at most 9.0, that gear 17-26) would keep them gear and was NOT built: it
+    scales with the contrast of the smoke, and smoke taken for gear is the worse mistake.
+    After the change, his frame, slider 95: smoke 45 % of the frame (thick 18 %), nothing of the cloud
+    marked for removal, the curtain still is; a full run changes no pixel of the cloud. The maps take
+    0.98 s here (4.11.0: 0.65 s): the soft measure is computed twice.
+  - **The mixer brush** (`mixOn`, `mix` 0-100; `_mix_strength`, `_mix_brush_small`, stage `"mix"`, key
+    `k_mix`). What he does by hand was measured on his retouch of frame 2 against the frame as shot
+    (aligned by template matching: no scaling, offset -80 / +36 px): in flat backdrop cells the texture
+    is at 0.51 / 0.47 / 0.40 / 0.43 / 0.57 of the frame's in the bands 0-2 / 2-6 / 6-16 / 16-40 / 40-100 px
+    - about a half in EVERY band, the grain included. That is a blend, not a blur. So the stage blends
+    the cleaned frame towards a smooth copy of itself: at every pixel the value of the PLANE that fits
+    the backdrop alone around it (`_plane_average`: Gaussian weights of `MIX_SIGMA` = 1.6 % of the long
+    side, nine weighted sums in float64, Cramer's rule; the plain average where too little is around),
+    made on a copy of 1400 px (950 in the light preview) - 1.9 s here. A plain masked average is
+    one-sided next to the person, a shadow or smoke and pulls the tone there towards what lies further
+    away: 1.6 levels next to the person of the test frame at 100 %, a faint rim; the plane: 0.2. Weight =
+    strength x where the brush may go (the outward ramp of the person, not the gear, not the shadows
+    x 1.35, not the smoke map x 1.25, only where the average had something to lean on). Above 65 % the
+    grain that the blend would take below `MIX_GRAIN_MIN` = 0.35 is put back (band below
+    `MIX_GRAIN_SIGMA` = 1.5 px, in bands of 1024 rows): at 100 % without it the texture of 6-40 px rose
+    to 1.5-1.75 of the frame's - the staircase of 8 bits. The layer alpha is the brush map, not times
+    the strength (the blur stage multiplies both and so works with the square of its strength). The
+    stage runs after the second pass and before the clothing; its strength is not part of its cache key.
+    On `0Q5A2507` at 50: wall 0.51 / 0.51 / 0.54 / 0.85 / 0.92, cloud 1.00, person untouched; no
+    measurable time. The blur stage was NOT changed (it still ignores the smoke map: the comparisons with
+    v3.2.1 run with blur and smoke on).
+  - **The newest values win** (`recompute_session`, not background): every such call takes a number
+    (`_fg_seq`); a call that finds a higher number when its turn comes answers `{"superseded": True}`
+    at once, and a running one raises `JobSuperseded` at its next `_checkpoint()` (the hook of the
+    background runs, `_bg_local.check`, set and cleared around the computation). The session is
+    untouched, the finished stages stay cached. A brush stroke, Apply and the background runs are as
+    they were.
+  - **Panel.** (a) `recomputeInteractiveSession` no longer queues: a call during a run sends its request
+    at once, counts as the newest (`recomputeRun`) and whatever an older request brings back is dropped
+    (a server before 4.12.0 finishes the older run first: the same code handles it); while the progress
+    card is up the newer run is a full one too. (b) The smoke tick and `gBtnSmoke` call
+    `recomputeExactNow()` (full, with the card) instead of a light refresh. (c) `dlgBtnRecompute` on the
+    bottom bar. (d) `brushKeyOf`: `e.code`, the characters `[ { х` / `] } ї ъ`, `keyCode` 219 / 221; step
+    by size (`brushKeyStep`); a focused check box no longer swallows the tool keys. (e) `mixEnabled`,
+    slider `gSlMix`, pill `dlgWrapMix`, switch `gBtnMix`: a setting of the user (kept in
+    `user_settings.json` as `mixOn` / `mixStrength`), sent with every request and in every set of the
+    automatic preset, never written into a preset. (f) NO `<label>` ANY MORE: his screenshot shows the
+    text of every `<label>` (three rows of the settings, «Make Mask») large, grey and running over the
+    rows below, whatever the style sheet says. The boxes are `<div data-check="id">` now;
+    `bindCheckBoxes` ticks the check box on a click anywhere in the box and calls the handler kept by
+    `onCheck(id, fn)` - no synthetic event. Whether that cures the look can only be seen on his PC.
+  - Checks: groups `restart` and `mix` are new; `check_smoke` got the thick-smoke part (a drawn cloud
+    with strong soft edges, a stand in focus, a soft straight pole, a knot of hard pieces, on a dark and
+    on a light wall); the walks toggle the mixer brush with random numbers of their own; the window
+    test has 106 scenarios, the settings test 63 cases; `tests/try_defects.py` holds the 44 defects of
+    4.12.0.
+
 ## 3. Current state — update this at the end of every session
 
-_Last updated: by the agent of the first session, after releasing 4.11.0 (the answer to his report of
-2026-11-22 on 4.10.0)._
+_Last updated: by the agent of the first session, after releasing 4.12.0 (the answer to his messages of
+2026-11-23 on 4.11.0)._
 
-- **Released:** 4.11.0, tag `cvp2-v4.11.0`, as a pre-release. Direct download:
-  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.11.0/CleanVinylPro2.zip`
-- **Owner's progress:** 4.2.0 to 4.10.0 have been installed and work on his PC (program in
+- **Released:** 4.12.0, tag `cvp2-v4.12.0`, as a pre-release. Direct download:
+  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.12.0/CleanVinylPro2.zip`
+- **Owner's progress:** 4.2.0 to 4.11.0 have been installed and work on his PC (program in
   `D:\Plugin Photoshop\CleanVinylPro2`, models in `D:\model AI fotoshop`, LaMa on `CUDAExecutionProvider`,
   Python 3.12.10). So the `.bat` files, the installer, the GPU, the real models and the panel HAVE run on
   Windows. The old program (`D:\CleanVinylPro`) is removed from his PC. His report on 4.9.0 (2026-11-22,
@@ -728,7 +825,10 @@ _Last updated: by the agent of the first session, after releasing 4.11.0 (the an
   line; one computation took 30 s, of them the AI fill 15 s for 121 tiles ON THE VIDEO CARD; smoke on a
   light backdrop is understood badly and the tick is answered with "no smoke"; «інколи лінія залишається»;
   what is a "GPU failure" and how to check for one. 4.11.0 answers the smoke; the rest was answered in
-  words (reply #19). **He has not reported on 4.11.0 yet.**
+  words (reply #19). On 4.11.0 (2026-11-23, section 1) he sent his first frame with real smoke, its
+  result and a screenshot, and a list of wishes; 4.12.0 answers them (reply #20). In that result thin
+  smoke and the floor were kept, the top of the thick cloud was painted over. One computation took 17 s
+  there, 38 tiles in 5.2 s on the video card. **He has not reported on 4.12.0 yet.**
   The path to the plugin list of Creative Cloud (Stock & Marketplace → Plugins → Manage plugins → the three
   dots → Uninstall; the same list opens from Photoshop with Plugins → Manage Plugins) is in section 6 of
   the manual since 4.8.0. Whether his Creative Cloud shows these names in English or in Ukrainian is not
@@ -773,6 +873,34 @@ _Last updated: by the agent of the first session, after releasing 4.11.0 (the an
   4.9.0: 35, at `78a08b8`;
   4.8.0: 71, at `0f4cb46`; 4.7.0: 29, at `c3be3ed`; 4.6.0: 34, at `50bae15`; 4.5.0: 71 and 4.4.0: 41,
   never committed); their checks are still in `tests/run_checks.py`.
+- **Decided by the agent alone for 4.12.0** (no option card; change it if he says otherwise):
+  - the smoke tick and the smoke switch of the settings recompute IN FULL, with the progress card (he
+    asked for "a recompute"; every other control still gives its light refresh, and the button is at
+    hand now). The smoke slider is a slider like the others: light refresh;
+  - while the card is up, a change restarts a FULL run; while a light refresh runs, a light one;
+  - the button on the bottom bar leaves the settings open (in his screenshot they are open while the bar
+    runs); the button inside the settings still closes them, as before;
+  - `[` and `]` change the size by 2 / 5 / 10 / 20 for a brush under 20 / 60 / 120 / above (it was 6);
+  - the mixer brush: a blend at 50 % by default (his own retouch of frame 2); its tick is a setting of
+    the user, NOT a part of the presets - so the automatic preset cannot switch it off from frame to
+    frame; a slider row in the settings although he asked for the tick only; the grain never under 35 %;
+    it leaves the shadows, the gear and protected smoke alone; it is drawn in the light refresh;
+  - thick smoke: decided per group of strong edges, leaning towards smoke (see section 2, «4.12.0», for
+    the gear that goes with it while the smoke tick is on);
+  - the floor of his smoke frame stays protected (45 % of the frame is smoke at 95 %): only dust is
+    taken there. He did not complain about the floor;
+  - the `<label>` rewrite, on the evidence of one screenshot.
+- **Not run in Photoshop yet (4.12.0):** all of it. In particular:
+  - whether the captions of the check boxes are drawn in place now, and whether a click on a caption
+    ticks its box there (it does in jsdom). If they still look wrong, the cause is not `<label>`;
+  - whether `[` and `]` reach the window at all (Ctrl + Z does; plain keys were never confirmed), and
+    what Photoshop says about them (`e.code`, `e.key` or only `keyCode`);
+  - the look of the pill «Мікс», of the new slider row (the settings are crowded: 13 rows) and of the
+    third button on the bottom bar;
+  - how fast the real server lets go of a run: between two tiles of the AI fill, between stages - a
+    second at most is expected, nothing was measured with the real networks;
+  - the mixer brush on his taste, and next to a real silhouette (hair, a veil);
+  - thick smoke on other frames: a brighter cloud on a black wall, gear standing in the smoke.
 - **What 4.11.0 gives on his frames:** the tables are in section 2, «4.11.0» («Measured»): the share of
   each of his seven frames that is taken for smoke at 60 / 80 / 95 / 98 / 100 %, the curls of drawn smoke
   that survive the cleaning, the corner of frame 1 with the tick on. All of it with DRAWN smoke, GrabCut
@@ -1010,18 +1138,23 @@ _Last updated: by the agent of the first session, after releasing 4.11.0 (the an
   - of 4.5.0, still unconfirmed: opening the backup folder from the panel, the look of the new buttons,
     the one-time preset moves. (Ctrl+Z works in Photoshop: he confirmed it.)
 - **Merging:** pull request #1 (`arena/33f1ced8-cleanvinylpro-beta` into `main`) is open and deliberately not
-  merged yet: fixes that follow his report on 4.11.0 should come from the session that knows the code. He
+  merged yet: fixes that follow his report on 4.12.0 should come from the session that knows the code. He
   asked what merging into `main` means and was told: the version is already published and can be downloaded;
   merging only marks it on GitHub as the main one and changes nothing on his PC; he should write «зливай»
   when he wants it. Merge it when he writes that or when the session ends (section 6). If `main` already
   contains this file, that has happened. Merging also removes the folder `CleanVinylPro/` from `main`.
 
-### Open questions (ask when he reports on 4.11.0)
+### Open questions (ask when he reports on 4.12.0)
 
-- New with 4.11.0: does the tick keep his smoke on a light backdrop now, what share of the frame does the
-  note name, and where does he end up with the slider? A frame AS SHOT with smoke on a light backdrop and
-  a screenshot of the window were asked for - until one comes NOTHING about smoke is verified on a real
-  frame. Which line «інколи залишається»: the wall-floor line, a floor joint or the trace of the brush;
+- New with 4.12.0: is the thick smoke of `0Q5A2507` kept now with «Прибирати стійки…» on, and is the
+  curtain still removed? Is the mixer brush what he does by hand - is 50 % right, should it go over the
+  shadows or closer to the person? Do `[` and `]` work in Photoshop? Do the captions of the check boxes
+  look right now (a screenshot of the settings was asked for)? Does a change during the bar restart the
+  run fast enough? More frames with smoke were asked for.
+
+- From 4.11.0: he sent a frame with real smoke (dark grey wall, not a light one) and its result: thin
+  smoke and the floor were kept, thick smoke was not (4.12.0). Not answered: what share the note names
+  on his frames and where he ends up with the slider. Which line «інколи залишається»: the wall-floor line, a floor joint or the trace of the brush;
   on which frames; was the smoke tick on (a frame as shot and a screenshot were asked for)? Under thin
   smoke the corner tool now takes the line and makes the smoke around it smoother - is that what he
   wants, or should the smoke win there?
@@ -1133,6 +1266,25 @@ _Last updated: by the agent of the first session, after releasing 4.11.0 (the an
   taken for smoke (5.7 % of the frame at 60 %, 7.8 at 80, 16 at 98); curls weaker than about 0.7 levels
   are kept only in part below 95 %; at 100 % 13-32 % of a frame WITHOUT smoke is protected, so dust
   stays there.
+- Thick smoke against gear (4.12.0) was made on ONE real frame. Known to go wrong: soft (out-of-focus)
+  gear that has no single direction counts as smoke while the smoke tick is on and is then not removed
+  by «Прибирати стійки…» (five such groups on his frames, section 2). Not known: a much brighter cloud
+  on a black wall (the gaps between its curls are "dark thin things", which `_edge_blobs_with_body`
+  calls gear - the new rule decides before that, but only for groups that pass its two tests), gear
+  standing inside smoke, smoke in front of the person's outline.
+- The mixer brush (4.12.0) smooths what is smaller than about 1.6 % of the long side (90 px of his
+  frames): larger blotches stay, at any strength - on the test frame blotches of 9 px sigma are still at
+  37 % at 100. It goes over the wall-floor line like over anything else (half of its sharpness at 50 %).
+  It is weaker wherever the shadow map answers, also in broad soft shadows of the wall (p90 of that map
+  on his walls: 0.36-0.59). It does not add noise: in 8 bit, at 100 %, a third of the grain is all that
+  hides the steps of a slow gradient.
+- The «Маска» view of a LIGHT refresh is not the exact one when «Сліди взуття» stands very low (found
+  when the random walk of `quick` changed its steps, as old as the light refresh): at 6 % the layer
+  covers 11 % of the frame in the light picture and 67 % in the exact one; at 20 % and at 65 % the mask
+  pictures still differ by 3.5-5.8 levels on that walk's settings (the check allows 3). The alpha of the
+  stains stage is a threshold on the size of the correction (`alpha_s` in `_smooth_backdrop_stains`),
+  and the reduced copy of the light refresh sees smaller corrections. The cleaned photo itself is right
+  (0.05 levels apart). Not fixed; the walk was put back on its old steps.
 - With the tick OFF nothing new is looked for (4.11.0): the note «Схоже, у кадрі є дим…» at the opening
   of the window still comes from the search by wisps alone (`found`), so THIN smoke is cleaned without a
   word when the tick is off - as in every version before. The soft search was not used for that note on
@@ -1468,6 +1620,28 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   thin), laid over in linear light with the colour (238, 240, 243), people in front. "Curl contrast" =
   local RMS (Gaussian 40) of the band-pass (6 - 45 px) of smoky minus plain. Never use a client frame in
   a check.
+- His frame with smoke: `/tmp/arena-coding-uploads/0Q5A2507 копия.jpg` (as shot) and `… копия 2.jpg` (the
+  result of 4.11.0). A usable silhouette: GrabCut on a copy 1400 px high, started from a mask - sure
+  background outside x 0.20-0.62 / y 0.105-0.975, sure person where the picture is saturated red, likely
+  person in an ellipse around the head and a column around the body; six rounds; the largest piece,
+  closed by 9 px, resized to 1024 x 1024 for `H.make_engine`. Which version made a result can be read
+  from the pair: smooth |as shot - result| by 5 px, times 40, and draw the outline of each version's
+  smoke map over it - the unchanged zones follow one of them.
+- His retouches (`1 (2).jpg`, `2 (2).jpg`, `3 (2).jpg`) are 5:7 crops of the frames with canvas added at
+  the sides. To compare one with its frame: match a central patch of the retouch (both at a quarter of
+  the size, the retouch also scaled by 0.9-1.1) in the frame; pair 2 matches at scale 1.00 (0.97), pair 3
+  at 1.00 (0.99), pair 1 only at 1.06 (0.86: it was resized, the grain cannot be compared). Texture is
+  compared in cells of 256 px that are flat in the frame, band by band (differences of Gaussians).
+- Panel tests: `env.key(code, key, mods, target)` already exists; a second helper of the same name in
+  the object silently replaced it and every key test "passed nothing". The new one is `env.keyDown`.
+  jsdom does not take `keyCode` from the description of an event. A scenario starts with «Детальний
+  перегляд» TICKED unless it says `{ detail: false }` (the owner's window has it unticked).
+- Adding keys to the list of `_mutate` shifts every random walk; a check that passed for years can then
+  fail on a difference that was always there (it did: known limits, the «Маска» view). New keys get
+  random numbers of their own, drawn from where the walk stands without moving it on.
+- A probe that monkeypatches a rule away (`eng.SMOKE_EDGE_SHARE = 0`) tells at once whether a drawn
+  frame can catch that rule's defect at all - cheaper than a round of `try_defects.py`. The soft pole of
+  `check_smoke` shows the direction rule only on the LIGHT wall (on the dark one it has no strong edge).
 - `image_search` writes what it finds into `image-search/` INSIDE the repository: delete the folder
   before a commit. It found no usable frame of studio smoke on a light backdrop (AI pictures, dark
   backdrops, weddings).

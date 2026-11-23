@@ -737,6 +737,7 @@ async function main() {
     expect(rs.length === 2 && rs[0].done && rs[0].outcome === "done" && !rs[1].done,
       `the first answered in full, the second is still running: ${rs.length} requests, ${rs.map((r) => r.outcome + "/" + r.done).join(" ")}`);
     expect(env.state("previewMatchesSettings()") === false, "the picture of the first one is for values that are gone: it must not count as up to date");
+    expect(rs[0].picture && env.pictureName() !== rs[0].picture, `...and must not be put on screen: ${env.pictureName()} (the first run made ${rs[0].picture})`);
     expect(env.state("sessState.recomputing") === true && env.badge().includes("Оновлюю"), "the window is still waiting for the newer one: " + env.badge());
     await env.settle(3500);
     expect(env.recomputes().length === 2 && env.state("previewMatchesSettings()") === true,
@@ -2923,6 +2924,7 @@ async function main() {
     await env.settle(2000);
     expect(env.recomputes().length === 3 && !env.progressCardVisible() && env.state("previewMatchesSettings()") === true && env.state("sessState.recomputing") === false,
       `three requests, the last one on screen: ${env.recomputes().length}, card ${env.progressCardVisible()}`);
+    expect(env.pictureName() === env.recomputes()[2].picture, "the picture on screen is the one of the last run: " + env.pictureName());
     expect(env.server.fgSeen.superseded === 2, "two runs gave way: " + env.server.fgSeen.superseded);
   });
 
@@ -2937,8 +2939,10 @@ async function main() {
     expect(rc.length === 2 && rc[0].done && rc[0].outcome === "done" && !rc[1].done, "the old server finished the first run and is on the second");
     expect(env.progressCardVisible() && env.state("sessState.recomputing") === true, "the card must not go away with the answer of the old run");
     expect(env.state("previewMatchesSettings()") === false, "the picture of the old run must not count as the one for the new values");
+    expect(rc[0].picture && env.pictureName() !== rc[0].picture, `...and must not be put on screen: ${env.pictureName()} (the old run made ${rc[0].picture})`);
     await env.settle(2000);
     expect(env.recomputes().length === 2 && !env.progressCardVisible() && env.state("previewMatchesSettings()") === true, "the second run ends on screen");
+    expect(env.pictureName() === rc[1].picture, `the picture on screen is the one of the second run: ${env.pictureName()} / ${rc[1].picture}`);
   });
 
   await scenario("'[' makes the brush smaller and ']' larger - also with the Ukrainian layout, and after a check box was clicked", { detail: false }, async (env, expect) => {
@@ -2954,6 +2958,18 @@ async function main() {
     expect(size() === 18, "the key is told by its place on the keyboard: " + size());
     env.keyDown({ key: "ї" });                               // ...and by its letter, when the host does not say the place
     expect(size() === 20, "'ї' is the key of ']' in the Ukrainian layout (a small brush: a small step): " + size());
+    env.keyDown({ key: "Х" });
+    expect(size() === 15, "'х' is the key of '[' (also as a capital letter): " + size());
+    env.keyDown({ key: "Ї" });
+    expect(size() === 17, "...and back: " + size());
+    env.keyDown({ key: "ї" });
+    expect(size() === 19, "...once more: " + size());
+    env.keyDown({ key: "ї" });
+    expect(size() === 21, "the brush is at 21 now: " + size());
+    env.keyDown({ key: "х" });
+    expect(size() === 16, "a step of 5 from 21: " + size());
+    env.keyDown({ key: "ї" }); env.keyDown({ key: "ї" });
+    expect(size() === 20, "back at 20: " + size());
     env.keyDown({ key: "ъ" });                               // the Russian layout
     expect(size() === 25, "'ъ' is the key of ']' in the Russian layout: " + size());
     env.keyDown({ keyCode: 219 });                           // a host that gives the number only
