@@ -3009,11 +3009,16 @@ def check_mix():
             or ENG._mix_strength(dict(mixOn=True, mix=250)) != 100.0 or ENG._mix_strength(dict(mixOn=True)) != 50.0:
         bad.append("the mixer brush is a stage of the whole backdrop while it is on; its strength is 50 unless said, and 100 at most")
     base = _comp(frame, plain)
-    eng = H.make_engine(E, sil)
-    fg_u8, core_u8 = eng._clean_fg_mask(np.clip(sil * 255, 0, 255).astype(np.uint8), w, h, 70.0)
-    shadow_full = cv2.resize(eng._compute_protection_maps_small(frame, fg_u8, core_u8, 80.0, False, True)[3], (w, h), interpolation=cv2.INTER_LINEAR)
-    shadow = (shadow_full > 160) & ~person                   # the shadow under the person...
-    shadow_zone = cv2.dilate((shadow_full > 40).astype(np.uint8), np.ones((41, 41), np.uint8)) > 0   # ...and whatever is near one
+    # the shadow under the person, where the harness draws it (make_studio_image) - not where the engine says it
+    # is: with its own map the question answers itself. The inner part of it, and a ring around its edge.
+    sh_c = ((w // 2 // 8 + 30) * 8, int(h * 0.905))
+    shadow_u8 = np.zeros((h, w), np.uint8)
+    cv2.ellipse(shadow_u8, sh_c, (int(w * 0.085), int(h * 0.016)), 0, 0, 360, 255, -1)
+    shadow = (shadow_u8 > 0) & ~person
+    edge_u8 = np.zeros((h, w), np.uint8)
+    cv2.ellipse(edge_u8, sh_c, (int(w * 0.11), int(h * 0.022)), 0, 0, 360, 255, -1)
+    off_edge = cv2.distanceTransform((edge_u8 == 0).astype(np.uint8), cv2.DIST_L2, 5)
+    shadow_ring = (off_edge >= 20) & (off_edge < 40) & (cv2.distanceTransform((~person).astype(np.uint8), cv2.DIST_L2, 5) > 150)
     out50, _ = run(mixOn=True, mix=50)
     out100, _ = run(mixOn=True, mix=100)
     res50, res100 = _comp(frame, out50), _comp(frame, out100)
@@ -3030,22 +3035,38 @@ def check_mix():
         bad.append("the person must not be touched, and the layer must not cover it")
     if float((out100[..., 3] > 128)[wall].mean()) < 0.99:
         bad.append("the layer must cover the open backdrop where the brush went")
-    # (the smooth copy is an average of the backdrop alone: a dark dress must not darken the wall next to it.
-    #  Asked on the frame without blotches - there the brush has no tone of its own to move.)
+    # Next to the person the tone of the backdrop must stay: the smooth copy is made of the backdrop alone (a
+    # dark dress must not darken the wall beside it), and it follows the fall of the light (a plain average is
+    # one-sided there). Asked where it is hardest: the transition next to the person at 0 - with the 60 of the
+    # other questions the brush hardly comes within 60 px of the person and nothing of this can be seen - on a
+    # frame without blotches, with the light falling off across it (60 levels over the width).
     person_c = cv2.resize(clean_sil, (w, h), interpolation=cv2.INTER_LINEAR) > 0.5
-    wide = cv2.dilate(person_c.astype(np.uint8), np.ones((121, 121), np.uint8)) > 0
-    ring = wide & ~(cv2.dilate(person_c.astype(np.uint8), np.ones((31, 31), np.uint8)) > 0)
+    lit = clean_img.astype(np.float32) + (30.0 - 60.0 * xx / w)[..., None]
+    lit[person_c] = clean_img[person_c]
+    lit = np.clip(lit, 0, 255).astype(np.uint8)
+    from_person = cv2.distanceTransform((~person_c).astype(np.uint8), cv2.DIST_L2, 5)
+    ring = (from_person >= 8) & (from_person < 60)
     ring[int(h * 0.50):] = False                             # (well above the wall-floor line, which the brush softens)
-    moved_c = _comp(clean_img, run(clean_img, clean_sil, mixOn=True, mix=100)[0]) - _comp(clean_img, run(clean_img, clean_sil)[0])
-    bleed = float(np.abs(cv2.GaussianBlur(moved_c.mean(axis=2), (0, 0), 12.0))[ring].max())
-    # (a plain average, one-sided next to the person, moves the tone by 1.6 levels here; the plane fit by 0.2)
-    if int(ring.sum()) < 40000 or bleed > 0.6:
-        bad.append(f"the tone of the backdrop next to the person must stay: it moved by up to {bleed:.1f} levels ({int(ring.sum())} px)")
+    near = dict(feather=0)
+    moved_c = _comp(lit, run(lit, clean_sil, mixOn=True, mix=100, **near)[0]) - _comp(lit, run(lit, clean_sil, **near)[0])
+    bleed = float(np.abs(cv2.GaussianBlur(moved_c.mean(axis=2), (0, 0), 6.0))[ring].max())
+    grain_near = left(_comp(lit, run(lit, clean_sil, mixOn=True, mix=100, **near)[0]), _comp(lit, run(lit, clean_sil, **near)[0]),
+                      (from_person >= 15) & (from_person < 30) & ring, 0, 1.5)
+    # (0.4 as built; a plain average: 1.0; the person let into the smooth copy: 4.0)
+    if int(ring.sum()) < 60000 or bleed > 0.7 or grain_near > 0.7:
+        bad.append(f"the tone of the backdrop next to the person must stay: it moved by up to {bleed:.1f} levels ({int(ring.sum())} px; the brush "
+                   f"must come this close for the question: {grain_near * 100:.0f}% of the grain left at 15-30 px)")
     if float(np.abs(res100 - base)[on_stand].mean()) > 0.3:
         bad.append(f"gear is not brushed over: a stand changed by {np.abs(res100 - base)[on_stand].mean():.1f} levels")
-    in_shadow = left(res100, base, shadow, 4, 20)
-    if int(shadow.sum()) < 20000 or in_shadow < 0.9:
-        bad.append(f"the shadow under the person is not brushed over: {in_shadow * 100:.0f}% of its texture left ({int(shadow.sum())} px)")
+    in_shadow = float(np.abs(res100 - base).mean(axis=2)[shadow].mean())
+    if int(shadow.sum()) < 10000 or in_shadow > 0.3:
+        bad.append(f"the shadow under the person is not brushed over: it changed by {in_shadow:.1f} levels ({int(shadow.sum())} px)")
+    # ...and the floor around the shadow keeps its tone (the same one-sidedness; on the frame without blotches:
+    # 0.3 as built - a plain average leaves a lighter ring of 1.3 around the shadow)
+    moved_s = _comp(clean_img, run(clean_img, clean_sil, mixOn=True, mix=100)[0]) - _comp(clean_img, run(clean_img, clean_sil)[0])
+    around = float(cv2.GaussianBlur(moved_s.mean(axis=2), (0, 0), 6.0)[shadow_ring].mean())
+    if int(shadow_ring.sum()) < 8000 or abs(around) > 0.7:
+        bad.append(f"the floor around the shadow must keep its tone: it moved by {around:+.1f} levels ({int(shadow_ring.sum())} px)")
     # smoke: with the protection on the cloud is left alone, without it the brush goes over it like over any backdrop
     as_shot = _comp(smoky, run(smoky, clean_sil)[0])
     smoke_off = left(_comp(smoky, run(smoky, clean_sil, mixOn=True, mix=100)[0]), as_shot, cloud, 11, 44)
@@ -3069,10 +3090,11 @@ def check_mix():
     g_half = grain16(run(img16, sil16, 16, mixOn=True, mix=50)[0]) / g_plain
     g_full = grain16(run(img16, sil16, 16, mixOn=True, mix=100)[0]) / g_plain
     g_most = grain16(run(img16, sil16, 16, mixOn=True, mix=80)[0]) / g_plain
-    floor = ENG.MIX_GRAIN_MIN
-    if not (0.42 <= g_half <= 0.62) or not (floor - 0.06 <= g_full <= floor + 0.12) or not (floor - 0.06 <= g_most <= g_half):
+    # (the floor is named here, not read from the engine: a check that takes its limit from the code it checks
+    #  follows that code wherever it goes - MIX_GRAIN_MIN set to 0 passed)
+    if not (0.42 <= g_half <= 0.62) or not (0.29 <= g_full <= 0.47) or not (0.29 <= g_most <= g_half):
         bad.append(f"16 bit: grain left at 50 / 80 / 100: {g_half * 100:.0f}% / {g_most * 100:.0f}% / {g_full * 100:.0f}% "
-                   f"(a half at 50; never under {floor * 100:.0f}% - a backdrop without grain shows bands)")
+                   f"(a half at 50; never under about a third - a backdrop without grain shows bands)")
 
     # ---- the big window (a frame large enough for the light refresh)
     w, h = 2600, 1740
@@ -3123,9 +3145,10 @@ def check_mix():
                    f"{off_by:.2f} levels away from the exact picture")
     report("mix", not bad,
            f"the mixer brush at 50 / 100: grain {g50 * 100:.0f}% / {g100 * 100:.0f}%, blotches {b50 * 100:.0f}% / {b100 * 100:.0f}% left on the open "
-           f"backdrop (16 bit: grain {g_half * 100:.0f}% / {g_full * 100:.0f}%, its floor is {floor * 100:.0f}%); the person, the gear, the shadow "
-           f"({in_shadow * 100:.0f}% left) and protected smoke ({smoke_on * 100:.0f}%, unprotected {smoke_off * 100:.0f}%) are not brushed over; the "
-           f"tone next to the person moves by {bleed:.1f} levels at most; the slow light stays; switched off: nothing changes; the window: another strength re-uses the smooth copy, Apply computes "
+           f"backdrop (16 bit: grain {g_half * 100:.0f}% / {g_full * 100:.0f}%, never under a third); the person, the gear, the shadow "
+           f"(changed by {in_shadow:.1f} levels) and protected smoke ({smoke_on * 100:.0f}% left, unprotected {smoke_off * 100:.0f}%) are not brushed "
+           f"over; the tone next to the person moves by {bleed:.1f} levels at most with the shortest transition, around the shadow by "
+           f"{around:+.1f}; the slow light stays; switched off: nothing changes; the window: another strength re-uses the smooth copy, Apply computes "
            f"anew, the light refresh shows it ({off_by:.2f} levels from the exact picture)"
            if not bad else "wrong:\n   " + "\n   ".join(bad))
 

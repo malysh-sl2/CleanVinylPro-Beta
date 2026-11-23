@@ -6471,29 +6471,35 @@ class CleanVinylEngine:
     def _plane_average(img: np.ndarray, wgt: np.ndarray, sigma: float) -> tuple[np.ndarray, np.ndarray]:
         """
         The smooth copy of the mixer brush: at every pixel the value of the PLANE that fits best what `wgt` lets in
-        around it (Gaussian weights of `sigma`). Returns (float32 RGB 0..1, the plain weighted share that was
-        let in around each pixel).
-        A plain weighted average is one-sided next to the person, a shadow or smoke - it sees the backdrop on one
-        side only - and wherever the light of the backdrop changes it pulls the tone towards what lies further
-        away: 1.6 levels next to the person of the test frame at full strength, a faint rim. A plane follows
-        the slope, so the tone next to a thing is the tone that was there.
+        around it (a bell of about `sigma` px). Returns (float32 RGB 0..1, the plain weighted share that was let
+        in around each pixel).
+        A plain weighted average is one-sided next to a shadow, smoke or the person - it sees the backdrop on one
+        side only - and wherever the tone of the backdrop changes it pulls the tone towards what lies further
+        away. On the test frame at full strength: a lighter ring of 1.3 levels around the shadow under the person
+        (0.3 with the plane), a rim of 1.0 next to the person when the light falls off across the frame and the
+        transition next to the person is short (0.4). A plane follows the slope.
         """
         hh, ww = wgt.shape
         w64 = wgt.astype(np.float64)
-        yy, xx = np.mgrid[0:hh, 0:ww].astype(np.float64)
-        xx /= sigma
-        yy /= sigma
+        xx = (np.arange(ww, dtype=np.float64) / sigma)[None, :]
+        yy = (np.arange(hh, dtype=np.float64) / sigma)[:, None]
+        # three passes of a box filter stand in for a Gaussian: the weights of the fit need not be a Gaussian
+        # exactly, only smooth and the same for every sum - and fifteen sums are needed (a fifth of the time)
+        k_box = max(3, int(round(np.sqrt(4.0 * sigma * sigma + 1.0))) | 1)
 
         def g(a):
-            return cv2.GaussianBlur(a, (0, 0), sigmaX=sigma, sigmaY=sigma)
+            for _ in range(3):
+                a = cv2.blur(a, (k_box, k_box))
+            return a
 
+        wx, wy = w64 * xx, w64 * yy
         s0 = g(w64)
-        sx, sy = g(w64 * xx), g(w64 * yy)
+        sx, sy = g(wx), g(wy)
         # the moments about the pixel itself
         mx, my = sx - xx * s0, sy - yy * s0
-        mxx = g(w64 * xx * xx) - 2.0 * xx * sx + xx * xx * s0
-        myy = g(w64 * yy * yy) - 2.0 * yy * sy + yy * yy * s0
-        mxy = g(w64 * xx * yy) - xx * sy - yy * sx + xx * yy * s0
+        mxx = g(wx * xx) - 2.0 * xx * sx + xx * xx * s0
+        myy = g(wy * yy) - 2.0 * yy * sy + yy * yy * s0
+        mxy = g(wx * yy) - xx * sy - yy * sx + xx * yy * s0
         # (Cramer's rule for the first unknown of the 3 x 3 system - the value at the pixel)
         c00 = mxx * myy - mxy * mxy
         c01 = mxy * my - mx * myy
@@ -6501,15 +6507,17 @@ class CleanVinylEngine:
         det = s0 * c00 + mx * c01 + my * c02
         # too little around a pixel to tell a slope (deep inside a thing, a narrow gap): the plain average there
         firm = (det > 1e-4 * np.maximum(s0, 1e-9) ** 3) & (s0 > 0.05)
+        inv_det = 1.0 / np.where(firm, det, 1.0)
+        inv_s0 = 1.0 / np.maximum(s0, 1e-9)
         out = np.empty(img.shape, dtype=np.float32)
         for ch in range(img.shape[2]):
             f = img[:, :, ch].astype(np.float64) * w64
             t0 = g(f)
             tx, ty = g(f * xx) - xx * t0, g(f * yy) - yy * t0
-            plain = t0 / np.maximum(s0, 1e-9)
-            plane = (t0 * c00 + tx * c01 + ty * c02) / np.where(firm, det, 1.0)
+            plain = t0 * inv_s0
+            plane = (t0 * c00 + tx * c01 + ty * c02) * inv_det
             out[:, :, ch] = np.where(firm, plane, plain)
-        return np.clip(out, 0.0, 1.0), s0.astype(np.float32)
+        return np.clip(out, 0.0, 1.0), np.maximum(s0, 0.0).astype(np.float32)
 
     @staticmethod
     def _tone_stages_on(p: dict) -> bool:

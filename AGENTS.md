@@ -766,20 +766,32 @@ second plugin next to the installed one and lose his presets.
     is at 0.51 / 0.47 / 0.40 / 0.43 / 0.57 of the frame's in the bands 0-2 / 2-6 / 6-16 / 16-40 / 40-100 px
     - about a half in EVERY band, the grain included. That is a blend, not a blur. So the stage blends
     the cleaned frame towards a smooth copy of itself: at every pixel the value of the PLANE that fits
-    the backdrop alone around it (`_plane_average`: Gaussian weights of `MIX_SIGMA` = 1.6 % of the long
-    side, nine weighted sums in float64, Cramer's rule; the plain average where too little is around),
-    made on a copy of 1400 px (950 in the light preview) - 1.9 s here. A plain masked average is
-    one-sided next to the person, a shadow or smoke and pulls the tone there towards what lies further
-    away: 1.6 levels next to the person of the test frame at 100 %, a faint rim; the plane: 0.2. Weight =
+    the backdrop alone around it (`_plane_average`: a bell of `MIX_SIGMA` = 1.6 % of the long side,
+    made of three passes of a box filter - fifteen weighted sums in float64 are needed, and with a
+    Gaussian they took 2 s; Cramer's rule; the plain average where too little is around), made on a
+    copy of 1400 px (950 in the light preview): 0.4 s here, 0.15 s in a light refresh. A plain masked
+    average is one-sided next to a shadow, smoke, gear or the person and pulls the tone there towards
+    what lies further away. Measured at 100 %, plain average -> plane: a lighter ring around the shadow
+    under the person of the test frame 1.3 -> 0.3 levels; a rim next to the person, with the light
+    falling off across the frame and «М’якість переходу біля моделі» at 0, 1.0 -> 0.4; on `0Q5A2507`
+    the small open islands of the floor between the smoke 4.5 -> 1.3 (p99 3.8 -> 1.1), the wall 0.12
+    -> 0.06 on average. (A first note here said "1.6 -> 0.2 next to the person": wrong - that 1.6 was
+    the wall-floor line at the lower end of the zone that was measured, and the plane did not change
+    it. It also stands in the message of commit `77cc56b`.) Weight =
     strength x where the brush may go (the outward ramp of the person, not the gear, not the shadows
-    x 1.35, not the smoke map x 1.25, only where the average had something to lean on). Above 65 % the
+    x 1.35, not the smoke map x 1.25, only where the average had something to lean on). The ramp is the
+    one of the blur stage: with the transition at 60 the grain of `0Q5A2507` at 100 % is left at 1.00 /
+    0.86 / 0.42 / 0.34 at 20-60 / 60-120 / 120-240 / more px from the person - the brush keeps away
+    from the person by about 2 % of the frame's height; at 0 it comes within 15 px on a frame of
+    2000 px. The manual and the two tips say that the slider decides. Above 65 % the
     grain that the blend would take below `MIX_GRAIN_MIN` = 0.35 is put back (band below
     `MIX_GRAIN_SIGMA` = 1.5 px, in bands of 1024 rows): at 100 % without it the texture of 6-40 px rose
     to 1.5-1.75 of the frame's - the staircase of 8 bits. The layer alpha is the brush map, not times
     the strength (the blur stage multiplies both and so works with the square of its strength). The
     stage runs after the second pass and before the clothing; its strength is not part of its cache key.
-    On `0Q5A2507` at 50: wall 0.51 / 0.51 / 0.54 / 0.85 / 0.92, cloud 1.00, person untouched; no
-    measurable time. The blur stage was NOT changed (it still ignores the smoke map: the comparisons with
+    On `0Q5A2507` at 50: wall 0.51 / 0.51 / 0.54 / 0.87 / 0.94, cloud 1.00, person untouched, the
+    floor under the haze hardly brushed (it is smoke by the map: 5 % of it is open); 7.9 s against 7.4 s
+    without the brush here. The blur stage was NOT changed (it still ignores the smoke map: the comparisons with
     v3.2.1 run with blur and smoke on).
   - **The newest values win** (`recompute_session`, not background): every such call takes a number
     (`_fg_seq`); a call that finds a higher number when its turn comes answers `{"superseded": True}`
@@ -804,7 +816,7 @@ second plugin next to the installed one and lose his presets.
   - Checks: groups `restart` and `mix` are new; `check_smoke` got the thick-smoke part (a drawn cloud
     with strong soft edges, a stand in focus, a soft straight pole, a knot of hard pieces, on a dark and
     on a light wall); the walks toggle the mixer brush with random numbers of their own; the window
-    test has 106 scenarios, the settings test 63 cases; `tests/try_defects.py` holds the 44 defects of
+    test has 106 scenarios, the settings test 63 cases; `tests/try_defects.py` holds the 45 defects of
     4.12.0.
 
 ## 3. Current state — update this at the end of every session
@@ -1154,8 +1166,9 @@ _Last updated: by the agent of the first session, after releasing 4.12.0 (the an
 
 - From 4.11.0: he sent a frame with real smoke (dark grey wall, not a light one) and its result: thin
   smoke and the floor were kept, thick smoke was not (4.12.0). Not answered: what share the note names
-  on his frames and where he ends up with the slider. Which line «інколи залишається»: the wall-floor line, a floor joint or the trace of the brush;
-  on which frames; was the smoke tick on (a frame as shot and a screenshot were asked for)? Under thin
+  on his frames and where he ends up with the slider. Which line «інколи залишається»: the wall-floor
+  line, a floor joint or the trace of the brush; on which frames; was the smoke tick on (a frame as
+  shot and a screenshot were asked for)? Under thin
   smoke the corner tool now takes the line and makes the smoke around it smoother - is that what he
   wants, or should the smoke win there?
 - From 4.10.0, answered: the brush is fast and draws a line; the time line read «30 с · AI-заливка: 121
