@@ -224,34 +224,6 @@
     }
   },
   {
-    "id": "smoke",
-    "name": "Зйомка з димом",
-    "color": "#56d8c9",
-    "builtin": true,
-    "cfg": {
-      "spots": 72,
-      "scuffs": 65,
-      "blur": 0,
-      "feather": 60,
-      "seamOn": true,
-      "seam": 80,
-      "edge": 75,
-      "smokeOn": true,
-      "smoke": 95,
-      "grain": 90,
-      "shadow": true,
-      "removeStands": false,
-      "master": 100,
-      "fracFine": true,
-      "fracMed": true,
-      "fracLarge": true,
-      "dressSmooth": false,
-      "dressStrength": 40,
-      "cycCurve": 0,
-      "cleanPasses": 1
-    }
-  },
-  {
     "id": "clean_stands",
     "name": "Без стійок (AI)",
     "color": "#f2a649",

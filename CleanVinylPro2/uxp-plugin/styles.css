@@ -708,6 +708,34 @@ html, body {
   cursor: pointer;
 }
 
+/* "Прибирати стійки": the same kind of pill, in the colour its row of the settings had */
+.r4m-stands-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: #3a3024;
+  border: 1px solid #7a6240;
+  font-size: 11px;
+  color: #ffd49e;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.r4m-stands-pill.active {
+  border-color: #ffab5c;
+  background: #5a3d1c;
+  color: #ffffff;
+}
+
+.r4m-stands-pill input {
+  margin: 0;
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
 .r4m-dress-pill {
   display: inline-flex;
   align-items: center;
@@ -1048,12 +1076,30 @@ html, body {
 }
 
 .gear-scroll {
-  max-height: 360px;
+  max-height: 360px;  /* fitGearList() of main.js gives it what the window has */
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 7px;
   padding-right: 3px;
+}
+
+/* The rows of the list keep their height and the list scrolls. Photoshop does not give a flex item the height of
+   what is in it as a minimum, so a list that is longer than its box is squeezed into it instead: on the owner's
+   screenshots of 4.11.0 and 4.12.0 the sliders lie on the captions of the rows below and the check boxes run
+   into each other. Said for every kind of row by name as well - what "> *" does there was never seen. */
+.gear-scroll > * {
+  flex-shrink: 0;
+}
+
+.gear-scroll .g-row,
+.gear-scroll .ps-check,
+.gear-scroll .g-passes-row,
+.gear-scroll .btn-primary,
+.gear-scroll .btn-sec,
+.gear-scroll .g-time-line,
+.gear-scroll .g-vram-box {
+  flex-shrink: 0;
 }
 
 .g-row {

@@ -67,13 +67,6 @@ const DEFAULT_PRESETS = [
     cfg: { spots: 80, scuffs: 55, blur: 0, cycCurve: 65, feather: 65, seamOn: true, seam: 90, edge: 78, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
   },
   {
-    id: "smoke",
-    name: "Зйомка з димом",
-    color: "#56d8c9",
-    builtin: true,
-    cfg: { spots: 72, scuffs: 65, blur: 0, cycCurve: 0, feather: 60, seamOn: true, seam: 80, edge: 75, smokeOn: true, smoke: 95, grain: 90, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
-  },
-  {
     id: "clean_stands",
     name: "Без стійок (AI)",
     color: "#f2a649",
@@ -93,7 +86,7 @@ let presetsList = JSON.parse(JSON.stringify(DEFAULT_PRESETS));
 let activePresetId = presetsList[0].id;
 let presetsEditMode = false;
 let seamEnabled = true;
-let smokeEnabled = false; // smoke is looked for and protected only when asked: the checkbox, or the preset "Зйомка з димом"
+let smokeEnabled = false; // smoke is looked for and protected only when asked: the tick at the top, or the switch in the settings
 let fracFine = true;
 let fracMed = true;
 let fracLarge = true;
@@ -142,7 +135,7 @@ let settingsMigrated = false;
 const PRESET_DEFAULT_MOVES = [
   // 4.4.0: the wall-floor line is removed by default wherever a floor is usually in the frame
   { id: "cyc65", presets: ["std", "medium_shot", "wide_shot", "clean_stands"], key: "cycCurve", slider: "gSlCyc", from: 0, to: 65 },
-  // 4.5.0: smoke protection is off until it is asked for ("Зйомка з димом" keeps it)
+  // 4.5.0: smoke protection is off until it is asked for
   { id: "smokeOff", presets: ["std", "medium_shot", "closeup", "wide_shot", "lowkey", "clean_stands", "gentle"], key: "smokeOn", from: true, to: false },
   // 4.5.0: dust is judged against the noise of each part of the frame; on a dark backdrop 92 marks plain noise
   { id: "lowkeySpots80", presets: ["lowkey"], key: "spots", slider: "gSlSpots", from: 92, to: 80 },
@@ -152,6 +145,12 @@ const PRESET_DEFAULT_MOVES = [
 const PRESET_SWITCHES = {
   smokeOn: { get: () => smokeEnabled, set: (v) => { smokeEnabled = !!v; } }
 };
+// Built-in presets that no longer exist. The copy that an earlier version left on this PC is taken out of the list
+// whenever presets are loaded - from the PC, from the server, from a backup. "smoke" («Зйомка з димом», up to
+// 4.12.0): the owner found it bad and asked for it to go (it switched the corner tool off and took nearly half of
+// his smoke frame for smoke); smoke is the tick at the top of the window now, with any preset. A preset the user
+// made himself has an id of its own ("usr_...") and stays, whatever it is called.
+const RETIRED_PRESET_IDS = ["smoke"];
 let appliedPresetMoves = [];
 let makeMaskDefault = false;
 let deletedDefaultIds = [];
@@ -211,6 +210,7 @@ let sessState = {
   panStartX: 0,
   panStartY: 0,
   lastDotX: -1,
+  hoverClient: null,  // the pointer over the photo, in window pixels: {x, y}; null when it is elsewhere
   lastDotY: -1,
   strokePoints: [],
   strokeNo: 0,      // counts the strokes of this window: every dot of the trace knows the stroke it belongs to
@@ -561,7 +561,7 @@ function readCurrentConfig() {
     smokeFaint: true,
     grain: getSliderVal("gSlGrain"),
     shadow: el("gChkShadow") ? el("gChkShadow").checked : true,
-    removeStands: el("gChkRemoveStands") ? el("gChkRemoveStands").checked : false,
+    removeStands: el("dlgChkStands") ? el("dlgChkStands").checked : false,
     master: getSliderVal("gSlTurbo"),
     fracFine,
     fracMed,
@@ -630,7 +630,7 @@ function applyConfig(cfg) {
   setSliderVal("gSlSmoke", c.smoke);
   setSliderVal("gSlGrain", c.grain);
   if (el("gChkShadow")) el("gChkShadow").checked = c.shadow;
-  if (el("gChkRemoveStands")) el("gChkRemoveStands").checked = c.removeStands;
+  if (el("dlgChkStands")) el("dlgChkStands").checked = c.removeStands;
   setSliderVal("gSlTurbo", c.master);
 
   fracFine = c.fracFine;
@@ -731,14 +731,14 @@ function updateRecomputeButton() {
   if (note) {
     note.textContent = detailPreview
       ? "Перегляд перераховується сам: щойно відпустите повзунок — швидко, а потім точно, для всього кадру (поки рахується, у кутку фото написано «уточнюється»). Жодної кнопки натискати не треба."
-      : "Щойно відпустите повзунок — вікно показує швидкий перегляд. Точний кадр, для всього фото, рахує «Застосувати» або кнопка «↻ Перерахувати» внизу вікна.";
+      : "Повзунок: щойно відпустите — вікно показує швидкий перегляд. Галочка чи перемикач: програма одразу рахує точний кадр, і лише те, що змінилося. Точний кадр рахують також «Застосувати» і кнопка «↻ Перерахувати» внизу вікна.";
   }
   const btn = el("gBtnRecompute");
   if (!btn) return;
   btn.textContent = detailPreview ? "↻ Перерахувати зараз (не обов’язково)" : "↻ Перерахувати зараз (точний перегляд)";
   btn.setAttribute("data-tip", detailPreview
     ? "Необов’язкова кнопка: з «Детальним переглядом» перегляд і так перераховується сам після кожної зміни — спершу швидко, а потім точно, для всього кадру. Кнопка робить той самий точний розрахунок негайно, з вікном прогресу."
-    : "Точний перегляд — програма рахує справжній кадр для всього фото, з вікном прогресу. Після зміни повзунка вікно показує швидкий перегляд; ця кнопка потрібна, якщо хочете побачити точний результат ще до «Застосувати». «Застосувати» і так рахує точний кадр.");
+    : "Точний перегляд — програма рахує справжній кадр для всього фото, з вікном прогресу. Після зміни повзунка вікно показує швидкий перегляд; ця кнопка потрібна, якщо хочете побачити точний результат ще до «Застосувати». Рахується лише те, що змінилося: решту програма бере готовою. «Застосувати» і так рахує точний кадр.");
 }
 
 // "Детальний перегляд" on / off (see detailPreview). The exact picture by itself starts or stops at once; the size
@@ -784,7 +784,18 @@ function fillTimeText(t) {
 // window says so in the corner of the photo: that is what "a preview takes minutes" usually is.
 function noteComputeStats(stats) {
   const t = stats && stats.timing;
-  if (!t || !t.fill_tiles) return;
+  if (!t || !t.fill_tiles) {
+    // The AI fill did not run. When that is because its result was taken ready (an exact recompute after a change
+    // that comes later in the chain), the line says so - otherwise it would go on showing the time of the run
+    // before, and nobody could see that only a part was computed.
+    const ready = stats && Array.isArray(stats.reused_stages) && stats.reused_stages.includes("heal");
+    const lineReady = el("gTimeLine");
+    if (ready && lineReady && typeof stats.elapsed_ms === "number") {
+      lineReady.textContent = `Останній розрахунок: ${secondsText(stats.elapsed_ms / 1000)} · AI-заливку взято готову`;
+      lineReady.classList.remove("warn");
+    }
+    return;
+  }
   const onCpu = String(t.fill_ep || "").includes("CPU");
   const why = t.fallback && (t.fallback.lama || t.fallback.matting);
   const line = el("gTimeLine");
@@ -848,6 +859,7 @@ function updateSliderVisuals() {
   if (el("dlgChkMix")) el("dlgChkMix").checked = mixEnabled;
   if (el("dlgWrapMix")) el("dlgWrapMix").classList.toggle("active", mixEnabled);
   setSliderDisabled("gSlMix", !mixEnabled);
+  if (el("dlgWrapStands")) el("dlgWrapStands").classList.toggle("active", !!(el("dlgChkStands") && el("dlgChkStands").checked));
 
   if (el("gBtnDress")) {
     el("gBtnDress").textContent = dressSmoothEnabled ? "Увімк." : "Вимк.";
@@ -958,6 +970,21 @@ function appendNewDefaultPresets() {
     if (!known) knownDefaultIds.push(dp.id);
   });
   return added;
+}
+
+// Takes the built-in presets that no longer exist (RETIRED_PRESET_IDS) out of the list. When the active preset was
+// one of them, the first preset of the list takes its place together with its values - the values on the sliders
+// belonged to the preset that is gone. Returns true when the list changed (the caller saves).
+function dropRetiredPresets() {
+  const before = presetsList.length;
+  const wasActive = RETIRED_PRESET_IDS.includes(activePresetId);
+  presetsList = presetsList.filter((p) => !(p && RETIRED_PRESET_IDS.includes(p.id)));
+  if (presetsList.length === 0) presetsList = JSON.parse(JSON.stringify(DEFAULT_PRESETS));
+  if (wasActive || !presetsList.some((p) => p.id === activePresetId)) {
+    activePresetId = presetsList[0].id;
+    if (wasActive) applyConfig(presetsList[0].cfg);
+  }
+  return presetsList.length !== before || wasActive;
 }
 
 // Makes the moves of PRESET_DEFAULT_MOVES that were not made yet. Call it once the presets and the settings are
@@ -1096,6 +1123,10 @@ async function syncPresetsFromServer() {
       }
     }
 
+    if (dropRetiredPresets()) {
+      changed = true;
+      updateSliderVisuals();
+    }
     if (applyPresetDefaultMoves()) {
       changed = true;
       updateSliderVisuals();
@@ -1665,7 +1696,9 @@ async function applySettingsBackup(d) {
   if (!d.settings.cfg || typeof d.settings.cfg !== "object") {
     applyPreset(presetsList.find((x) => x.id === activePresetId) || presetsList[0]);
   }
-  // A backup made by an older version: the defaults that changed since then, the built-in presets added since then
+  // A backup made by an older version: the built-in presets that are gone since then, the defaults that changed,
+  // the built-in presets added
+  dropRetiredPresets();
   applyPresetDefaultMoves();
   appendNewDefaultPresets();
   settingsMigrated = false;
@@ -1945,6 +1978,7 @@ function resetZoomFit() {
   sessState.panX = 0;
   sessState.panY = 0;
   applyStageLayout();
+  refreshBrushCursor();
 }
 
 const ZOOM_MIN = 0.15;
@@ -1977,6 +2011,7 @@ function zoomBy(factor, cx = 0, cy = 0) {
   sessState.panY = cy - (cy - sessState.panY) * ratio;
   sessState.zoom = nextZoom;
   applyStageLayout();
+  refreshBrushCursor();  // (the ring is as large on the photo as before, so it is another size on screen now)
 }
 
 function setActiveTool(toolName) {
@@ -1988,12 +2023,25 @@ function setActiveTool(toolName) {
   if (vp) {
     vp.style.cursor = toolName === "pan" ? "grab" : "crosshair";
   }
+  refreshBrushCursor();  // (B / E / H: the ring takes the colour of the tool, or goes away, without a mouse move)
 }
 
 function adjustBrushSize(delta) {
   sessState.brushSize = Math.max(4, Math.min(180, sessState.brushSize + delta));
   if (el("dlgBrushSizeVal")) el("dlgBrushSizeVal").textContent = String(sessState.brushSize);
+  refreshBrushCursor();
   scheduleSaveSettings();
+}
+
+// The ring of the brush is drawn when the mouse moves. A key moves no mouse: after "[" or "]" the ring kept its old
+// size until the pointer was moved (the owner: "it works, but I do not see the change until I move the mouse").
+// So whatever changes the ring - the size of the brush, the zoom, the tool - draws it again where the pointer was
+// last seen (sessState.hoverClient, kept by the mouse-move handler; null while the pointer is not over the photo).
+function refreshBrushCursor() {
+  const c = sessState.hoverClient;
+  if (!c || !sessState.open || !sessState.pw || sessState.isPanning || sessState.isDrawing) return;
+  const pt = getNormalizedStagePoint(c.x, c.y);
+  if (pt && pt.inside) renderBrushCursorAndDot(pt, false);
 }
 
 // "[" makes the brush smaller, "]" larger - the keys of Photoshop. Which of the two is this key ("down" / "up"; ""
@@ -2240,6 +2288,23 @@ function sayInWindow(text) {
   if (el("dlgHoverHint")) el("dlgHoverHint").textContent = text;
   const gearPop = el("dlgGearPopover");
   if (el("gTipBox") && gearPop && gearPop.classList.contains("visible")) el("gTipBox").textContent = text;
+}
+
+// The list of the settings takes the height that the window has for it. The style sheet gives it 360 px, which a
+// window of the default size has; the list is about 650 px long, and a window that was made taller has the room
+// (the owner's is about 960 px high: nothing has to be scrolled there). Where the size of the window cannot be
+// read, the 360 px stay.
+const GEAR_LIST_AROUND = 360;  // px of the window that are not the list: the two bars, the head, the note, the tip box
+const GEAR_LIST_MIN = 300;
+const GEAR_LIST_MAX = 760;
+
+function fitGearList() {
+  const shell = el("r4mShell");
+  const pop = el("dlgGearPopover");
+  const list = pop && pop.querySelector ? pop.querySelector(".gear-scroll") : null;
+  const high = shell ? Number(shell.offsetHeight) || 0 : 0;
+  if (!list || !high) return;
+  list.style.maxHeight = Math.max(GEAR_LIST_MIN, Math.min(GEAR_LIST_MAX, Math.round(high - GEAR_LIST_AROUND))) + "px";
 }
 
 // Ctrl + Z / the ↺ button (back = true), Ctrl + Shift + Z, Ctrl + Y / the ↻ button (back = false)
@@ -2804,7 +2869,7 @@ async function recomputeInteractiveSession(preserveEdits = true, quick = false) 
     updatePreviewBadge();
   } else {
     stopProgressPolling();
-    updateProgressUI(18, overtakes ? "Значення змінилися — перераховую спочатку..." : "Перерахунок маски та фону...", "modal");
+    updateProgressUI(18, overtakes ? "Значення змінилися — перераховую спочатку..." : "Перераховую те, що змінилося...", "modal");
     startProgressPolling(jobId, "modal");
   }
 
@@ -2853,6 +2918,8 @@ async function recomputeInteractiveSession(preserveEdits = true, quick = false) 
         }
       }
       if (typeof d.exact !== "boolean") sessState.bgUnsupported = true;  // an older server: no background recompute
+      // what was computed and what was taken ready (the note about smoke, when one is due, is said over it)
+      if (!quick && d.stats) sayInWindow(recomputeSummary(d.stats));
       takeRecomputeAnswer(d, sigAtSend, params, false);
       done = true;
       updateStageVisibility();
@@ -2888,11 +2955,27 @@ async function recomputeInteractiveSession(preserveEdits = true, quick = false) 
   return done;
 }
 
-// The exact picture at once, with the progress card: the two buttons "↻ Перерахувати" and the smoke switch (what
-// smoke is decides what gets cleaned at all, and the owner asked for the recompute to start by itself).
+// The exact picture at once, with the progress card: the two buttons "↻ Перерахувати" and every tick and switch
+// of the window that changes the frame - smoke, the stands, the mixer brush, the shadows, the seam (since 4.13.0;
+// up to 4.12.0 only the smoke tick did, the others gave the quick preview. The owner: "any tick I press - it
+// recomputes what has to be recomputed"). Sliders still give the quick preview when they are let go.
+// Only what the change touches is computed: the server keeps the finished stages (the person, the search, the AI
+// fill, the stains, the smooth copy of the mixer brush) and takes them as they are - see reused_stages in the
+// answer and recomputeSummary().
 function recomputeExactNow() {
   if (!sessState.open || !sessState.id || sessState.isApplying) return Promise.resolve(false);
   return recomputeInteractiveSession(true, false);
+}
+
+// What an exact recompute did, in a sentence for the hint line: how long it took and what was taken ready.
+function recomputeSummary(stats) {
+  const s = stats || {};
+  const took = typeof s.elapsed_ms === "number" ? ` за ${secondsText(s.elapsed_ms / 1000)}` : "";
+  const ready = Array.isArray(s.reused_stages) ? s.reused_stages : [];
+  if (ready.includes("heal")) return `✓ Перераховано${took}: людину, пошук дефектів і AI-заливку взято готовими — рахувалося лише те, що змінилося.`;
+  if (ready.includes("detect")) return `✓ Перераховано${took}: людину й пошук дефектів взято готовими, AI-заливку зроблено заново.`;
+  if (ready.includes("fg")) return `✓ Перераховано${took}: людину взято готовою; пошук дефектів і AI-заливку довелося зробити заново.`;
+  return `✓ Перераховано${took}.`;
 }
 
 async function closeServerSession() {
@@ -3890,6 +3973,8 @@ function initEvents() {
     }
 
     const pt = getNormalizedStagePoint(e.clientX, e.clientY);
+    // where the pointer is, for whatever redraws the ring without a mouse move (refreshBrushCursor)
+    sessState.hoverClient = pt && pt.inside ? { x: e.clientX, y: e.clientY } : null;
     if (sessState.isDrawing && pt) {
       sessState.strokePoints.push({ x: pt.x, y: pt.y, norm: true });
       renderBrushCursorAndDot(pt, true);
@@ -4032,10 +4117,22 @@ function initEvents() {
     mixEnabled = !!el("dlgChkMix").checked;
     updateSliderVisuals();
     scheduleSaveSettings();
-    requestPreviewRefresh(PREVIEW_DELAY_CLICK_MS, false);
     sayInWindow(mixEnabled
       ? `✓ Мікс-пензель увімкнено (${getSliderVal("gSlMix")}%): після чистки фон розгладжується. Силу змінює повзунок у налаштуваннях.`
       : "Мікс-пензель вимкнено: фон лишається таким, яким його залишила чистка.");
+    recomputeExactNow();
+  });
+
+  // "Прибирати стійки" - on the top bar since 4.13.0, next to the other ticks (the owner asked for it there; up to
+  // 4.12.0 it was a row of the settings). A value of the preset, as before.
+  onCheck("dlgChkStands", () => {
+    const on = !!el("dlgChkStands").checked;
+    updateSliderVisuals();
+    scheduleSaveSettings();
+    sayInWindow(on
+      ? "✓ Прибирати стійки: штативи, дроти й чорні штори по краях кадру буде стерто. Тіні людини лишаються."
+      : "Стійки, дроти й прилади лишаються в кадрі недоторканими.");
+    recomputeExactNow();
   });
 
   onCheck("dlgChkMakeMask", () => {
@@ -4060,6 +4157,7 @@ function initEvents() {
   el("dlgBtnGear").addEventListener("click", (e) => {
     e.stopPropagation();
     togglePopover("dlgGearPopover");
+    fitGearList();
   });
   el("dlgBtnCloseGear").addEventListener("click", () => el("dlgGearPopover").classList.remove("visible"));
   el("dlgBtnInfo").addEventListener("click", (e) => {
@@ -4122,15 +4220,16 @@ function initEvents() {
       mixEnabled = !mixEnabled;
       updateSliderVisuals();
       scheduleSaveSettings();
-      requestPreviewRefresh(PREVIEW_DELAY_CLICK_MS, false);
       sayInWindow(mixEnabled ? `✓ Мікс-пензель увімкнено (${getSliderVal("gSlMix")}%)` : "Мікс-пензель вимкнено");
+      recomputeExactNow();
     });
   }
   el("gBtnSeam").addEventListener("click", () => {
     seamEnabled = !seamEnabled;
     updateSliderVisuals();
     scheduleSaveSettings();
-    requestPreviewRefresh(PREVIEW_DELAY_CLICK_MS, false);
+    sayInWindow(seamEnabled ? "✓ Шов з’єднання вінілу: шукаю й прибираю" : "Шов з’єднання вінілу не прибирається");
+    recomputeExactNow();
   });
   el("gBtnSmoke").addEventListener("click", () => {
     smokeEnabled = !smokeEnabled;
@@ -4151,11 +4250,8 @@ function initEvents() {
   });
   onCheck("gChkShadow", () => {
     scheduleSaveSettings();
-    requestPreviewRefresh(PREVIEW_DELAY_CLICK_MS, false);
-  });
-  onCheck("gChkRemoveStands", () => {
-    scheduleSaveSettings();
-    requestPreviewRefresh(PREVIEW_DELAY_CLICK_MS, false);
+    sayInWindow(el("gChkShadow").checked ? "✓ Тіні під моделлю зберігаються" : "Тіні під моделлю не захищаються: чистка може їх послабити");
+    recomputeExactNow();
   });
   // The exact picture on request, at once and with the progress card. Not needed any more: the same picture comes
   // by itself after every change (scheduleExactPreview). The button stays for the case that it does not.
@@ -4176,7 +4272,7 @@ function initEvents() {
   if (el("dlgBtnRecompute")) {
     el("dlgBtnRecompute").addEventListener("click", () => {
       if (sessState.isApplying) return;
-      sayInWindow("↻ Перераховую точний кадр для значень на повзунках…");
+      sayInWindow("↻ Перераховую точний кадр для значень на повзунках: лише те, що змінилося…");
       recomputeExactNow();
     });
   }
@@ -4488,8 +4584,10 @@ function initEvents() {
     activePresetId = presetsList[0].id;
     applyConfig(presetsList[0].cfg);
   }
-  // Defaults that changed since the presets on this PC were saved (the server copy follows at the first sync)
-  const movedDefaults = applyPresetDefaultMoves();
+  // Built-in presets that are gone, and defaults that changed, since the presets on this PC were saved (the server
+  // copy follows at the first sync)
+  const retired = dropRetiredPresets();
+  const movedDefaults = applyPresetDefaultMoves() || retired;
   if (movedDefaults) settingsMigrated = true;
   if (appendNewDefaultPresets() || movedDefaults) {
     await writeLocalJson("presets_local.json", presetsList);

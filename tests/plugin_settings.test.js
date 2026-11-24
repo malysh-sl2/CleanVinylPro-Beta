@@ -235,11 +235,22 @@ new Function("module", movesCode)(modMoves);
 const runMoves = modMoves.exports;
 
 const defaultsNow = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "CleanVinylPro2", "server", "presets_defaults.json"), "utf8"));
+// "Зйомка з димом" was a built-in preset up to 4.12.0 (taken out in 4.13.0: the owner asked for it). The PCs of
+// earlier versions hold it, so the lists of those versions are built with it, the way 4.12.0 shipped it.
+const SMOKE_PRESET_412 = {
+  id: "smoke", name: "Зйомка з димом", color: "#56d8c9", builtin: true,
+  cfg: { spots: 72, scuffs: 65, blur: 0, cycCurve: 0, feather: 60, seamOn: true, seam: 80, edge: 75, smokeOn: true, smoke: 95, grain: 90, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
+};
+const defaultsThen = (() => {
+  const list = JSON.parse(JSON.stringify(defaultsNow));
+  list.splice(list.findIndex((p) => p.id === "clean_stands"), 0, JSON.parse(JSON.stringify(SMOKE_PRESET_412)));
+  return list;
+})();
 // The built-in presets as the PCs of earlier versions hold them
 const IDS_440 = ["std", "medium_shot", "closeup", "wide_shot", "lowkey", "smoke", "clean_stands", "gentle"];
 const FLOOR_440 = ["std", "medium_shot", "wide_shot", "clean_stands"];      // "Циклорама" 65 since 4.4.0
 const SMOKE_OFF = IDS_440.filter((id) => id !== "smoke");                     // smoke protection off since 4.5.0
-const older = (cycOf) => defaultsNow.filter((p) => IDS_440.includes(p.id)).map((p) => Object.assign({}, p, {
+const older = (cycOf) => defaultsThen.filter((p) => IDS_440.includes(p.id)).map((p) => Object.assign({}, p, {
   cfg: Object.assign({}, p.cfg, { cycCurve: cycOf(p.id), smokeOn: true }, p.id === "lowkey" ? { spots: 92 } : {})
 }));
 const as430 = () => older(() => 0);
@@ -279,7 +290,7 @@ moveCase("settings that remember the moves: what the user set afterwards stays",
   r.changed[0] === false && r.cyc.std === 0 && r.cyc.wide_shot === 0 && r.slider === 0 && r.smoke.std === true && r.smokeNow === true && r.spots.lowkey === 92, r);
 r = runMoves(defaultsNow, null);
 moveCase("a fresh install: nothing to move, the moves are remembered",
-  r.cyc.std === 65 && r.cyc.lowkey === 65 && r.cyc.closeup === 0 && r.smoke.std === false && r.smoke.smoke === true && r.spots.lowkey === 80 &&
+  r.cyc.std === 65 && r.cyc.lowkey === 65 && r.cyc.closeup === 0 && r.smoke.std === false && r.smoke.smoke === undefined && r.spots.lowkey === 80 &&
   ALL_MOVES.every((id) => r.saved.presetMoves.includes(id)), r);
 r = runMoves(as430(), { schemaVersion: 5, presetMoves: "broken", activePresetId: "std", cfg: { cycCurve: 0 } });
 moveCase("a broken list in the file counts as no list", r.changed[0] === true && r.cyc.std === 65, r);
@@ -305,8 +316,9 @@ moveCase("the smoke switch of the active preset goes off once; switched on again
 const FLOOR_NOW = ["std", "medium_shot", "wide_shot", "clean_stands", "lowkey", "lowkey_medium", "lowkey_wide"];
 moveCase("presets_defaults.json: exactly the presets with a floor carry \"Циклорама\" 65",
   defaultsNow.every((p) => p.cfg.cycCurve === (FLOOR_NOW.includes(p.id) ? 65 : 0)), defaultsNow.map((p) => [p.id, p.cfg.cycCurve]));
-moveCase("presets_defaults.json: smoke protection is on in the smoke preset only",
-  defaultsNow.every((p) => p.cfg.smokeOn === (p.id === "smoke")), defaultsNow.map((p) => [p.id, p.cfg.smokeOn]));
+moveCase("presets_defaults.json: smoke protection is off in every preset, and the smoke preset is gone (4.13.0)",
+  defaultsNow.length === 10 && defaultsNow.every((p) => p.cfg.smokeOn === false && p.id !== "smoke" && p.name !== "Зйомка з димом"),
+  defaultsNow.map((p) => [p.id, p.cfg.smokeOn]));
 moveCase("every move names presets that exist, a key they have, and leads to the value the preset ships with", (() => {
   const moves = new Function(movesConst[0] + "return PRESET_DEFAULT_MOVES;")();
   return moves.length === ALL_MOVES.length && moves.every((m) => ALL_MOVES.includes(m.id) && m.presets.every((id) => {
@@ -363,6 +375,46 @@ r = runAppend([mine], IDS_440, IDS_440);
 moveCase("no built-in preset left in the list: the new ones go to its end", r.ids.join() === ["my_1"].concat(DARK_NEW).join(), r.ids);
 r = runAppend(order(IDS_440), IDS_440.concat(DARK_NEW), ["lowkey_close", "lowkey_medium", "lowkey_wide"]);
 moveCase("dark presets deleted by the user do not come back", r.added[0] === false && r.ids.join() === IDS_440.join(), r.ids);
+
+// ------------------------------------------------------------------ a built-in preset that no longer exists (4.13.0)
+const retiredConst = src.match(/const RETIRED_PRESET_IDS = \[[^\]]*\];\n/);
+if (!retiredConst) throw new Error("RETIRED_PRESET_IDS not found in main.js");
+const retireCode = `
+${inPlugin[0]}
+${retiredConst[0]}
+let presetsList = [], activePresetId = "std";
+const applied = [];
+function applyConfig(cfg) { applied.push(cfg); }
+${grab("dropRetiredPresets")}
+module.exports = function runRetire(presets, active, times) {
+  presetsList = JSON.parse(JSON.stringify(presets));
+  activePresetId = active;
+  applied.length = 0;
+  const changed = [];
+  for (let i = 0; i < (times || 1); i++) changed.push(dropRetiredPresets());
+  return { changed, ids: presetsList.map((p) => p.id), active: activePresetId, applied: applied.slice(), list: presetsList };
+};
+`;
+const modRetire = { exports: null };
+new Function("module", retireCode)(modRetire);
+const runRetire = modRetire.exports;
+const ownSmoke = { id: "usr_1700000000000", name: "Зйомка з димом", builtin: false, cfg: { cycCurve: 0, spots: 70, smokeOn: true, smoke: 95 } };
+const pc412 = defaultsThen.concat([mine, ownSmoke]);
+r = runRetire(pc412, "wide_shot", 2);
+moveCase("a PC of 4.12.0: the built-in smoke preset leaves the list, once; every other preset stays where it was",
+  r.changed[0] === true && r.changed[1] === false && !r.ids.includes("smoke") &&
+  r.ids.join() === pc412.map((p) => p.id).filter((id) => id !== "smoke").join(), r);
+moveCase("...the user's own preset of the same name stays, and so do the active preset and the controls",
+  r.ids.includes(ownSmoke.id) && r.ids.includes("my_1") && r.active === "wide_shot" && r.applied.length === 0, r);
+r = runRetire(pc412, "smoke");
+moveCase("the smoke preset was the active one: the first preset of the list takes its place, with its values on the controls",
+  r.changed[0] === true && r.active === "std" && r.applied.length === 1 && JSON.stringify(r.applied[0]) === JSON.stringify(r.list[0].cfg) &&
+  r.list[0].cfg.smokeOn === false && r.list[0].cfg.cycCurve === 65, r);
+r = runRetire(defaultsNow.concat([mine]), "my_1");
+moveCase("a list without it: nothing changes", r.changed[0] === false && r.ids.length === 11 && r.active === "my_1" && r.applied.length === 0, r);
+r = runRetire([SMOKE_PRESET_412], "smoke");
+moveCase("a list of nothing but the smoke preset: the built-in presets of this version take its place",
+  r.changed[0] === true && r.ids.join() === defaultsNow.map((p) => p.id).join() && r.active === "std", r);
 
 // ------------------------------------------------------------------ the automatic preset and the defaults of a preset
 const sceneConst = src.match(/const AUTO_PRESET_BY_SCENE = \{[\s\S]*?\n\};\n/);

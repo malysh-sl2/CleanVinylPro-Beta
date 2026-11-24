@@ -1336,7 +1336,8 @@ def check_smoke():
     dark_f, dark_sil, zd = drawn(True)
     keep_g, rem_g, sm_g, thick_g = gear_maps(dark_f, dark_sil, False)
     old_rem = float(rem_g[zd["cloud"]].mean())
-    if float(keep_g[zd["cloud"]].mean()) < 0.8 or old_rem < 0.5:
+    # (marked for removal: 70 % up to 4.12.0; since 4.13.0 only what is thin and dark is - the gaps between the curls)
+    if float(keep_g[zd["cloud"]].mean()) < 0.8 or old_rem < 0.3:
         bad.append(f"the thick cloud of this check must be one that is gear without the user's word: {keep_g[zd['cloud']].mean() * 100:.0f}% "
                    f"of it gear, {old_rem * 100:.0f}% marked for removal")
     keep_g, rem_g, sm_g, thick_g = gear_maps(dark_f, dark_sil, True)

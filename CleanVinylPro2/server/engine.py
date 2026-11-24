@@ -1010,6 +1010,25 @@ class CleanVinylEngine:
     GEAR_STEP_COHERENCE = 0.75   # edges of a blob that point one way this much: a one-sided step, not a thin thing
     GEAR_BODY_STEP = 0.20        # a step-like blob is gear when this share of the light is missing / added in it
     GEAR_BODY_THIN = 0.16        # ...and a blob of thin lines when its lines are at least this strong
+    # What "Прибирати стійки" may take away (4.13.0). The removal mask used to be every dark pixel inside the strip
+    # of ANY group of strong edges that counted as gear - and a group that leaves the frame over the left, right
+    # or top border always counts. On the owner's 0Q5A3534 two of those groups were the hard edges of the couple's
+    # own cast shadows (the shadow of a hem that runs to the left border, the shadow of a leg that runs to the
+    # right one): the strip along each edge was repainted - a smeared edge, and a bite out of the shadow - while
+    # «Зберігати тіні під моделлю» was ticked. Repainting the strip along the edge of something wide never removes
+    # that thing. So, of a group of strong edges, only this is taken away:
+    #   - what is thin and dark: a pole, a leg of a stand, a cable - the backdrop on both sides (within
+    #     GEAR_BODY_K) and at least GEAR_TAKE_DEPTH of its light missing. On 0Q5A3534 the pole of the stand has
+    #     0.84; the strip along the shadow beside a shoe 0.06; a limb's shadow on a lit floor would have about
+    #     0.55. Asked of every pixel, not of the group: a shadow that tapers has a thin tip;
+    #   - and only in a group that does not run along the person: with at least GEAR_ALONG_PERSON of its strip
+    #     within GEAR_PERSON_REACH (of the long side) of the silhouette it is the shadow of a limb or of a hem,
+    #     however dark.
+    # What is black and large (a curtain, a flag: `border_dark`) is taken away as before, whatever its edges say.
+    # Everything else that counts as gear stays as it was shot.
+    GEAR_TAKE_DEPTH = 0.62
+    GEAR_PERSON_REACH = 0.03
+    GEAR_ALONG_PERSON = 0.50
 
     @staticmethod
     def _edge_blobs_with_body(L: np.ndarray, gx: np.ndarray, gy: np.ndarray, grad: np.ndarray,
@@ -1059,6 +1078,26 @@ class CleanVinylEngine:
             else:
                 gear[i] = float(np.percentile(vals, 95)) >= CleanVinylEngine.GEAR_BODY_THIN
         return gear
+
+    @staticmethod
+    def _edge_blobs_along_person(fg_s: np.ndarray, labels: np.ndarray, stats: np.ndarray, cand: np.ndarray,
+                                 reach: float, share: float) -> np.ndarray:
+        """
+        Which groups of strong edges run along the person (see GEAR_PERSON_REACH): one flag per label 1..n, asked of
+        the candidates `cand` only. `fg_s`: the person on the 1024 copy, 0..1; `reach`, `share`: GEAR_PERSON_REACH
+        and GEAR_ALONG_PERSON.
+        """
+        sh, sw = fg_s.shape
+        r = max(3, int(round(reach * max(sh, sw))))
+        near = cv2.dilate((fg_s > 0.12).astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))) > 0
+        along = np.zeros(cand.shape, dtype=bool)
+        for i in np.flatnonzero(cand):
+            x0, y0 = int(stats[i + 1, cv2.CC_STAT_LEFT]), int(stats[i + 1, cv2.CC_STAT_TOP])
+            bw, bh = int(stats[i + 1, cv2.CC_STAT_WIDTH]), int(stats[i + 1, cv2.CC_STAT_HEIGHT])
+            box = (slice(y0, y0 + bh), slice(x0, x0 + bw))
+            m = labels[box] == (i + 1)
+            along[i] = bool(m.any()) and float(near[box][m].mean()) >= share
+        return along
 
     def _compute_protection_maps_small(
         self,
@@ -1120,6 +1159,7 @@ class CleanVinylEngine:
         num_lbl, labels, stats, _ = cv2.connectedComponentsWithStats(edge_blobs, connectivity=8)
         edge_lut = np.zeros(num_lbl, dtype=np.float32)
         any_lut = np.zeros(num_lbl, dtype=np.float32)
+        take_lut = np.zeros(num_lbl, dtype=np.float32)   # the groups that "remove the stands" may take away
         if num_lbl > 1:
             bw_e = stats[1:, cv2.CC_STAT_WIDTH]
             bh_e = stats[1:, cv2.CC_STAT_HEIGHT]
@@ -1127,15 +1167,27 @@ class CleanVinylEngine:
             is_horiz_corner = (bw_e > 0.24 * sw) & (bh_e < 0.055 * sh) & ((bw_e / np.maximum(bh_e, 1)) > 5.0)
             valid_edge = ((area_e > 950) | (np.maximum(bw_e, bh_e) > 85)) & (~is_horiz_corner)
             any_lut[1:] = valid_edge.astype(np.float32)
+            takeable = valid_edge
             if gear_body and bool(valid_edge.any()):
                 valid_edge = valid_edge & self._edge_blobs_with_body(L, gx, gy, grad, strong_edges, labels, stats, valid_edge)
+                # (see GEAR_TAKE_DEPTH: not what runs along the person)
+                takeable = valid_edge & ~self._edge_blobs_along_person(fg_s, labels, stats, valid_edge,
+                                                                       self.GEAR_PERSON_REACH, self.GEAR_ALONG_PERSON)
             edge_lut[1:] = valid_edge.astype(np.float32)
+            take_lut[1:] = takeable.astype(np.float32)
         if smoke_faint and protect_smoke and smoke_strength > 5 and bool(any_lut.any()):
             # the user's word that the frame has smoke: thick smoke is not gear (see SMOKE_EDGE_SOFT)
             is_smoke = self._edge_groups_of_smoke(L, grad, strong_edges, fg_s, labels, stats, any_lut[1:] > 0)
             edge_lut[1:][is_smoke] = 0.0
             any_lut[1:][is_smoke] = 0.0
+            take_lut[1:][is_smoke] = 0.0
         stand_mask = edge_lut[labels]
+        take_mask = take_lut[labels]
+        if gear_body and bool(take_mask.any()):
+            # ...and of such a group only what is thin and dark (see GEAR_TAKE_DEPTH), with its rim
+            l_shut = cv2.morphologyEx(L, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (self.GEAR_BODY_K, self.GEAR_BODY_K)))
+            thin_dark = ((l_shut - L) / (l_shut + 6.0) >= self.GEAR_TAKE_DEPTH).astype(np.uint8)
+            take_mask = take_mask * cv2.dilate(thin_dark, k_line).astype(np.float32)
         # every group of strong edges, gear or not: a shadow edge is no gear, and no smoke either (see B)
         edges_any = any_lut[labels]
 
@@ -1174,14 +1226,17 @@ class CleanVinylEngine:
             ) & (~is_horiz_band)
             bd_lut[1:] = valid_bd.astype(np.uint8)
         bd_keep = bd_lut[lbl_bd]
-        stand_mask = np.maximum(stand_mask, cv2.dilate(bd_keep, k_line).astype(np.float32))
+        bd_zone = cv2.dilate(bd_keep, k_line).astype(np.float32)
+        stand_mask = np.maximum(stand_mask, bd_zone)
+        take_mask = np.maximum(take_mask, bd_zone)
         stand_protect = cv2.GaussianBlur(cv2.dilate(stand_mask, np.ones((7, 7), np.uint8)), (15, 15), 0)
 
-        # Precise thin/dark stand removal mask (strictly dark gear/cables/edge stands outside model core)
+        # Precise thin/dark stand removal mask (strictly dark gear/cables/edge stands outside model core): of the
+        # gear, what can be taken away (`take_mask`, see GEAR_PERSON_REACH)
         separate_fg = ((fg_s > 0.45) & (core_s < 0.25)).astype(np.float32)
-        dark_gear = ((L < 72.0) & (stand_mask > 0.3) & (core_s < 0.20)).astype(np.float32)
+        dark_gear = ((L < 72.0) & (take_mask > 0.3) & (core_s < 0.20)).astype(np.float32)
         # Include bottom-corner caster feet / equipment edges touching frame left/right borders even if slightly above L=24
-        edge_gear = ((grad > 18.0) | (L < 38.0)) & (edge_strip > 0) & (stand_mask > 0.25) & (core_s < 0.15)
+        edge_gear = ((grad > 18.0) | (L < 38.0)) & (edge_strip > 0) & (take_mask > 0.25) & (core_s < 0.15)
         stand_remove = np.maximum(separate_fg, np.maximum(dark_gear, edge_gear.astype(np.float32)))
         stand_remove = cv2.dilate(stand_remove, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11)))
         stand_remove[core_s > 0.35] = 0.0
@@ -3098,6 +3153,19 @@ class CleanVinylEngine:
         return cv2.remap(img, map_x, map_y, cv2.INTER_LINEAR, borderMode=border, borderValue=0)
 
     CORNER_MIN_SCORE = 0.12        # a line scoring less is no corner (faint joints score about 0.002, a real corner 0.3-2)
+    # A corner that is seen through smoke only (4.13.0). The line is looked for on the backdrop that is in view,
+    # and thin smoke counts as backdrop there: the tools for lines respect thick smoke only, so that a corner
+    # under a thin haze still goes (see _smoke_zone_small). On the owner's 0Q5A2507 the corner lies behind the
+    # clouds; what was found as "the line" was a quarter of the width, in the haze beside them. The corner tool
+    # then bent the tone of the haze around that line: in his result a band above the cloud is up to 6 levels
+    # darker, with a sharp edge where the thick smoke begins. So a found line counts only when it is seen on
+    # clean backdrop: of its columns that are in view - not behind the person, not under thick smoke - fewer
+    # than CORNER_IN_SMOKE may lie in smoke of any kind (the map of everything that is protected as smoke).
+    # A corner in plain view beside a cloud is still found, and is still followed under a thin haze.
+    CORNER_IN_SMOKE = 0.60
+    # ...and towards thick smoke the correction of the corner tool fades out (it used to stop at the outline of
+    # the cloud, at full strength): nothing at the outline, two thirds at this share of the frame height from it.
+    CORNER_SMOKE_FADE = 0.03
     CORNER_UPPER_MIN_SCORE = 0.15  # a line above the strongest one: wins when it scores at least this...
     CORNER_UPPER_MIN_REL = 0.04    # ...and its step is this share of the brightness around it (L* + 1)
 
@@ -3306,7 +3374,7 @@ class CleanVinylEngine:
         return seam_mask
 
     def _corner_line_of_frame(self, img_rgb_u8: np.ndarray, eff_fg_u8: np.ndarray, stand_protect_s: np.ndarray,
-                              smoke_s: np.ndarray, hair: bool = False) -> dict | None:
+                              smoke_s: np.ndarray, hair: bool = False, smoke_all_s: np.ndarray | None = None) -> dict | None:
         """
         The wall-floor corner of the untouched frame, in pixels of the frame: {"row": row of the line at the centre
         column, "slope": rows per column, "half": half-height of the strip the line lies in, "step": brightness step
@@ -3316,6 +3384,8 @@ class CleanVinylEngine:
         (_apply_cyclorama_curve) and the seam search leaves its strip alone.
         hair: also look for the thin line that runs along the corner (see _corner_hairline). The dict then has
         "hair": its pieces, and "zone": the half-height of the zone they were looked for in (wider than "half").
+        smoke_s: the smoke that the tools for lines respect (thick smoke); smoke_all_s: everything that is
+        protected as smoke - a line seen through smoke only is no corner (see CORNER_IN_SMOKE).
         """
         h, w = img_rgb_u8.shape[:2]
         sc = min(1.0, 768.0 / max(h, w))
@@ -3330,6 +3400,14 @@ class CleanVinylEngine:
         line = self._find_corner_line(L, valid)
         if line is None or line["score"] < self.CORNER_MIN_SCORE:
             return None
+        if smoke_all_s is not None and float(smoke_all_s.max()) > 0:
+            # seen through smoke only (see CORNER_IN_SMOKE): asked along the line, column by column
+            all_s = cv2.resize(smoke_all_s, (sw, sh), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
+            cols = np.arange(sw)
+            rows_l = np.clip(np.round(line["row"] + line["slope"] * (cols - (sw - 1) / 2.0)), 0, sh - 1).astype(np.int64)
+            in_view = valid[rows_l, cols] > 0.5
+            if bool(in_view.any()) and float((all_s[rows_l, cols] > 0.30)[in_view].mean()) >= self.CORNER_IN_SMOKE:
+                return None
         out = {"row": (line["row"] + 0.5) / sc - 0.5, "slope": float(line["slope"]), "half": 0.012 * h + 2.0 / sc,
                "step": float(line["step"])}
         if hair:
@@ -3569,6 +3647,24 @@ class CleanVinylEngine:
         out = np.where(inside[..., None], values + (out * norm[..., None] - values) * share[..., None], values)
         return out.astype(np.float32), np.where(inside, conf * norm * share, 0.0).astype(np.float32)
 
+    # Smoke has no outline (4.13.0). The smoke map ends where the search stops finding smoke, and the haze goes on
+    # a little further, thinner and thinner. The stages that even the tone of the backdrop worked right up to the
+    # edge of the map at full strength: to the stains stage the outermost haze is "a soft light stain", and it was
+    # evened - on the owner's 0Q5A2507 a band above the cloud came out 2 to 6 levels darker and ended, sharply,
+    # where the map begins. So for those stages (the stains, the mixer brush) the smoke reaches further than its
+    # map, fading: full at the edge of the map, a third at SMOKE_TONE_HALO (of the long side) from it, nothing at
+    # twice that. The search for dust and the AI fill go by the map itself, as before.
+    SMOKE_TONE_HALO = 0.025
+
+    @classmethod
+    def _smoke_with_halo(cls, sm: np.ndarray) -> np.ndarray:
+        """The smoke map (float 0..1, any size) with the fading rim of SMOKE_TONE_HALO around it."""
+        if float(sm.max()) <= 0.3:
+            return sm
+        sigma = max(1.0, cls.SMOKE_TONE_HALO * float(max(sm.shape[:2])))
+        halo = np.clip(cv2.GaussianBlur((sm > 0.3).astype(np.float32), (0, 0), sigma) * 2.0, 0.0, 1.0)
+        return np.maximum(sm, halo)
+
     def _smooth_backdrop_stains(self, small_rgb: np.ndarray, fg_s: np.ndarray, st_s: np.ndarray, sm_s: np.ndarray,
                                 strength: float, fg_gate: bool = True):
         """
@@ -3597,6 +3693,7 @@ class CleanVinylEngine:
         sh, sw = fg_s.shape
         s = float(np.clip(strength, 0.0, 2.0))
         lab = cv2.cvtColor(np.clip(small_rgb, 0.0, 1.0).astype(np.float32), cv2.COLOR_RGB2LAB)
+        sm_s = self._smoke_with_halo(sm_s)   # the haze goes on beyond its map (see SMOKE_TONE_HALO)
         # (the gear map is a soft zone around the stands; from 0.45 down it is plain backdrop next to them)
         valid = ((fg_s < 0.05) & (st_s < 0.45) & (sm_s < 0.30)).astype(np.float32)
         long_side = float(max(sh, sw))
@@ -3978,6 +4075,10 @@ class CleanVinylEngine:
         # has moved. (They take no part in the estimate above; a dark stand receives less - see below.)
         sk_up = cv2.warpAffine(sk_s, M_up, (w, rb - ra), **up)
         gate *= 1.0 - np.clip(sk_up * 1.6, 0.0, 1.0)
+        if float(sk_s.max()) > 0.2:
+            # ...and fades out towards it (CORNER_SMOKE_FADE): no edge where the cloud begins
+            near_s = cv2.GaussianBlur((sk_s > 0.2).astype(np.float32), (0, 0), max(1.0, self.CORNER_SMOKE_FADE * sh))
+            gate *= 1.0 - cv2.warpAffine(np.clip(near_s * 2.0, 0.0, 1.0), M_up, (w, rb - ra), **up)
         band = cleaned_f32[ra:rb]
         # The correction is meant for the lit backdrop. A pixel much darker than the backdrop around it (deep shadow,
         # a dark object or hair the masks missed) receives proportionally less: light scaled, not paint added.
@@ -4270,7 +4371,8 @@ class CleanVinylEngine:
                 if seam_on and seam_eff > 0 and frac_large:
                     corner_line = None
                     if cyc_str > 0 or seam_join:  # the wall-floor corner, treated exactly as in process()
-                        corner_line = self._corner_line_of_frame(img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_lines_s)
+                        corner_line = self._corner_line_of_frame(img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_lines_s,
+                                                                 smoke_all_s=smoke_s)
                     seam_mask = self._detect_vinyl_seam_mask(
                         img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_lines_s, seam_eff, edge_prot, fast_mode=False,
                         join=seam_join, skip_line=(corner_line if cyc_str > 0 else None),
@@ -4803,7 +4905,8 @@ class CleanVinylEngine:
                                 (corner_frame,) = rec
                             else:
                                 corner_frame = self._corner_line_of_frame(
-                                    img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_lines_s, hair=hair_line)
+                                    img_rgb_u8, eff_fg_for_spots, eff_stand_protect, smoke_lines_s, hair=hair_line,
+                                    smoke_all_s=smoke_s)
                                 _sc_put("corner", k_corner, (corner_frame,))
                             if cyc_str > 0:
                                 corner_line = corner_of_this_run(corner_frame, eff_fg_for_spots)
@@ -6455,7 +6558,7 @@ class CleanVinylEngine:
         fg_b = cv2.resize(fg_u8, (bw, bh), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
         st_b = cv2.resize(stand_u8, (bw, bh), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
         sh_b = cv2.GaussianBlur(cv2.resize(shadow_u8, (bw, bh), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0, (25, 25), 0)
-        sm_b = cv2.resize(smoke_u8, (bw, bh), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
+        sm_b = self._smoke_with_halo(cv2.resize(smoke_u8, (bw, bh), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0)
         open_w = ((1.0 - np.clip(st_b * 1.25, 0.0, 1.0)) * (1.0 - np.clip(sh_b * 1.35, 0.0, 1.0))
                   * (1.0 - np.clip(sm_b * 1.25, 0.0, 1.0)))
         src_w = (fg_b < 0.08).astype(np.float32) * open_w
