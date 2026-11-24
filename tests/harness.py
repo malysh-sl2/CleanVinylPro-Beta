@@ -147,6 +147,33 @@ class FakeLama:
         return [np.ascontiguousarray(out.transpose(2, 0, 1)[None]).astype(np.float32)]
 
 
+class LightLama(FakeLama):
+    """
+    A stand-in that guesses the way the real network did on the owner's computer when a thing filled most of its
+    tile (0Q5A3534, the black curtain: the fill came out 22 levels lighter than the wall beside it): every masked
+    pixel becomes what the tile shows outside the mask - nearby where there is something nearby, else the average
+    of the tile, and mid-grey for a tile that shows nothing - `lift` levels lighter.
+    """
+
+    def __init__(self, lift: float = 22.0):
+        super().__init__()
+        self.lift = float(lift)
+
+    def run(self, _outputs, feed):
+        self.calls += 1
+        img = feed["image"][0].transpose(1, 2, 0)
+        m = feed["mask"][0, 0][..., None]
+        seen = 1.0 - m
+        den = cv2.blur(seen[..., 0], (101, 101))[..., None]
+        near = cv2.blur(img * seen, (101, 101)) / np.maximum(den, 1e-3)
+        total = float(seen.sum())
+        whole = (img * seen).sum(axis=(0, 1)) / total if total >= 1.0 else np.full(3, 0.5, np.float32)
+        trust = np.clip(den / 0.05, 0.0, 1.0)
+        around = near * trust + whole[None, None, :] * (1.0 - trust)
+        out = (img * seen + np.clip(around + self.lift / 255.0, 0.0, 1.0) * m) * 255.0
+        return [np.ascontiguousarray(out.transpose(2, 0, 1)[None]).astype(np.float32)]
+
+
 def make_engine(engine_module, mask_1024: np.ndarray):
     """An engine instance with the stand-in networks; works for the current engine and for the v3.2.1 baseline."""
     import threading

@@ -1036,6 +1036,38 @@ class CleanVinylEngine:
     # for every stage, with the tick as without it (`gear_kept` of _compute_protection_maps_small, see
     # _gear_protection). The legacy regime keeps the former rule.
     GEAR_KEPT_MAX = 0.10
+    # The whole black thing. What is black and large at the left or right border of the frame is looked for in a
+    # strip of 8% of the width, and next to a wall light enough to differ from it. A curtain that hangs wider at
+    # the top than the strip, in the shade of the upper corner, was marked up to the strip and no further
+    # (0Q5A3534: a black triangle of 3% of the width by 12% of the height stayed beside the removed curtain, and
+    # the fill carried its black on downwards - the "dark block" of the owner's result). What is as black as that
+    # and hangs together with a marked thing is the same thing: black is L below GEAR_BLACK_L (0..255; the curtain
+    # of that frame measures 0..8, the darkest of its wall and shadows 19) and at least GEAR_BLACK_UNDER below
+    # the middle of its own row. The person is never part of it (a black dress next to a black stool), and it is
+    # looked for no further than GEAR_BLACK_REACH of the frame width from what was marked: a thing may be twice
+    # as wide as the strip, and the unlit side of a dark floor is not a thing. Nor is a black backdrop: black that
+    # hangs together over more than GEAR_BLACK_MAX of the frame is left as it was marked.
+    GEAR_BLACK_L = 10.0
+    GEAR_BLACK_UNDER = 13.0
+    GEAR_BLACK_REACH = 0.08
+    GEAR_BLACK_MAX = 0.15
+
+    def _whole_black_thing(self, L: np.ndarray, row_mid_l: np.ndarray, marked: np.ndarray, fg_s: np.ndarray,
+                           core_s: np.ndarray, fg_border_excl: np.ndarray) -> np.ndarray:
+        """`marked` (uint8, 0/1: the dark things at the border) with the rest of every black thing it holds a part of."""
+        reach = max(3, int(round(self.GEAR_BLACK_REACH * L.shape[1])))
+        near = cv2.dilate(marked, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * reach + 1, 2 * reach + 1))) > 0
+        black = ((L < self.GEAR_BLACK_L) & ((row_mid_l - L) > self.GEAR_BLACK_UNDER) & near
+                 & (fg_s < 0.2) & (core_s < 0.15) & (~fg_border_excl))
+        black |= marked > 0
+        n, lbl, st, _ = cv2.connectedComponentsWithStats(black.view(np.uint8), connectivity=8)
+        if n <= 1:
+            return marked
+        held = np.zeros(n, dtype=bool)
+        held[np.unique(lbl[marked > 0])] = True
+        held[0] = False
+        held &= st[:, cv2.CC_STAT_AREA] <= self.GEAR_BLACK_MAX * L.size
+        return np.maximum(marked, held[lbl].view(np.uint8))
 
     @staticmethod
     def _gear_protection(stand_protect_s: np.ndarray, gear_kept_s: np.ndarray | None, remove_stands: bool) -> np.ndarray:
@@ -1243,6 +1275,8 @@ class CleanVinylEngine:
             ) & (~is_horiz_band)
             bd_lut[1:] = valid_bd.astype(np.uint8)
         bd_keep = bd_lut[lbl_bd]
+        if gear_body and bool(bd_keep.any()):
+            bd_keep = self._whole_black_thing(L, row_mid_l, bd_keep, fg_s, core_s, fg_border_excl)  # (see GEAR_BLACK_L)
         bd_zone = cv2.dilate(bd_keep, k_line).astype(np.float32)
         stand_mask = np.maximum(stand_mask, bd_zone)
         take_mask = np.maximum(take_mask, bd_zone)
@@ -2826,6 +2860,182 @@ class CleanVinylEngine:
             np.copyto(result_f32[ty0:ty1, tx0:tx1], acc_v, where=has_w)
         return result_f32, tiles_run
 
+    # ------------------------------------------------------------------
+    # 5a. What is too large for the network: the wall beside it is continued
+    # ------------------------------------------------------------------
+    # The network repairs the frame in tiles of 512 px. A thing it has to paint over that fills most of a tile leaves
+    # it almost nothing to go by, and it paints a guess. On the owner's computer (RTX 5060 Ti, the real network):
+    #     0Q5A3534, the black curtain, 690 px deep:  the fill is 22 levels LIGHTER than the wall beside it (26 -> 48)
+    #     0Q5A2507, the black corner, 717 px deep:   11..14 levels lighter (35 -> 48)
+    #     0Q5A2507, the dark strip, 265 px deep:     -1 level
+    #     0Q5A3534, the light stand, 190 px deep:    -1 level
+    # ("deep": twice the distance from the innermost point of the thing to the nearest wall. A thing at the border
+    # of the frame has wall on one side only, so it is twice as deep as it is wide.) The owner, 2026-11-24:
+    # "Мішає світле замісь штори".
+    # From BIG_FILL_THICK of a tile on, the network is not asked. The place is painted with the tone of the wall
+    # that surrounds it, continued (_membrane_fill): a surface that takes the tone of the wall at every point of the
+    # outline and is nowhere lighter or darker than the wall it starts from. For a thing at the left or right border
+    # of the frame the tone is carried along the rows (BIG_FILL_SQUEEZE times further than across them), so a
+    # shadow or a floor line that runs into the thing goes on to the border; at the top or bottom border, along the
+    # columns. Grain is then laid over it like over every repair, but as much of it as the wall beside the piece has
+    # (BIG_FILL_GRAIN of it, times the grain slider): the usual amount follows the brightness of what stood there
+    # before - next to none for a black curtain - and is a fifth of the grain of the owner's frames to begin with,
+    # which nobody sees in a repair of a few pixels and everybody would in a tenth of the frame. "As much" is
+    # measured in the finest detail (what a blur of 2 px takes away, by the median, so dust does not count); the
+    # grain the repair lays down keeps BIG_FILL_GRAIN_HP of its strength in that measure.
+    # The depth is meant in pixels of the real frame, so the reduced copy of the window decides as Apply will.
+    BIG_FILL_THICK = 0.60
+    BIG_FILL_SQUEEZE = 4
+    BIG_FILL_GRAIN = 1.0
+    BIG_FILL_GRAIN_HP = 0.68
+    BIG_FILL_TILE = 512.0
+
+    @staticmethod
+    def _membrane_fill(val: np.ndarray, known: np.ndarray, iters: int = 60) -> np.ndarray:
+        """
+        `val` (rows x cols x 3, float32) continued from where it is known (`known`, bool) into where it is not: the
+        surface that hangs on the known values like a film on a wire - every unknown pixel is the average of its
+        neighbours, and at the border of the array the surface arrives level. Nothing in it is lighter than the
+        lightest or darker than the darkest known value. Solved from a coarse grid to the fine one, so a wide gap
+        costs no more than a narrow one. Without a single known pixel `val` comes back as it is.
+        """
+        levels = [(val, known)]
+        while min(levels[-1][1].shape) >= 8 and len(levels) < 12:
+            v, k = levels[-1]
+            size = ((k.shape[1] + 1) // 2, (k.shape[0] + 1) // 2)
+            kf = k.astype(np.float32)
+            den = cv2.resize(kf, size, interpolation=cv2.INTER_AREA)
+            num = cv2.resize(v * kf[..., None], size, interpolation=cv2.INTER_AREA)
+            levels.append((num / np.maximum(den, 1e-6)[..., None], den > 0.0))
+        v, k = levels[-1]
+        if not bool(k.any()):
+            return val
+        u = np.where(k[..., None], v, v[k].mean(axis=0)[None, None, :]).astype(np.float32)
+        kern = np.float32([[1.0, 2.0, 1.0], [2.0, 0.0, 2.0], [1.0, 2.0, 1.0]]) / 12.0
+        for li in range(len(levels) - 1, -1, -1):
+            v, k = levels[li]
+            if li < len(levels) - 1:
+                u = cv2.resize(u, (k.shape[1], k.shape[0]), interpolation=cv2.INTER_LINEAR)
+            k3 = k[..., None]
+            u = np.where(k3, v, u)
+            if bool(k.all()):
+                continue
+            for _ in range(iters):
+                u = np.where(k3, v, cv2.filter2D(u, -1, kern, borderType=cv2.BORDER_REPLICATE))
+        return u
+
+    def _big_pieces(self, src_u8: np.ndarray, heal_mask: np.ndarray, fg_u8: np.ndarray, render_scale: float = 1.0) -> dict | None:
+        """
+        The pieces of the repair mask that are too large for the network (see BIG_FILL_THICK), with the tone of the
+        wall continued into them. `src_u8`: the frame the repair reads (the person painted over); `fg_u8`: the
+        person with the protected band. Returns None when there is no such piece, else
+            "full":  uint8, the size of the frame: 0, or the number of the piece (1, 2, ...);
+            "tone":  float32 0..1, long side 1024: what to paint there;
+            "grain": float32, one value per number: the grain of the wall beside that piece (0..1, see
+                     BIG_FILL_GRAIN; -1 = not measured, [0] is unused);
+            "count": how many pieces; "share": their share of the frame.
+        """
+        h, w = heal_mask.shape[:2]
+        sc = min(1.0, 1024.0 / max(h, w))
+        sw, sh = max(16, int(round(w * sc))), max(16, int(round(h * sc)))
+        cover = cv2.resize((heal_mask > 0).view(np.uint8) * np.uint8(255), (sw, sh), interpolation=cv2.INTER_AREA)
+        piece = (cover > 0).view(np.uint8)
+        if not bool(piece.any()):
+            return None
+        n, lab, st, _ = cv2.connectedComponentsWithStats(piece, connectivity=8)
+        depth = np.zeros(n, dtype=np.float32)
+        np.maximum.at(depth, lab.ravel(), cv2.distanceTransform(piece, cv2.DIST_L2, 5).ravel())
+        need = max(3.0, self.BIG_FILL_THICK * self.BIG_FILL_TILE * float(render_scale) * sc)
+        ids = [i for i in range(1, n) if 2.0 * float(depth[i]) >= need]
+        if not ids:
+            return None
+        src = cv2.resize(src_u8, (sw, sh), interpolation=cv2.INTER_AREA).astype(np.float32) * (1.0 / 255.0)
+        person = cv2.resize(fg_u8, (sw, sh), interpolation=cv2.INTER_AREA) > 22
+        big_s = np.isin(lab, ids)
+        k3 = np.ones((3, 3), np.uint8)
+        # the wall: what is neither a piece (with a rim of two pixels), nor another repair, nor the person
+        wall = ~(cv2.dilate(big_s.view(np.uint8), np.ones((5, 5), np.uint8)) > 0) & (cover < 64) & (~person)
+        tone = np.zeros((sh, sw, 3), dtype=np.float32)
+        done = np.zeros((sh, sw), dtype=np.uint8)
+        grain = [0.0]
+        q = max(1, int(self.BIG_FILL_SQUEEZE))
+        for i in ids[:250]:
+            x0, y0, bw, bh = (int(st[i, cv2.CC_STAT_LEFT]), int(st[i, cv2.CC_STAT_TOP]),
+                              int(st[i, cv2.CC_STAT_WIDTH]), int(st[i, cv2.CC_STAT_HEIGHT]))
+            mg = int(max(24, 1.5 * depth[i]))
+            ya, yb, xa, xb = max(0, y0 - mg), min(sh, y0 + bh + mg), max(0, x0 - mg), min(sw, x0 + bw + mg)
+            known = wall[ya:yb, xa:xb]
+            if int(known.sum()) < 16:
+                continue                      # no wall in sight: this piece is left to the network
+            kf = known.astype(np.float32)
+            val = self._blur_valid(src[ya:yb, xa:xb], kf, 3.0)
+            # along the rows for a thing at the left or right border, along the columns at the top or bottom one
+            at_lr, at_tb = (x0 <= 1 or x0 + bw >= sw - 1), (y0 <= 1 or y0 + bh >= sh - 1)
+            along_rows = at_lr and (not at_tb or bw <= bh)
+            along_cols = at_tb and not along_rows
+            rh, rw = known.shape
+            if q > 1 and (along_rows or along_cols) and min(rh, rw) >= 8 * q:
+                size = (max(8, rw // q), rh) if along_rows else (rw, max(8, rh // q))
+                den = cv2.resize(kf, size, interpolation=cv2.INTER_AREA)
+                num = cv2.resize(val * kf[..., None], size, interpolation=cv2.INTER_AREA)
+                coarse = self._membrane_fill(num / np.maximum(den, 1e-6)[..., None], den > 0.5)
+                start = np.where(known[..., None], val, cv2.resize(coarse, (rw, rh), interpolation=cv2.INTER_LINEAR))
+                kern = np.float32([[1.0, 2.0, 1.0], [2.0, 0.0, 2.0], [1.0, 2.0, 1.0]]) / 12.0
+                for _ in range(12):           # the join with the wall, at the full grid
+                    start = np.where(known[..., None], val, cv2.filter2D(start, -1, kern, borderType=cv2.BORDER_REPLICATE))
+                filled = start
+            else:
+                filled = self._membrane_fill(val, known)
+            own = (lab[ya:yb, xa:xb] == i).view(np.uint8)
+            sel = cv2.dilate(own, k3) > 0
+            tone[ya:yb, xa:xb][sel] = filled[sel]
+            done[ya:yb, xa:xb][sel] = len(grain)
+            # the grain of the wall beside the piece, in the frame itself
+            k_r = 2 * int(max(12, depth[i])) + 1
+            ring = known & (cv2.dilate(own, np.ones((k_r, k_r), np.uint8)) > 0)
+            fy0, fy1, fx0, fx1 = int(ya / sc), min(h, int(np.ceil(yb / sc))), int(xa / sc), min(w, int(np.ceil(xb / sc)))
+            g_f = cv2.cvtColor(src_u8[fy0:fy1, fx0:fx1], cv2.COLOR_RGB2GRAY).astype(np.float32) * (1.0 / 255.0)
+            fine = g_f - cv2.GaussianBlur(g_f, (0, 0), 2.0)
+            ring_f = cv2.resize(ring.view(np.uint8), (fx1 - fx0, fy1 - fy0), interpolation=cv2.INTER_NEAREST) > 0
+            vals = fine[ring_f][::3]
+            grain.append(float(1.4826 * np.median(np.abs(vals - np.median(vals)))) if vals.size >= 400 else -1.0)
+            del g_f, fine, ring_f
+        if not bool(done.any()):
+            return None
+        full = cv2.resize(done, (w, h), interpolation=cv2.INTER_NEAREST)
+        full[heal_mask == 0] = 0
+        if not bool(full.any()):
+            return None
+        # (outside the pieces the tone is never read; it is filled so that the enlarged copy has no edge at the rim)
+        tone = np.where(done[..., None] > 0, tone, src)
+        return {"full": full, "tone": np.clip(tone, 0.0, 1.0), "grain": np.float32(grain),
+                "count": int(len(grain) - 1), "share": float(np.count_nonzero(full)) / float(full.size)}
+
+    @staticmethod
+    def _paste_big_tone(dst: np.ndarray, big: dict) -> None:
+        """The continued wall (`_big_pieces`) written into `dst` (the frame, uint8 0..255 or float32 0..1), in place."""
+        full, tone = big["full"], big["tone"]
+        h, w = full.shape
+        sh, sw = tone.shape[:2]
+        rows = np.flatnonzero(full.any(axis=1))
+        cols = np.flatnonzero(full.any(axis=0))
+        if rows.size == 0:
+            return
+        x0, x1 = int(cols[0]), int(cols[-1]) + 1
+        up = dict(flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP, borderMode=cv2.BORDER_REPLICATE)
+        for ya in range(int(rows[0]), int(rows[-1]) + 1, 512):
+            yb = min(int(rows[-1]) + 1, ya + 512)
+            sel = full[ya:yb, x0:x1] > 0
+            if not bool(sel.any()):
+                continue
+            M = np.float32([[sw / w, 0, (x0 + 0.5) * sw / w - 0.5], [0, sh / h, (ya + 0.5) * sh / h - 0.5]])
+            band = cv2.warpAffine(tone, M, (x1 - x0, yb - ya), **up)
+            part = dst[ya:yb, x0:x1]
+            if dst.dtype == np.uint8:
+                part[sel] = np.clip(band[sel] * 255.0 + 0.5, 0, 255).astype(np.uint8)
+            else:
+                part[sel] = band[sel]
+
     def _run_fast_inpaint(
         self,
         img_rgb_u8: np.ndarray,
@@ -3451,6 +3661,27 @@ class CleanVinylEngine:
     # time for the corner strip only, and what it finds there is subtracted after the step has been bent
     # (_remove_corner_hairline) - the grain stays, no new pixels are invented.
     CORNER_OVER = 0.004           # of 0..1: how much lighter than its own slope a visible backdrop pixel may stay
+    # "Depth" (the owner, 2026-11-24: "стоїть людина десь 5 метрів від стіни, коли вугол заберає, то виглядає, що
+    # стіна за метер... ілюзію глибини даже на тих фото, що людина блисько біля стіни").
+    # What was measured on his 1.jpg (people about 5 m from the wall; grey 0..255 down the left side of the frame):
+    #     wall 69 | the old line at 57% of the height | floor 56, 56, 60, 67 (to 75%), then 84, 101, 126, 140
+    # The far floor lies in grazing light and is darker than the wall; the lit floor ends at about 78% of the
+    # height. The cove of the corner tool is about 5% of the frame height at 65: it takes the line away and leaves
+    # the dark belt. With the line gone, the eye takes the end of the lit floor for the end of the floor - a wall
+    # one step behind the people. In his own retouch of that frame ("1 (2).jpg") the belt is filled: 66, 63, 62,
+    # 63 where the frame has 56, 56, 60, 67 - the tone of the wall runs on down to the lit floor.
+    # The slider widens the cove, so that the tone of the floor is carried up the wall and the belt takes the tone
+    # of what lies around it: at 100 the cove is 1 + CORNER_DEPTH_WIDE times as wide. Above the line the whole of
+    # that zone is used. Below the line the wider zone only LIFTS - that fills the belt - and by
+    # CORNER_DEPTH_FLOOR of the widening; where the wider cove would make the floor darker, the zone stays the one
+    # of the plain cove: the floor next to the camera, the pool of light the person stands in, is to stay as it
+    # was lit (with the full zone it lost 16 levels on 1.jpg and 19 of 48 on the low-key 0Q5A3411). The two
+    # zones change into one another over CORNER_DEPTH_SIGN (of 0..1) of the change the wall and floor around ask
+    # for, so there is no edge between them. Everything else about the tool stays as it is: what counts as
+    # backdrop, the limits of the change, the fade towards smoke, the person. 0 = the cove as before.
+    CORNER_DEPTH_WIDE = 2.5
+    CORNER_DEPTH_FLOOR = 0.4
+    CORNER_DEPTH_SIGN = 0.012
     CORNER_HAIR_ZONE = 0.02       # of the frame height: the line is looked for this far from the found corner
     CORNER_HAIR_SEARCH = 140.0    # the seam search at its most sensitive (a line is expected here)
     CORNER_HAIR_CAP = 0.045       # of 0..1: a line deeper than this is no hairline; only this much is taken from it
@@ -3799,6 +4030,7 @@ class CleanVinylEngine:
         line: dict | None = None,
         tone_gate: np.ndarray | None = None,
         level_seen: bool = False,
+        depth: float = 0.0,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         Turns the wall-to-floor corner (`кут`) into a seamless cyclorama gradient.
@@ -3817,12 +4049,14 @@ class CleanVinylEngine:
         reaches the person itself; without it the protected band of `eff_fg_u8` is left at the old tone, as before.
         When `line` carries "hair" (_corner_hairline), the thin line along the corner is taken out as well.
         `level_seen`: see CORNER_OVER below.
+        `depth` (0..100): how much wider than usual the cove is, most of it on the wall side - see CORNER_DEPTH_WIDE.
         Returns (image, layer alpha of the changed zone).
         """
         h, w = cleaned_f32.shape[:2]
         s = float(np.clip(cyc_strength / 100.0, 0.0, 1.0))
         if s <= 0:
             return cleaned_f32, np.zeros((h, w), dtype=np.float32)
+        wide = 1.0 + self.CORNER_DEPTH_WIDE * float(np.clip(depth / 100.0, 0.0, 1.0))
 
         # ---------- A. find the corner on a small copy ----------
         sc = min(1.0, (768.0 if fast_mode else 1024.0) / max(h, w))
@@ -3945,7 +4179,7 @@ class CleanVinylEngine:
 
         # ---------- C. cove = vertical blur of the row-wise background, on the small copy ----------
         self._checkpoint()
-        sig_v = (0.012 + 0.058 * s) * h  # half-width of the cove, full-res px
+        sig_v = (0.012 + 0.058 * s) * h * wide  # half-width of the cove, full-res px
         mix_max = min(1.0, 0.35 + 1.3 * s)
         delta_s = ((line_rows((xs_s + 0.5) / sc - 0.5) - line_rows(np.float32(cx))) * sc).astype(np.float32)
         row_s = (line_rows(np.float32(cx)) + 0.5) * sc - 0.5
@@ -4004,11 +4238,23 @@ class CleanVinylEngine:
         lf_s = lf_loc * conf[..., None] + ref * (1.0 - conf[..., None])
         sv = max(1.5, sig_v * sc)
         d_rel = np.abs(yy_s - row_s) / sv
-        W_s = np.clip((3.2 - d_rel) / 2.0, 0.0, 1.0)
-        W_s = (W_s * W_s * (3.0 - 2.0 * W_s) * mix_max)[..., None]
+
+        def zone(d):
+            t = np.clip((3.2 - d) / 2.0, 0.0, 1.0)
+            return t * t * (3.0 - 2.0 * t) * mix_max
+
+        raw_ref = self._blur_rows(ref, sv) - ref
+        if wide > 1.0:
+            # "depth": below the line the wider zone only lifts (see CORNER_DEPTH_FLOOR)
+            lifts = np.clip(0.5 + cv2.cvtColor(raw_ref, cv2.COLOR_RGB2GRAY) / self.CORNER_DEPTH_SIGN, 0.0, 1.0)
+            z_dark = zone(d_rel * wide)
+            z_lift = zone(d_rel * wide / (1.0 + self.CORNER_DEPTH_FLOOR * (wide - 1.0)))
+            W_s = np.where(yy_s > row_s, z_dark + (z_lift - z_dark) * lifts, zone(d_rel))[..., None]
+        else:
+            W_s = zone(d_rel)[..., None]
 
         # (1) what the corner needs judging by the wider surroundings: robust, smooth along the line, defined everywhere
-        c_ref = (self._blur_rows(ref, sv) - ref) * W_s
+        c_ref = raw_ref * W_s
         # (2) the same from the backdrop visible right here: exact, but only where the column is visible above and below
         trust = conf * (0.2 + 0.8 * np.clip(den_s / 0.3, 0.0, 1.0)) + 0.15 * (1.0 - conf) + 1e-3
         cove_s = self._blur_rows(lf_s * trust[..., None], sv) / self._blur_rows(trust, sv)[..., None]
@@ -4663,6 +4909,8 @@ class CleanVinylEngine:
             blur_str = float(params.get("blur", 0))
             mix_str = self._mix_strength(params)
             cyc_str = float(params.get("cycCurve", 0))
+            # "cycDepth": the cove of the corner tool is that much wider (see CORNER_DEPTH_WIDE); nothing without the tool
+            cyc_depth = float(np.clip(float(params.get("cycDepth", 0)), 0.0, 100.0)) if cyc_str > 0 else 0.0
             feather_str = float(params.get("feather", 60))
             seam_on = bool(params.get("seamOn", True))
             seam_str = float(params.get("seam", 85))
@@ -4693,6 +4941,8 @@ class CleanVinylEngine:
             tone_edge = bool(params.get("toneEdge", True))
             # "cornerHair": the corner tool also takes out the thin line that runs along the corner (_corner_hairline)
             corner_hair = bool(params.get("cornerHair", True))
+            # "bigFill": what is too large for the network gets the wall beside it, continued (see BIG_FILL_THICK)
+            big_fill = bool(params.get("bigFill", True))
             # "strayHair": single hairs that stick out next to the person (_detect_stray_hairs); 0 = not looked for
             hair_eff = float(np.clip(float(params.get("strayHair", 0)), 0.0, 100.0))
 
@@ -4775,10 +5025,10 @@ class CleanVinylEngine:
             k_hair = (k_maps, remove_stands, hair_eff)
             k_tight = (remove_stands,)       # the person without the margin (_tight_person_1024)
             k_tgate = (k_fg, remove_stands)  # the outline of the person for the tone stages (_tone_gate)
-            k_heal = (k_detect, fast_mode, grain_keep, tone_edge)
+            k_heal = (k_detect, fast_mode, grain_keep, tone_edge, big_fill)
             # Order of the tone stages: corner -> stains -> blur. The corner goes first: once the wall-floor step is a
             # smooth slope, the stain stage sees no edge there and evens the backdrop across it.
-            k_cyc = (k_heal, cyc_str)
+            k_cyc = (k_heal, cyc_str, cyc_depth)
             k_scuffs = (k_cyc, scuffs_eff, tone_edge)
             k_blur = (k_scuffs, blur_str, (boost if blur_str > 0 else 0.0), (feather_str if blur_str > 0 else 0.0))
             # (the strength of the mixer brush is not part of its key: the smooth copy is the same for every value)
@@ -5060,6 +5310,8 @@ class CleanVinylEngine:
 
                 small_specks_healed = 0
                 lama_f32 = None
+                big = None
+                big_info = None    # what was too large for the network: (pieces, share of the frame)
                 tiles_run = 0
                 self._fill_log = {"tiles": 0, "s": 0.0, "ep": ""}
                 # the person with the guard strip of the hair search: there the source of a hair repair is painted over
@@ -5067,6 +5319,7 @@ class CleanVinylEngine:
                               if (near_mask is not None and tight_1024 is not None and hit_heal is None and do_inpaint) else None)
                 if hit_heal is not None:
                     tiles_run, small_specks_healed = hit_heal["tiles_run"], hit_heal["small_specks"]
+                    big_info = hit_heal.get("big_info")
                     _prog(78, "Підготовка шару...")
                 elif not do_inpaint:
                     _prog(78, "Підготовка шару...")
@@ -5115,15 +5368,28 @@ class CleanVinylEngine:
                             heal_src_u8 = img_rgb_u8.copy()
                             heal_src_u8[fg_m_full] = fill_full[fg_m_full]
                         del solid_full, hair_zone, hair_zone_s
+                    # What is too large for the network is not asked of it (see BIG_FILL_THICK): the wall beside it
+                    # is continued there. The network sees that wall, not the thing, when it repairs what lies near.
+                    big = self._big_pieces(heal_src_u8, heal_mask, eff_fg_for_spots, render_scale) if big_fill else None
+                    heal_net = heal_mask
+                    if big is not None:
+                        heal_net = heal_mask.copy()
+                        heal_net[big["full"] > 0] = 0
+                        if heal_src_u8 is img_rgb_u8:
+                            heal_src_u8 = img_rgb_u8.copy()
+                        self._paste_big_tone(heal_src_u8, big)
                     if fast_mode:
                         lama_f32, tiles_run, small_specks_healed = self._run_fast_inpaint(
-                            heal_src_u8, heal_mask, progress_cb=progress_cb, size_scale=render_scale
+                            heal_src_u8, heal_net, progress_cb=progress_cb, size_scale=render_scale
                         )
                         _prog(79, "Відновлення мікрозерна вінілу...")
                     else:
-                        lama_f32, tiles_run = self._run_lama_tiles(heal_src_u8, heal_mask, progress_cb=progress_cb)
+                        lama_f32, tiles_run = self._run_lama_tiles(heal_src_u8, heal_net, progress_cb=progress_cb)
                         _prog(79, "Відновлення мікрозерна вінілу...")
-                    del heal_src_u8
+                    if big is not None:
+                        self._paste_big_tone(lama_f32, big)   # (in full depth: the copy above is 8-bit)
+                        big_info = (int(big["count"]), float(big["share"]))
+                    del heal_src_u8, heal_net
 
             # ------------------------------------------------------------------
             # 7. Fast High-Pass Grain Transfer + Float32 Lab Scuffs + Blur + Dress Smooth
@@ -5176,7 +5442,8 @@ class CleanVinylEngine:
                         y0h, y1h, x0h, x1h = heal_bbox
                         rng = np.random.default_rng(42)
                         g_ratio = grain_keep / 100.0
-                        noise_std = (grain_sigma / 255.0) * 0.55 * g_ratio if (grain_keep > 0 and (tiles_run > 0 or small_specks_healed > 0)) else 0.0
+                        noise_std = ((grain_sigma / 255.0) * 0.55 * g_ratio
+                                     if (grain_keep > 0 and (tiles_run > 0 or small_specks_healed > 0 or big is not None)) else 0.0)
                         if render_scale < 1.0:
                             noise_std *= self._proxy_grain_gain(render_scale)  # grain of a reduced copy is weaker
                         add_grain = noise_std > 1e-5
@@ -5207,6 +5474,17 @@ class CleanVinylEngine:
                                     ny1, nx1 = yy1 - ys_b, xx1 - x0h
                                     luma_ref = dst.mean(axis=2, keepdims=True)
                                     dark_g_scale = np.clip(luma_ref / 0.14, 0.12, 1.0)
+                                    if big is not None:
+                                        n_big = big["full"][yy0:yy1, xx0:xx1]
+                                        if bool(n_big.any()):
+                                            # as much grain as the wall beside the piece has (see BIG_FILL_GRAIN);
+                                            # where that was not measured: by the new wall, not by what stood there
+                                            wall_g = big["grain"][n_big][..., None]
+                                            as_wall = wall_g * (self.BIG_FILL_GRAIN * g_ratio / (self.BIG_FILL_GRAIN_HP * noise_std))
+                                            new_wall = np.clip(lama_crop.mean(axis=2, keepdims=True) / 0.14, 0.12, 1.0)
+                                            dark_g_scale = np.where(n_big[..., None] > 0,
+                                                                    np.where(wall_g >= 0.0, np.minimum(as_wall, 12.0), new_wall),
+                                                                    dark_g_scale)
                                     lama_crop = np.clip(
                                         lama_crop + (n_full[ny0:ny1, nx0:nx1, None] + n_fine[ny0:ny1, nx0:nx1]) * dark_g_scale * ha_crop,
                                         0.0,
@@ -5232,6 +5510,7 @@ class CleanVinylEngine:
                             "alpha": [final_alpha[cy0:cy1, cx0:cx1].copy() for cy0, cy1, cx0, cx1 in heal_cells],
                             "tiles_run": tiles_run,
                             "small_specks": small_specks_healed,
+                            "big_info": big_info,
                         })
                     else:
                         sc.pop("heal", None)  # almost the whole frame was healed: recomputing is cheaper than the RAM
@@ -5243,7 +5522,7 @@ class CleanVinylEngine:
                 # the quick preview draws in the fast geometry whatever the speed mode of the session is.
                 seed_size = tuple(int(v) for v in proxy_seed["size"])
                 proxy_seed["heal"] = {
-                    "key": (k_detect, True, grain_keep, tone_edge),
+                    "key": (k_detect, True, grain_keep, tone_edge, big_fill),
                     "rgb": cv2.resize(cleaned_f32, seed_size, interpolation=cv2.INTER_AREA),
                     "alpha": cv2.resize(final_alpha, seed_size, interpolation=cv2.INTER_AREA),
                     "tiles_run": tiles_run,
@@ -5265,6 +5544,7 @@ class CleanVinylEngine:
                     line=corner_line,
                     tone_gate=tone_gate,
                     level_seen=corner_hair,
+                    depth=cyc_depth,
                 )
                 np.maximum(final_alpha, cyc_alpha, out=final_alpha)
                 del cyc_alpha
@@ -5510,6 +5790,10 @@ class CleanVinylEngine:
                 stats["corner_hair"] = 0 if corner_line is None else len(corner_line.get("hair") or ())
             if hair_eff > 0:
                 stats["hair_px"] = hair_px  # pixels marked as single hairs (only said when the tool is on)
+            if big_info is not None:
+                # what was too large for the network and got the wall beside it instead (see BIG_FILL_THICK):
+                # how many pieces, and their share of the frame. Only said when there was such a piece.
+                stats["big_fill"] = {"pieces": int(big_info[0]), "share": round(float(big_info[1]), 4)}
             if self._fill_log["tiles"] > 0:
                 # the AI fill of this call: tiles, seconds, where it ran, and - when a GPU is there and the
                 # processor did it all the same - why (the window says so: see _lama_on_cpu)
@@ -6668,7 +6952,8 @@ class CleanVinylEngine:
         """
         fl = lambda key, default: float(p.get(key, default))  # noqa: E731
         return (
-            fl("spots", 75), fl("scuffs", 65), fl("blur", 0), fl("cycCurve", 0), fl("feather", 60),
+            fl("spots", 75), fl("scuffs", 65), fl("blur", 0), fl("cycCurve", 0),
+            (float(np.clip(fl("cycDepth", 0), 0.0, 100.0)) if fl("cycCurve", 0) > 0 else 0.0), fl("feather", 60),
             bool(p.get("seamOn", True)), fl("seam", 85), fl("edge", 70),
             bool(p.get("smokeOn", True)), fl("smoke", 80), fl("grain", 90),
             CleanVinylEngine._smoke_auto(p), CleanVinylEngine._smoke_faint(p),
@@ -6676,6 +6961,7 @@ class CleanVinylEngine:
             bool(p.get("seamJoin", True)), bool(p.get("grainLocal", True)),
             bool(p.get("gearBody", True)), bool(p.get("shadowSpots", True)),
             bool(p.get("toneEdge", True)), bool(p.get("cornerHair", True)),
+            bool(p.get("bigFill", True)),
             float(np.clip(fl("strayHair", 0), 0.0, 100.0)),
             bool(p.get("shadow", True)), bool(p.get("removeStands", False)),
             max(100.0, fl("master", 100)),

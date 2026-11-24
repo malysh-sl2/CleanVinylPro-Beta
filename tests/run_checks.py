@@ -168,7 +168,7 @@ def _legacy(p: dict) -> dict:
     """The parameters under which the engine must still give the pixels of v3.2.1 (see the header)."""
     return dict(p, speedMode="quality", smokeOn=False, cycCurve=0, dressSmooth=False, scuffs=0, seamJoin=False,
                 grainLocal=False, previewQuality=90, gearBody=False, shadowSpots=False, brushSoft=False, previewLong=1080,
-                toneEdge=False, cornerHair=False, strayHair=0, mixOn=False)
+                toneEdge=False, cornerHair=False, strayHair=0, mixOn=False, bigFill=False)
 
 
 def _legacy_window(p: dict) -> dict:
@@ -295,6 +295,10 @@ def _mutate(p, rng):
         p["mixOn"] = not bool(p.get("mixOn", False))
     elif roll == 1:
         p["mix"] = int(own.integers(0, 101))
+    elif roll == 2:
+        p["cycDepth"] = int(own.integers(0, 101))      # 4.14.0, on the same terms: "depth" of the corner tool...
+    elif roll == 3:
+        p["bigFill"] = not bool(p.get("bigFill", True))  # ...and the wall continued into what is too large for the network
     return p
 
 
@@ -860,6 +864,143 @@ def check_cyc():
         bad.append(f"light backdrop with a faint line across the wall at 0.45: the corner (at 0.62) was looked for at {row}")
     report("cyc", not bad, "cyclorama removes the wall-floor line (" + "; ".join(notes) + "), person untouched, no corner -> no change; "
                            "inside a selection only when it holds the whole line" if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
+def _depth_frame(kind, w=1500, h=2000):
+    """
+    The corner of the studio frame (at 0.62 of the height) with the light the "depth" slider is for (4.14.0):
+      belt   the far floor lies in grazing light and is darker than the wall; nearer the camera the floor is lit
+             (the owner's 1.jpg: wall 69, floor 56 .. 67 over a fifth of the frame height, then 84 .. 140);
+      pool   a dark wall, and the floor lit right up to it.
+    Both with the grain of a camera. Returns (frame, silhouette 1024).
+    """
+    img, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=41)
+    person = cv2.resize(sil, (w, h), interpolation=cv2.INTER_LINEAR) > 0.5
+    y = np.linspace(0, 1, h, dtype=np.float32)[:, None]
+    if kind == "belt":
+        u = np.clip((y - 0.62) / 0.38 / 0.75, 0.0, 1.0)
+        gain = np.where(y > 0.62, 0.68 + 0.52 * u * u * (3.0 - 2.0 * u), 1.0)
+    else:
+        gain = np.where(y > 0.62, 1.0, 0.45)
+    f = img.astype(np.float32) * gain[..., None]
+    f += np.random.default_rng(42).normal(0.0, 1.4, (h, w, 1)).astype(np.float32)
+    f[person] = img[person]
+    return np.clip(f, 0, 255).astype(np.uint8), sil
+
+
+def check_depth():
+    """
+    "Глибина" (cycDepth): the cove of the corner tool is wider, so that the tone of the floor is carried up the
+    wall and a dark belt of far floor takes the tone of what lies around it - see CORNER_DEPTH_WIDE of engine.py.
+    Below the line the wider zone only lifts: the floor next to the camera stays as it was lit.
+    """
+    bad = []
+    w, h = 1500, 2000
+    base = dict(H.STD, speedMode="quality", spots=0, scuffs=0, blur=0, seamOn=False, smokeOn=False, cycCurve=65)
+    gray = lambda im: im.astype(np.float32).mean(axis=2)  # noqa: E731
+    at = lambda prof, a, b: prof[int(a * len(prof)):int(b * len(prof))]  # noqa: E731
+
+    def rows(g):
+        """The tone of the backdrop row by row: the darker of the two sides of the frame, away from the person."""
+        ww = g.shape[1]
+        cols = [np.median(g[:, int(a * ww):int(b * ww)], axis=1) for a, b in ((0.04, 0.24), (0.76, 0.96))]
+        return cv2.blur(np.minimum(*cols).reshape(-1, 1).astype(np.float32), (1, 21)).ravel()
+
+    def run(frame, sil, depth, consts=None, **over):
+        eng = H.make_engine(E, sil)
+        for name_c, value_c in (consts or {}).items():
+            setattr(eng, name_c, value_c)
+        out, st = _quiet(eng.process, frame, 8, dict(base, cycDepth=depth, **over))
+        return _comp(frame, out), st, out
+
+    # ---- a dark belt of far floor between the wall and the lit floor ----
+    frame, sil = _depth_frame("belt", w, h)
+    person = cv2.resize(sil, (w, h)) > 0.9
+    res = {d: run(frame, sil, d) for d in (0, 60, 100)}
+    prof = {d: rows(gray(res[d][0])) for d in res}
+    p_frame = rows(gray(frame))
+    wall = float(at(p_frame, 0.40, 0.56).mean())
+    belt = {d: wall - float(at(prof[d], 0.60, 0.80).min()) for d in res}     # how far below the wall the belt lies
+    belt_frame = wall - float(at(p_frame, 0.63, 0.80).min())
+    if belt_frame < 20.0 or belt[0] < 12.0:
+        bad.append(f"the frame of this check must have a belt the plain cove leaves: {belt_frame:.1f} levels below the wall in the frame, {belt[0]:.1f} after the plain cove")
+    if belt[60] > 8.0 or belt[100] > 5.0:
+        bad.append(f"with depth the belt must take the tone around it: {belt[0]:.1f} levels below the wall at 0, {belt[60]:.1f} at 60, {belt[100]:.1f} at 100")
+    for d in (60, 100):
+        near = float(np.abs(at(prof[d], 0.84, 0.99) - at(prof[0], 0.84, 0.99)).max())
+        if near > 1.0:
+            bad.append(f"depth {d}: the floor next to the camera must stay as it was lit: moved by {near:.1f} levels")
+        if float(np.abs(res[d][0] - res[0][0])[person].max()) > 0.0:
+            bad.append(f"depth {d}: the person was changed")
+        if res[d][1].get("corner_row") != res[0][1].get("corner_row"):
+            bad.append(f"depth {d}: the corner must be found where it was: {res[d][1].get('corner_row')} / {res[0][1].get('corner_row')}")
+    far = float(np.abs(at(prof[60], 0.0, 0.18) - at(prof[0], 0.0, 0.18)).max())
+    if far > 1.0:
+        bad.append(f"depth 60: the wall far above the corner must stay: moved by {far:.1f} levels")
+    # What depth adds is one smooth field: no edge where its zones end or change into one another. (The rows of
+    # the vinyl seam of this frame are left out: a thin dark line across the floor is part of the tone of its rows,
+    # and the wider cove lifts it a little - 3 of its 16 levels here.)
+    added = cv2.blur(gray(res[60][0]) - gray(res[0][0]), (9, 9))
+    edge = 0.0
+    for r0, r1 in ((0.30, 0.785), (0.815, 0.99)):
+        for cols in (slice(0, int(0.30 * w)), slice(int(0.70 * w), w)):
+            part = added[int(r0 * h):int(r1 * h), cols]
+            edge = max(edge, float(np.abs(np.diff(part, axis=0)).max()), float(np.abs(np.diff(part, axis=1)).max()))
+    if edge > 0.30:
+        bad.append(f"depth 60: what depth adds must have no edge: {edge:.2f} levels from one pixel to the next")
+
+    # ---- a dark wall, the floor lit right up to it ----
+    frame2, sil2 = _depth_frame("pool", w, h)
+    res2 = {d: run(frame2, sil2, d) for d in (0, 60)}
+    prof2 = {d: rows(gray(res2[d][0])) for d in res2}
+    up = float((at(prof2[60], 0.48, 0.52) - at(prof2[0], 0.48, 0.52)).mean())    # the wall an eighth of the frame above the line
+    dimmed = float((at(prof2[0], 0.79, 0.99) - at(prof2[60], 0.79, 0.99)).max())
+    if up < 8.0:
+        bad.append(f"the tone of the floor must be carried up the wall: at 0.50 of the height the wall is {up:+.1f} levels against the plain cove")
+    if dimmed > 1.0:
+        bad.append(f"below the line the wider zone only lifts: the lit floor was dimmed by {dimmed:.1f} levels")
+    # (the rule is needed: with the wider zone for everything, the lit floor loses light)
+    res_all = run(frame2, sil2, 60, consts=dict(CORNER_DEPTH_SIGN=-1e-9))
+    dim_all = float((at(prof2[0], 0.79, 0.99) - at(rows(gray(res_all[0])), 0.79, 0.99)).max())
+    if dim_all < 3.0:
+        bad.append(f"the frame of this check must be one where the wider zone, used for everything, dims the lit floor: {dim_all:.1f} levels")
+
+    # ---- what depth must not touch ----
+    # no corner in the frame: nothing
+    flat, sil3 = _plain_frame(w, h, seed=7)
+    a0, a1 = run(flat, sil3, 0), run(flat, sil3, 100)
+    if not np.array_equal(a0[2], a1[2]) or a1[1].get("corner_row") is not None:
+        bad.append("a frame without a corner must not be changed by depth")
+    # the corner tool off: nothing, and no new computation is asked for
+    b0, b1 = run(frame, sil, 0, cycCurve=0), run(frame, sil, 100, cycCurve=0)
+    sig = lambda **over: E.CleanVinylEngine._clean_signature(dict(base, **over))  # noqa: E731
+    if not np.array_equal(b0[2], b1[2]) or sig(cycCurve=0, cycDepth=0) != sig(cycCurve=0, cycDepth=100) or sig(cycDepth=0) == sig(cycDepth=60):
+        bad.append("without the corner tool depth is nothing (same pixels, same signature); with it, it is a setting of its own")
+    # the stage cache: a change of depth alone repeats the corner stage, not the repair
+    cache: dict = {}
+    fg_raw = np.clip(sil * 255.0, 0, 255).astype(np.uint8)
+    eng_c = H.make_engine(E, sil)
+    # (with the stain tool on: the stages after the corner must follow the new slope)
+    for step, d in enumerate((0, 60, 60, 0)):
+        a, sa = _quiet(eng_c.process, frame, 8, dict(base, scuffs=65, cycDepth=d), cached_fg_raw_1024=fg_raw, stage_cache=cache)
+        b, _ = _quiet(eng_c.process, frame, 8, dict(base, scuffs=65, cycDepth=d), cached_fg_raw_1024=fg_raw)
+        ready = sa.get("reused_stages", [])
+        if not np.array_equal(a, b) or (step > 0 and not {"heal", "corner"} <= set(ready)) or ("scuffs" in ready) != (step == 2):
+            bad.append(f"the stage cache, call {step + 1} (depth {d}): same as a fresh computation {np.array_equal(a, b)}, taken ready {ready}")
+    # the reduced copy of the window shows the same slope
+    k = 0.5
+    small = cv2.resize(frame, (int(w * k), int(h * k)), interpolation=cv2.INTER_AREA)
+    out_s, _ = _quiet(H.make_engine(E, sil).process, small, 8, dict(base, cycDepth=60, speedMode="fast"), render_scale=k)
+    p_small = rows(gray(_comp(small, out_s)))
+    p_big = rows(cv2.resize(gray(res[60][0]), (small.shape[1], small.shape[0]), interpolation=cv2.INTER_AREA))
+    off = float(np.abs(p_small - p_big)[int(0.05 * len(p_small)):int(0.95 * len(p_small))].max())
+    if off > 1.0:
+        bad.append(f"the reduced copy of the window must show the slope of the real frame: up to {off:.1f} levels apart")
+    report("depth", not bad,
+           f"a dark belt of far floor ({belt_frame:.0f} levels below the wall; the plain cove leaves {belt[0]:.0f}) takes the tone around it: {belt[60]:.1f} at depth 60, "
+           f"{belt[100]:.1f} at 100; the floor next to the camera, the far wall and the person stay; a dark wall takes the tone of a lit floor ({up:+.0f} levels an eighth "
+           f"of the frame above the line) and the lit floor is not dimmed ({dimmed:.1f}; with the wider zone for everything {dim_all:.0f}); nothing without a corner or "
+           f"without the corner tool; the reduced copy within {off:.1f} levels" if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
 def _garment_frame(w=1400, h=2000, seed=5):
@@ -4414,6 +4555,218 @@ def check_stands():
            "without the tick nothing is touched" if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
+def _curtain_frame(w=1500, h=2000):
+    """
+    What is too large for the network (4.14.0). On a plain studio frame with grain:
+      curtain  a black curtain at the left border, 12 % of the width, with a top that hangs wider (15 %); the wall
+               beside that top lies in the shade of the corner of the room - nearly as dark as the curtain;
+      band     a soft-edged shadow band that runs from the middle of the frame into the curtain;
+      strip    a black strip at the right border, 4.5 % of the width: tall, but thin;
+      stand    a black stand with a foot.
+    Returns (frame, silhouette 1024, parts: float maps and the bool map 'person').
+    """
+    img, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=37)
+    person = cv2.resize(sil, (w, h), interpolation=cv2.INTER_LINEAR) > 0.5
+
+    def line(p0, p1, thick):
+        m = np.zeros((h, w), np.float32)
+        cv2.line(m, (int(p0[0] * w), int(p0[1] * h)), (int(p1[0] * w), int(p1[1] * h)), 1.0, thick, cv2.LINE_AA)
+        return m
+
+    def poly(pts):
+        m = np.zeros((h, w), np.float32)
+        cv2.fillPoly(m, [np.array([(int(x * w), int(y * h)) for x, y in pts], np.int32)], 1.0, cv2.LINE_AA)
+        return m
+
+    hard = lambda m: cv2.GaussianBlur(m, (0, 0), 1.5)  # noqa: E731
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    shade = 1.0 - 0.88 * np.clip((0.36 - xx / w) / 0.12, 0.0, 1.0) * np.clip((0.16 - yy / h) / 0.05, 0.0, 1.0)
+    parts = dict(
+        curtain=hard(poly([(0.0, 0.0), (0.15, 0.0), (0.12, 0.10), (0.12, 0.52), (0.0, 0.56)])),
+        band=hard(poly([(0.0, 0.30), (0.40, 0.335), (0.40, 0.375), (0.0, 0.36)])),
+        strip=hard(poly([(0.955, 0.10), (1.0, 0.10), (1.0, 0.50), (0.955, 0.50)])),
+        stand=hard(np.maximum(line((0.84, 0.28), (0.84, 0.80), 12), line((0.84, 0.80), (0.79, 0.83), 10))),
+    )
+    f = img.astype(np.float32) * cv2.GaussianBlur(shade, (0, 0), 12.0)[..., None]
+    for name, gone in (("band", 0.40), ("curtain", 0.97), ("strip", 0.97), ("stand", 0.94)):
+        f *= (1.0 - gone * parts[name])[..., None]
+    f += np.random.default_rng(38).normal(0.0, 1.6, (h, w, 1)).astype(np.float32)   # the grain of the camera
+    f[person] = img[person]
+    parts["person"] = person
+    return np.clip(f, 0, 255).astype(np.uint8), sil, parts
+
+
+def check_bigfill():
+    """
+    What is too large for the network gets the wall beside it, continued ("bigFill", BIG_FILL_THICK of engine.py),
+    and a black thing at the border is marked whole (GEAR_BLACK_L). The owner's 0Q5A3534 and 0Q5A2507 in 4.12.0:
+    in place of a black curtain the real network painted a column 11..22 levels lighter than the wall beside it,
+    and the top of the curtain, wider than the strip it was looked for in, stayed as a black block.
+    The stand-in network of this check (H.LightLama) paints lighter than what it sees, as the real one did.
+    """
+    bad = []
+    w, h = 1500, 2000
+    frame, sil, parts = _curtain_frame(w, h)
+    xx = np.mgrid[0:h, 0:w][1]
+    grown = lambda m, k: cv2.dilate(m.astype(np.uint8), np.ones((k, k), np.uint8)) > 0  # noqa: E731
+    shrunk = lambda m, k: cv2.erode(m.astype(np.uint8), np.ones((k, k), np.uint8)) > 0  # noqa: E731
+    gray = lambda im: im.astype(np.float32).mean(axis=2)  # noqa: E731
+    top = (parts["curtain"] > 0.5) & (xx > 0.125 * w)    # the part of the top that hangs beyond the strip
+    off_band = (parts["band"] > 0.5) & (parts["curtain"] < 0.01) & ~grown(parts["curtain"] > 0.5, 61)
+
+    # ---- the mask ----
+    def marked(**consts):
+        eng = H.make_engine(E, sil)
+        for name_c, value_c in consts.items():
+            setattr(eng, name_c, value_c)
+        fg, core = eng._clean_fg_mask(np.clip(sil * 255, 0, 255).astype(np.uint8), w, h, 70.0)
+        _, rem, _, _ = eng._compute_protection_maps_small(frame, fg, core, 80.0, False, True, smoke_auto=True, gear_body=True, smoke_faint=True)
+        up = cv2.resize(rem, (w, h), interpolation=cv2.INTER_LINEAR) > 100
+        return {"curtain": float(up[parts["curtain"] > 0.5].mean()), "top": float(up[top].mean()), "strip": float(up[parts["strip"] > 0.5].mean()),
+                "stand": float(up[parts["stand"] > 0.5].mean()), "band": float(up[off_band].mean())}
+
+    said = lambda d: ", ".join(f"{k} {v * 100:.0f}%" for k, v in d.items())  # noqa: E731
+    was, now, near = marked(GEAR_BLACK_L=-1.0), marked(), marked(GEAR_BLACK_REACH=0.002)
+    if was["top"] > 0.2 or was["curtain"] < 0.5:
+        bad.append(f"the frame of this check must be one where the former way leaves the wide top of the curtain unmarked: {said(was)}")
+    if min(now["curtain"], now["top"], now["strip"], now["stand"]) < 0.97 or now["band"] > 0.02:
+        bad.append(f"the whole curtain, with its wide top, the strip and the stand must be marked for removal, the shadow band not: {said(now)}")
+    if near["top"] > 0.5:
+        bad.append(f"the rest of a black thing is looked for near what was marked, no further (GEAR_BLACK_REACH): with a reach of 0.2% the top is marked {near['top'] * 100:.0f}%")
+
+    # the rule itself: never the person, never beyond the reach, never a black backdrop
+    eng0 = H.make_engine(E, sil)
+    L = np.full((200, 600), 120.0, np.float32)
+    L[:, :60] = 3.0                      # a black thing, 60 px wide and marked up to x = 24...
+    L[60:140, 60:110] = 3.0              # ...with an arm; a person in black stands against its end (x = 90..110)
+    row_mid = np.full((200, 1), 120.0, np.float32)
+    mark = np.zeros((200, 600), np.uint8)
+    mark[:, :24] = 1
+    fg_s = np.zeros((200, 600), np.float32)
+    fg_s[60:140, 90:110] = 1.0
+    none = np.zeros((200, 600), bool)
+    whole = eng0._whole_black_thing(L, row_mid, mark, fg_s, np.zeros_like(fg_s), none)
+    reach = int(round(eng0.GEAR_BLACK_REACH * 600))      # 48: what is marked, and 48 px on
+    if not (whole[:, :60].all() and whole[60:140, 60:24 + reach - 2].all() and not whole[:, 24 + reach + 2:].any()):
+        bad.append("the whole black thing: what is black, hangs together with a marked piece and lies within the reach is taken, "
+                   f"and nothing further (reach {reach} px: taken to x={int(np.flatnonzero(whole.any(axis=0)).max())})")
+    eng0.GEAR_BLACK_REACH = 0.5
+    far = eng0._whole_black_thing(L, row_mid, mark, fg_s, np.zeros_like(fg_s), none)
+    if not far[60:140, 60:90].all() or far[60:140, 90:110].any():
+        bad.append("with a reach that covers it, the arm of the black thing must be taken up to the person, and nothing of the person")
+    eng0.GEAR_BLACK_MAX = 0.10           # (thing and arm are 12% of this frame)
+    if int(eng0._whole_black_thing(L, row_mid, mark, fg_s, np.zeros_like(fg_s), none).sum()) != int(mark.sum()):
+        bad.append("black that hangs together over more of the frame than GEAR_BLACK_MAX is a backdrop, not a thing: it must be left as it was marked")
+
+    # ---- the result ----
+    base = dict(H.STD, speedMode="quality", spots=0, scuffs=0, blur=0, cycCurve=0, seamOn=False, smokeOn=False, removeStands=True)
+
+    def run(consts=None, **over):
+        eng = H.make_engine(E, sil)
+        eng.lama_sess = H.LightLama()
+        for name_c, value_c in (consts or {}).items():
+            setattr(eng, name_c, value_c)
+        out, st = _quiet(eng.process, frame, 8, dict(base, **over))
+        return gray(_comp(frame, out)), st, eng.lama_sess.calls, out
+
+    def beside(g, part, k_in):
+        """Row by row, over rows of plain wall: the middle of the place against the wall beside it (5 / 50 / 95 %)."""
+        m = parts[part] > 0.5
+        inner = shrunk(m, k_in)
+        ring = grown(m, 121) & ~grown(m, 41) & ~grown(parts["person"], 41)
+        d = []
+        for y in list(range(int(0.20 * h), int(0.27 * h), 4)) + list(range(int(0.40 * h), int(0.49 * h), 4)):
+            a, b = inner[y], ring[y]
+            if a.sum() >= 5 and b.sum() >= 5:
+                d.append(float(np.median(g[y][a]) - np.median(g[y][b])))
+        return np.percentile(d, [5, 50, 95]), inner, ring
+
+    def grain(g, zone):
+        fine = (g - cv2.GaussianBlur(g, (0, 0), 2.0))[zone]
+        return 1.4826 * float(np.median(np.abs(fine - np.median(fine))))
+
+    def band_left(g):
+        """How much of the depth of the shadow band is left where the curtain hung, next to the border of the frame."""
+        xs, xw = slice(10, int(0.04 * w)), slice(int(0.16 * w), int(0.20 * w))
+        there = float(g[int(0.22 * h):int(0.26 * h), xs].mean() - g[int(0.315 * h):int(0.345 * h), xs].mean())
+        wall = float(g[int(0.22 * h):int(0.26 * h), xw].mean() - g[int(0.345 * h):int(0.360 * h), xw].mean())
+        return there / max(wall, 1e-6)
+
+    g_on, st_on, calls_on, out_on = run()
+    g_off, st_off, calls_off, _ = run(bigFill=False)
+    q_on, inner, ring = beside(g_on, "curtain", 25)
+    q_off = beside(g_off, "curtain", 25)[0]
+    s_on = beside(g_on, "strip", 15)[0]
+    if q_off[1] < 10.0:
+        bad.append(f"the frame of this check must be one where the stand-in network paints the place of the curtain too light: {q_off[1]:+.1f} levels")
+    if abs(q_on[1]) > 4.0 or q_on[2] > 6.0 or q_on[0] < -14.0:
+        bad.append(f"where the curtain hung the wall must be the wall beside it: {q_on[0]:+.1f} / {q_on[1]:+.1f} / {q_on[2]:+.1f} levels against it (rows 5 / 50 / 95%)")
+    big = st_on.get("big_fill")
+    if not big or big.get("pieces") != 1 or not (0.05 < big.get("share", 0) < 0.10) or "big_fill" in st_off:
+        bad.append(f"the answer must say what was too large for the network, and only when there was such a thing: {big}; with bigFill off: {st_off.get('big_fill')}")
+    if not calls_on < calls_off:
+        bad.append(f"the network must not be asked for what it is not trusted with: {calls_on} tiles against {calls_off} with bigFill off")
+    if s_on[1] < 10.0:
+        bad.append(f"the thin strip is the network's: its place must carry the mark of the stand-in ({s_on[1]:+.1f} levels against the wall beside it)")
+    # the top, where the wall beside the curtain is dark: as dark as that wall, neither black nor light
+    top_in, top_wall = np.zeros((h, w), bool), np.zeros((h, w), bool)
+    top_in[int(0.01 * h):int(0.05 * h), 10:int(0.11 * w)] = True
+    top_wall[int(0.01 * h):int(0.05 * h), int(0.18 * w):int(0.22 * w)] = True
+    top_on, top_ref, top_off = float(g_on[top_in].mean()), float(g_on[top_wall].mean()), float(g_off[top_in].mean())
+    if abs(top_on - top_ref) > 8.0 or top_off - top_ref < 20.0:
+        bad.append(f"the dark top: the place {top_on:.0f}, the wall beside it {top_ref:.0f} (the stand-in alone paints {top_off:.0f})")
+    # the shadow band goes on to the border of the frame; the tone is carried along the rows
+    band_on = band_left(g_on)
+    g_iso, _, _, _ = run(consts=dict(BIG_FILL_SQUEEZE=1))
+    q_iso, band_iso = beside(g_iso, "curtain", 25)[0], band_left(g_iso)
+    if band_on < 0.4:
+        bad.append(f"a shadow that runs into the curtain must go on to the border of the frame: {band_on * 100:.0f}% of its depth is left there")
+    if band_iso > 0.2 or abs(q_iso[1]) < 6.0:
+        bad.append(f"the frame of this check must tell a fill that is carried along the rows from one that is not: without it the band keeps {band_iso * 100:.0f}% "
+                   f"and the place is {q_iso[1]:+.1f} levels off")
+    # grain: as much as the wall beside the place has; none when the slider says none
+    gr_on = grain(g_on, inner) / max(grain(g_on, ring), 1e-6)
+    g_nog = run(grain=0)[0]
+    gr_nog = grain(g_nog, inner) / max(grain(g_nog, ring), 1e-6)
+    if not 0.6 < gr_on < 1.5 or gr_nog > 0.3:
+        bad.append(f"the new wall must have the grain of the wall beside it: {gr_on * 100:.0f}% of it (grain slider at 0: {gr_nog * 100:.0f}%)")
+    # nothing too large: nothing is said, nothing changes
+    for label, over in (("without 'remove the stands'", dict(removeStands=False)),):
+        g_a, st_a, _, out_a = run(**over)
+        _, st_b, _, out_b = run(bigFill=False, **over)
+        if "big_fill" in st_a or not np.array_equal(out_a, out_b):
+            bad.append(f"{label} nothing is too large for the network: the switch must change nothing ({st_a.get('big_fill')})")
+    # the reduced copy of the window decides as the real frame does (the depth is meant in real pixels)
+    k = 0.4
+    small = cv2.resize(frame, (int(w * k), int(h * k)), interpolation=cv2.INTER_AREA)
+    eng_s = H.make_engine(E, sil)
+    eng_s.lama_sess = H.LightLama()
+    _, st_s = _quiet(eng_s.process, small, 8, dict(base, speedMode="fast"), render_scale=k)
+    eng_s = H.make_engine(E, sil)
+    eng_s.lama_sess = H.LightLama()
+    _, st_1 = _quiet(eng_s.process, small, 8, dict(base, speedMode="fast"))
+    if not st_s.get("big_fill") or st_s["big_fill"].get("pieces") != 1 or "big_fill" in st_1:
+        bad.append(f"a reduced copy of the frame must decide as the frame does: {st_s.get('big_fill')}; the same copy taken for a frame of its own: {st_1.get('big_fill')}")
+    # the stage cache keeps the two apart: the switch repeats the repair, a second call with the same takes it ready
+    cache: dict = {}
+    fg_raw = np.clip(sil * 255.0, 0, 255).astype(np.uint8)
+    eng_c = H.make_engine(E, sil)
+    eng_c.lama_sess = H.LightLama()
+    for step, on in enumerate((True, False, True, True)):
+        a, sa = _quiet(eng_c.process, frame, 8, dict(base, bigFill=on), cached_fg_raw_1024=fg_raw, stage_cache=cache)
+        b, _ = _quiet(eng_c.process, frame, 8, dict(base, bigFill=on), cached_fg_raw_1024=fg_raw)
+        ready = "heal" in sa.get("reused_stages", [])
+        if not np.array_equal(a, b) or ready != (step == 3) or ("big_fill" in sa) != on:
+            bad.append(f"the stage cache, call {step + 1} (bigFill {on}): same as a fresh computation {np.array_equal(a, b)}, "
+                       f"repair taken ready {ready}, big_fill said {'big_fill' in sa}")
+    report("bigfill", not bad,
+           f"a black curtain at the border, wider at the top than the strip it is looked for in, is marked whole (the former way: {was['top'] * 100:.0f}% of the top); "
+           f"its place gets the wall beside it, continued: {q_on[1]:+.1f} levels against that wall where the stand-in network alone paints {q_off[1]:+.1f}, "
+           f"the dark top {top_on:.0f} beside {top_ref:.0f} (the network: {top_off:.0f}), a shadow band goes on to the border ({band_on * 100:.0f}% of its depth), "
+           f"grain {gr_on * 100:.0f}% of the wall's; {calls_on} tiles instead of {calls_off}; a thin strip stays the network's; the reduced copy decides alike"
+           if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
 def check_haze():
     """
     Smoke and the tools that move the tone (4.13.0, the owner's 0Q5A2507 with the smoke tick and an ordinary preset):
@@ -6201,11 +6554,13 @@ def check_plugin():
 GROUPS = [("convert", check_convert), ("process", check_process), ("stage", check_stage), ("quick", check_quick),
           ("session", check_session),
           ("white", check_white), ("gpu", check_gpu), ("fallback", check_fallback), ("fastwin", check_fastwin),
-          ("cyc", check_cyc), ("dress", check_dress), ("speed", check_speed), ("smoke", check_smoke), ("haze", check_haze),
+          ("cyc", check_cyc), ("depth", check_depth), ("dress", check_dress), ("speed", check_speed), ("smoke", check_smoke),
+          ("haze", check_haze),
           ("empty", check_empty),
           ("format", check_format), ("scene", check_scene), ("stains", check_stains), ("seam", check_seam), ("mask", check_mask),
           ("brush", check_brush),
-          ("dark", check_dark), ("gear", check_gear), ("stands", check_stands), ("shadow", check_shadow), ("undo", check_undo),
+          ("dark", check_dark), ("gear", check_gear), ("stands", check_stands), ("bigfill", check_bigfill),
+          ("shadow", check_shadow), ("undo", check_undo),
           ("exact", check_exact), ("restart", check_restart), ("mix", check_mix), ("sharp", check_sharp),
           ("edge", check_edge), ("line", check_line), ("hair", check_hair),
           ("server", check_server), ("http", check_http),

@@ -15,70 +15,70 @@ const DEFAULT_PRESETS = [
     name: "Студія (Стандарт)",
     color: "#4da3ff",
     builtin: true,
-    cfg: { spots: 75, scuffs: 65, blur: 0, cycCurve: 65, feather: 60, seamOn: true, seam: 85, edge: 70, smokeOn: false, smoke: 80, grain: 90, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
+    cfg: { spots: 75, scuffs: 65, blur: 0, cycCurve: 65, cycDepth: 60, feather: 60, seamOn: true, seam: 85, edge: 70, smokeOn: false, smoke: 80, grain: 90, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
   },
   {
     id: "medium_shot",
     name: "Середній план",
     color: "#59b5ff",
     builtin: true,
-    cfg: { spots: 75, scuffs: 65, blur: 10, cycCurve: 65, feather: 65, seamOn: true, seam: 78, edge: 74, smokeOn: false, smoke: 80, grain: 92, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
+    cfg: { spots: 75, scuffs: 65, blur: 10, cycCurve: 65, cycDepth: 60, feather: 65, seamOn: true, seam: 78, edge: 74, smokeOn: false, smoke: 80, grain: 92, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
   },
   {
     id: "closeup",
     name: "Ближній план",
     color: "#3bc9db",
     builtin: true,
-    cfg: { spots: 62, scuffs: 48, blur: 18, cycCurve: 0, feather: 78, seamOn: false, seam: 0, edge: 84, smokeOn: false, smoke: 80, grain: 94, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: false, dressSmooth: false, dressStrength: 35, cleanPasses: 1 }
+    cfg: { spots: 62, scuffs: 48, blur: 18, cycCurve: 0, cycDepth: 0, feather: 78, seamOn: false, seam: 0, edge: 84, smokeOn: false, smoke: 80, grain: 94, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: false, dressSmooth: false, dressStrength: 35, cleanPasses: 1 }
   },
   {
     id: "wide_shot",
     name: "Дальній план",
     color: "#7c8cff",
     builtin: true,
-    cfg: { spots: 85, scuffs: 78, blur: 0, cycCurve: 65, feather: 55, seamOn: true, seam: 90, edge: 66, smokeOn: false, smoke: 80, grain: 90, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
+    cfg: { spots: 85, scuffs: 78, blur: 0, cycCurve: 65, cycDepth: 60, feather: 55, seamOn: true, seam: 90, edge: 66, smokeOn: false, smoke: 80, grain: 90, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
   },
   {
     id: "lowkey",
     name: "Темний ключ",
     color: "#9d7cff",
     builtin: true,
-    cfg: { spots: 80, scuffs: 55, blur: 0, cycCurve: 65, feather: 65, seamOn: true, seam: 90, edge: 78, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
+    cfg: { spots: 80, scuffs: 55, blur: 0, cycCurve: 65, cycDepth: 0, feather: 65, seamOn: true, seam: 90, edge: 78, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
   },
   {
     id: "lowkey_medium",
     name: "Темний середній план",
     color: "#b190ff",
     builtin: true,
-    cfg: { spots: 72, scuffs: 50, blur: 0, cycCurve: 65, feather: 68, seamOn: true, seam: 80, edge: 82, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
+    cfg: { spots: 72, scuffs: 50, blur: 0, cycCurve: 65, cycDepth: 0, feather: 68, seamOn: true, seam: 80, edge: 82, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
   },
   {
     id: "lowkey_close",
     name: "Темний ближній план",
     color: "#c7a6ff",
     builtin: true,
-    cfg: { spots: 62, scuffs: 45, blur: 0, cycCurve: 0, feather: 78, seamOn: false, seam: 0, edge: 86, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: false, dressSmooth: false, dressStrength: 35, cleanPasses: 1 }
+    cfg: { spots: 62, scuffs: 45, blur: 0, cycCurve: 0, cycDepth: 0, feather: 78, seamOn: false, seam: 0, edge: 86, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: false, dressSmooth: false, dressStrength: 35, cleanPasses: 1 }
   },
   {
     id: "lowkey_wide",
     name: "Темний дальній план",
     color: "#8468e8",
     builtin: true,
-    cfg: { spots: 80, scuffs: 55, blur: 0, cycCurve: 65, feather: 65, seamOn: true, seam: 90, edge: 78, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
+    cfg: { spots: 80, scuffs: 55, blur: 0, cycCurve: 65, cycDepth: 0, feather: 65, seamOn: true, seam: 90, edge: 78, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
   },
   {
     id: "clean_stands",
     name: "Без стійок (AI)",
     color: "#f2a649",
     builtin: true,
-    cfg: { spots: 78, scuffs: 70, blur: 0, cycCurve: 65, feather: 60, seamOn: true, seam: 85, edge: 72, smokeOn: false, smoke: 80, grain: 90, shadow: true, removeStands: true, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
+    cfg: { spots: 78, scuffs: 70, blur: 0, cycCurve: 65, cycDepth: 60, feather: 60, seamOn: true, seam: 85, edge: 72, smokeOn: false, smoke: 80, grain: 90, shadow: true, removeStands: true, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 45, cleanPasses: 1 }
   },
   {
     id: "gentle",
     name: "Делікатний (точки)",
     color: "#e57399",
     builtin: true,
-    cfg: { spots: 60, scuffs: 25, blur: 0, cycCurve: 0, feather: 65, seamOn: false, seam: 0, edge: 85, smokeOn: false, smoke: 85, grain: 95, shadow: true, removeStands: false, master: 90, fracFine: true, fracMed: false, fracLarge: false, dressSmooth: false, dressStrength: 35, cleanPasses: 1 }
+    cfg: { spots: 60, scuffs: 25, blur: 0, cycCurve: 0, cycDepth: 0, feather: 65, seamOn: false, seam: 0, edge: 85, smokeOn: false, smoke: 85, grain: 95, shadow: true, removeStands: false, master: 90, fracFine: true, fracMed: false, fracLarge: false, dressSmooth: false, dressStrength: 35, cleanPasses: 1 }
   }
 ];
 
@@ -140,7 +140,11 @@ const PRESET_DEFAULT_MOVES = [
   // 4.5.0: dust is judged against the noise of each part of the frame; on a dark backdrop 92 marks plain noise
   { id: "lowkeySpots80", presets: ["lowkey"], key: "spots", slider: "gSlSpots", from: 92, to: 80 },
   // 4.5.0: ...and the wall-floor line goes on a dark backdrop as well
-  { id: "lowkeyCyc65", presets: ["lowkey"], key: "cycCurve", slider: "gSlCyc", from: 0, to: 65 }
+  { id: "lowkeyCyc65", presets: ["lowkey"], key: "cycCurve", slider: "gSlCyc", from: 0, to: 65 },
+  // 4.14.0: "Глибина" - the cove of the corner tool is wider on a light backdrop (a preset saved before knows no
+  // such value: that counts as 0). The dark presets stay at 0: there the wider cove carries the pool of light the
+  // person stands in up a black wall.
+  { id: "depth60", presets: ["std", "medium_shot", "wide_shot", "clean_stands"], key: "cycDepth", slider: "gSlDepth", from: 0, to: 60 }
 ];
 const PRESET_SWITCHES = {
   smokeOn: { get: () => smokeEnabled, set: (v) => { smokeEnabled = !!v; } }
@@ -211,6 +215,7 @@ let sessState = {
   panStartY: 0,
   lastDotX: -1,
   hoverClient: null,  // the pointer over the photo, in window pixels: {x, y}; null when it is elsewhere
+  keysAskedMs: 0,     // when the mouse over the photo last asked the keyboard for it (keepKeysInWindow)
   lastDotY: -1,
   strokePoints: [],
   strokeNo: 0,      // counts the strokes of this window: every dot of the trace knows the stroke it belongs to
@@ -266,7 +271,7 @@ let exactJobs = new Set();
 // Custom Drag-Only Sliders
 const ALL_SLIDER_IDS = [
   "dlgSlBlend",
-  "gSlSpots", "gSlHair", "gSlScuffs", "gSlBlur", "gSlMix", "gSlCyc", "gSlFeather",
+  "gSlSpots", "gSlHair", "gSlScuffs", "gSlBlur", "gSlMix", "gSlCyc", "gSlDepth", "gSlFeather",
   "gSlSeam", "gSlEdge", "gSlSmoke", "gSlGrain",
   "gSlDress", "gSlTurbo"
 ];
@@ -278,6 +283,7 @@ const SLIDER_VAL_MAP = {
   gSlBlur: "gValBlur",
   gSlMix: "gValMix",
   gSlCyc: "gValCyc",
+  gSlDepth: "gValDepth",
   gSlFeather: "gValFeather",
   gSlSeam: "gValSeam",
   gSlEdge: "gValEdge",
@@ -295,6 +301,7 @@ const sliderState = {
   gSlBlur: 0,
   gSlMix: 50,
   gSlCyc: 0,
+  gSlDepth: 0,
   gSlFeather: 60,
   gSlSeam: 85,
   gSlEdge: 70,
@@ -548,6 +555,8 @@ function readCurrentConfig() {
     mixOn: mixEnabled,
     mix: getSliderVal("gSlMix"),
     cycCurve: getSliderVal("gSlCyc"),
+    // "Глибина": how much wider the cove of the corner tool is (0 = the cove of the versions before 4.14.0)
+    cycDepth: getSliderVal("gSlDepth"),
     feather: getSliderVal("gSlFeather"),
     seamOn: seamEnabled,
     seam: getSliderVal("gSlSeam"),
@@ -594,6 +603,7 @@ function normalizedPresetConfig(cfg) {
     mixOn: mixEnabled,
     mix: getSliderVal("gSlMix"),
     cycCurve: clampSliderVal("gSlCyc", c.cycCurve ?? 0),
+    cycDepth: clampSliderVal("gSlDepth", c.cycDepth ?? 0),
     feather: clampSliderVal("gSlFeather", c.feather ?? 60),
     seamOn: flag(c.seamOn, true),
     seam: clampSliderVal("gSlSeam", c.seam ?? 85),
@@ -622,6 +632,7 @@ function applyConfig(cfg) {
   setSliderVal("gSlScuffs", c.scuffs);
   setSliderVal("gSlBlur", c.blur);
   setSliderVal("gSlCyc", c.cycCurve);
+  setSliderVal("gSlDepth", c.cycDepth);
   setSliderVal("gSlFeather", c.feather);
   seamEnabled = c.seamOn;
   setSliderVal("gSlSeam", c.seam);
@@ -833,6 +844,9 @@ function updateSliderVisuals() {
       badge.textContent = dressSmoothEnabled ? v + "%" : "Вимк.";
     } else if (id === "gSlHair") {
       badge.textContent = v > 0 ? v + "%" : "Вимк.";
+    } else if (id === "gSlDepth") {
+      // (depth is a property of the corner tool: without the tool it does nothing, and the row says so)
+      badge.textContent = getSliderVal("gSlCyc") > 0 ? (v > 0 ? v + "%" : "Вимк.") : "—";
     } else {
       badge.textContent = v + "%";
     }
@@ -843,6 +857,7 @@ function updateSliderVisuals() {
     el("gBtnSeam").className = "toggle-pill" + (seamEnabled ? " on" : "");
   }
   setSliderDisabled("gSlSeam", !seamEnabled);
+  setSliderDisabled("gSlDepth", getSliderVal("gSlCyc") <= 0);
 
   if (el("gBtnSmoke")) {
     el("gBtnSmoke").textContent = smokeEnabled ? "Увімк." : "Вимк.";
@@ -2044,6 +2059,29 @@ function refreshBrushCursor() {
   if (pt && pt.inside) renderBrushCursorAndDot(pt, false);
 }
 
+// The keys of the big window ("[" and "]", B / E / H, Space, Ctrl + Z ...) reach it only while something inside it
+// holds the keyboard. Nothing saw to that: the keys worked as long as the control clicked last happened to hold
+// it. The owner, 4.13.0: "[" and "]" work in the first window and not when it is opened again - the last thing
+// clicked in the first one is «Застосувати», which is switched off while the next photo is scanned and can hold
+// nothing. A click on the photo did not help either: the photo could not take the keyboard.
+// Now the photo can (tabindex on #dlgViewport) and takes it: when the window opens, when the scan is over, and
+// whenever the mouse is over the photo or pressed on it - unless a name is being typed into a text field.
+// (A host that gives the keyboard to no plain element: the button of the tool in hand takes it, as after a click.)
+function keepKeysInWindow() {
+  if (!sessState.open) return;
+  const vp = el("dlgViewport");
+  if (!vp || typeof vp.focus !== "function") return;
+  const a = document.activeElement;
+  if (a === vp) return;
+  const tag = a && a.tagName;
+  if (tag === "TEXTAREA" || (tag === "INPUT" && String(a.type || "text").toLowerCase() !== "checkbox")) return;
+  try { vp.focus(); } catch (_) {}
+  if (document.activeElement !== vp) {
+    const btn = el(sessState.tool === "pan" ? "dlgToolPan" : sessState.tool === "brush" ? "dlgToolBrush" : "dlgToolEraser");
+    try { if (btn && btn !== a && typeof btn.focus === "function") btn.focus(); } catch (_) {}
+  }
+}
+
 // "[" makes the brush smaller, "]" larger - the keys of Photoshop. Which of the two is this key ("down" / "up"; ""
 // for any other)? The key is told by its place on the keyboard first (e.code): with the Ukrainian layout the same
 // two keys type "х" and "ї" (with the Russian one "х" and "ъ"), and the owner works with that layout. Hosts differ
@@ -2422,7 +2460,7 @@ async function saveCurrentConfigToActivePreset(announce = true) {
 function previewSettingsSignature() {
   const c = readCurrentConfig();
   return JSON.stringify([
-    c.spots, c.scuffs, c.blur, c.cycCurve, c.feather, !!c.seamOn, c.seam, c.edge, !!c.smokeOn, c.smoke, c.grain,
+    c.spots, c.scuffs, c.blur, c.cycCurve, c.cycCurve > 0 ? c.cycDepth : 0, c.feather, !!c.seamOn, c.seam, c.edge, !!c.smokeOn, c.smoke, c.grain,
     !!c.shadow, !!c.removeStands, c.master, !!c.fracFine, !!c.fracMed, !!c.fracLarge, c.cleanPasses, c.speedMode,
     c.strayHair, !!c.mixOn, c.mixOn ? c.mix : 0
   ]);
@@ -3205,6 +3243,7 @@ async function openInteractiveWorkspace() {
       resetZoomFit();
       updateStageVisibility();
       setBtnDisabled(el("dlgBtnApply"), false);
+      keepKeysInWindow();
       updateProgressUI(100, "Готово!", "modal");
       setTimeout(() => { if (!progressCardInUse()) hideProgressUI("modal"); }, 180);
       if (!untouched) requestPreviewRefresh(PREVIEW_DELAY_CLICK_MS, false);
@@ -3222,6 +3261,8 @@ async function openInteractiveWorkspace() {
 
   // Delay layout fit slightly until modal finishes opening
   setTimeout(() => { if (sessState.open) resetZoomFit(); }, 60);
+  // ...and the photo takes the keyboard (see keepKeysInWindow); asked again later, for a host that is slow to show the window
+  [60, 400, 1500].forEach((ms) => setTimeout(keepKeysInWindow, ms));
 
   try {
     await dlg.uxpShowModal({
@@ -3975,6 +4016,11 @@ function initEvents() {
     const pt = getNormalizedStagePoint(e.clientX, e.clientY);
     // where the pointer is, for whatever redraws the ring without a mouse move (refreshBrushCursor)
     sessState.hoverClient = pt && pt.inside ? { x: e.clientX, y: e.clientY } : null;
+    // the mouse is over the photo: its keys must arrive (asked for at most twice a second)
+    if (pt && pt.inside && Date.now() - sessState.keysAskedMs > 500) {
+      sessState.keysAskedMs = Date.now();
+      keepKeysInWindow();
+    }
     if (sessState.isDrawing && pt) {
       sessState.strokePoints.push({ x: pt.x, y: pt.y, norm: true });
       renderBrushCursorAndDot(pt, true);
@@ -4377,6 +4423,7 @@ function initEvents() {
   // (Pointer events: a host that reports the right button only through them is served as well. Where both kinds
   //  of events come, the second one finds the drag already started and changes nothing.)
   vp.addEventListener("pointerdown", (e) => {
+    if (sessState.open) keepKeysInWindow();
     if (!sessState.open || e.button !== 2 || sessState.isPanning) return;
     startPan(e);
   });
@@ -4390,6 +4437,7 @@ function initEvents() {
 
   vp.addEventListener("mousedown", (e) => {
     if (!sessState.open) return;
+    keepKeysInWindow();  // (the press itself gives the photo nothing: its default is cancelled below)
     // Close open popovers when clicking viewport
     ["dlgPresetsPopover", "dlgGearPopover", "dlgInfoPopover"].forEach((id) => {
       if (el(id)) el(id).classList.remove("visible");
@@ -4431,9 +4479,12 @@ function initEvents() {
     zoomBy(e.deltaY < 0 ? ZOOM_WHEEL_STEP : 1 / ZOOM_WHEEL_STEP, e.clientX - r.left - r.width * 0.5, e.clientY - r.top - r.height * 0.5);
   });
 
-  // Keyboard shortcuts inside modal
-  document.addEventListener("keydown", (e) => {
-    if (!sessState.open) return;
+  // Keyboard shortcuts inside modal. One press may be heard at three places - the window itself, the document, the
+  // host's window (which of them a host tells depends on where the keyboard focus is) - and counts once.
+  let lastKeyDown = null;
+  const onWindowKeyDown = (e) => {
+    if (!sessState.open || e === lastKeyDown) return;
+    lastKeyDown = e;
     // Ctrl + Z: the last mask edit back; Ctrl + Shift + Z or Ctrl + Y: forward again. The key is told by its place
     // on the keyboard (e.code), so the Ukrainian layout works too. Inside a text field the keys keep their own
     // meaning; a checkbox that was clicked last does not swallow them.
@@ -4476,14 +4527,18 @@ function initEvents() {
     } else if (e.key === "h" || e.key === "H" || e.key === "р" || e.key === "Р") {
       setActiveTool("pan");
     }
-  });
-
-  document.addEventListener("keyup", (e) => {
+  };
+  const onWindowKeyUp = (e) => {
     if (!sessState.open) return;
-    if (e.code === "Space") {
+    if (e.code === "Space" && sessState.spaceDown) {
       sessState.spaceDown = false;
       setActiveTool(sessState.tool);
     }
+  };
+  [el("retouchModal"), document, typeof window !== "undefined" ? window : null].forEach((where) => {
+    if (!where || typeof where.addEventListener !== "function") return;
+    where.addEventListener("keydown", onWindowKeyDown);
+    where.addEventListener("keyup", onWindowKeyUp);
   });
 
   // Bottom Bar: Fractions + Auto + Zoom + Apply/Cancel

@@ -204,10 +204,13 @@ function el() { return null; }
 function getSliderVal(id) { return sliders[id] ?? 0; }
 function setSliderVal(id, v) { sliders[id] = v; return v; }
 function setIdleUnloadSec() {}
-function readCurrentConfig() { return { cycCurve: getSliderVal("gSlCyc"), spots: getSliderVal("gSlSpots"), smokeOn: smokeEnabled }; }
+function readCurrentConfig() {
+  return { cycCurve: getSliderVal("gSlCyc"), cycDepth: getSliderVal("gSlDepth"), spots: getSliderVal("gSlSpots"), smokeOn: smokeEnabled };
+}
 function applyConfig(cfg) {
   const c = cfg || {};
   setSliderVal("gSlCyc", c.cycCurve ?? 0);
+  setSliderVal("gSlDepth", c.cycDepth ?? 0);
   setSliderVal("gSlSpots", c.spots ?? 75);
   smokeEnabled = c.smokeOn !== undefined ? !!c.smokeOn : false;
 }
@@ -220,14 +223,16 @@ module.exports = function runMoves(presets, snapshot, times) {
   appliedPresetMoves = [];
   activePresetId = "std";
   setSliderVal("gSlCyc", 0);
+  setSliderVal("gSlDepth", 0);
   setSliderVal("gSlSpots", 75);
   smokeEnabled = true;
   if (snapshot) applySettingsSnapshot(snapshot);
   const changed = [];
   for (let i = 0; i < (times || 1); i++) changed.push(applyPresetDefaultMoves());
-  const cyc = {}, spots = {}, smoke = {};
-  presetsList.forEach((p) => { cyc[p.id] = p.cfg.cycCurve; spots[p.id] = p.cfg.spots; smoke[p.id] = p.cfg.smokeOn; });
-  return { changed, cyc, spots, smoke, slider: getSliderVal("gSlCyc"), spotsSlider: getSliderVal("gSlSpots"), smokeNow: smokeEnabled, saved: buildSettingsSnapshot() };
+  const cyc = {}, spots = {}, smoke = {}, depth = {};
+  presetsList.forEach((p) => { cyc[p.id] = p.cfg.cycCurve; spots[p.id] = p.cfg.spots; smoke[p.id] = p.cfg.smokeOn; depth[p.id] = p.cfg.cycDepth; });
+  return { changed, cyc, spots, smoke, depth, slider: getSliderVal("gSlCyc"), depthSlider: getSliderVal("gSlDepth"), spotsSlider: getSliderVal("gSlSpots"),
+           smokeNow: smokeEnabled, saved: buildSettingsSnapshot() };
 };
 `;
 const modMoves = { exports: null };
@@ -250,13 +255,16 @@ const defaultsThen = (() => {
 const IDS_440 = ["std", "medium_shot", "closeup", "wide_shot", "lowkey", "smoke", "clean_stands", "gentle"];
 const FLOOR_440 = ["std", "medium_shot", "wide_shot", "clean_stands"];      // "Циклорама" 65 since 4.4.0
 const SMOKE_OFF = IDS_440.filter((id) => id !== "smoke");                     // smoke protection off since 4.5.0
+// (a preset saved before 4.14.0 has no word of "Глибина")
+const noDepth = (cfg) => { const c = Object.assign({}, cfg); delete c.cycDepth; return c; };
 const older = (cycOf) => defaultsThen.filter((p) => IDS_440.includes(p.id)).map((p) => Object.assign({}, p, {
-  cfg: Object.assign({}, p.cfg, { cycCurve: cycOf(p.id), smokeOn: true }, p.id === "lowkey" ? { spots: 92 } : {})
+  cfg: Object.assign(noDepth(p.cfg), { cycCurve: cycOf(p.id), smokeOn: true }, p.id === "lowkey" ? { spots: 92 } : {})
 }));
 const as430 = () => older(() => 0);
 const as440 = () => older((id) => (FLOOR_440.includes(id) ? 65 : 0));
 const mine = { id: "my_1", name: "Мій", builtin: false, cfg: { cycCurve: 0, spots: 92, smokeOn: true } };
-const ALL_MOVES = ["cyc65", "smokeOff", "lowkeySpots80", "lowkeyCyc65"];
+const MOVES_4130 = ["cyc65", "smokeOff", "lowkeySpots80", "lowkeyCyc65"];
+const ALL_MOVES = MOVES_4130.concat(["depth60"]);
 const cycNow = Object.fromEntries(IDS_440.map((id) => [id, FLOOR_440.includes(id) || id === "lowkey" ? 65 : 0]));
 const smokeNow = Object.fromEntries(IDS_440.map((id) => [id, id === "smoke"]));
 const same = (got, want) => Object.keys(want).every((id) => got[id] === want[id]);
@@ -312,6 +320,25 @@ moveCase("values the user chose in the dark preset stay, on the controls too",
 r = runMoves(as440(), { schemaVersion: 5, activePresetId: "std", cfg: { cycCurve: 65, spots: 75, smokeOn: true }, presetMoves: ["cyc65"] }, 2);
 moveCase("the smoke switch of the active preset goes off once; switched on again by the user it stays on",
   r.changed[0] === true && r.changed[1] === false && r.smokeNow === false && r.slider === 65, r);
+
+// 4.13.0 -> 4.14.0: "Глибина" (the wider cove of the corner tool) is 60 in the light presets with a floor
+const LIGHT_FLOOR = ["std", "medium_shot", "wide_shot", "clean_stands"];
+const as4130 = () => defaultsNow.map((p) => Object.assign({}, p, { cfg: noDepth(p.cfg) }));
+const depthNow = Object.fromEntries(defaultsNow.map((p) => [p.id, LIGHT_FLOOR.includes(p.id) ? 60 : undefined]));
+r = runMoves(as4130().concat([mine]), { schemaVersion: 5, activePresetId: "wide_shot", cfg: { cycCurve: 65, spots: 85, smokeOn: false }, presetMoves: MOVES_4130 }, 2);
+moveCase("presets of 4.13.0: the light presets with a floor get depth 60, the dark and the close ones and the user's own nothing; once",
+  r.changed[0] === true && r.changed[1] === false && same(r.depth, depthNow) && r.depth.my_1 === undefined && r.saved.presetMoves.includes("depth60"), r);
+moveCase("...and the slider of the active light preset follows; nothing else of it moves", r.depthSlider === 60 && r.slider === 65 && r.spotsSlider === 85 && r.smokeNow === false, r);
+r = runMoves(as4130(), { schemaVersion: 5, activePresetId: "lowkey", cfg: { cycCurve: 65, spots: 80, smokeOn: false }, presetMoves: MOVES_4130 });
+moveCase("the slider of an active dark preset stays at 0", r.depthSlider === 0 && r.depth.lowkey === undefined && r.depth.std === 60, r);
+const deep = as4130();
+deep.find((p) => p.id === "std").cfg.cycDepth = 25;
+r = runMoves(deep, { schemaVersion: 5, activePresetId: "std", cfg: { cycCurve: 65, cycDepth: 25 }, presetMoves: MOVES_4130 });
+moveCase("a depth the user chose stays, in the preset and on the slider", r.depth.std === 25 && r.depthSlider === 25 && r.depth.wide_shot === 60, r);
+r = runMoves(defaultsNow, { schemaVersion: 5, activePresetId: "std", cfg: { cycCurve: 65, cycDepth: 0 }, presetMoves: ALL_MOVES });
+moveCase("depth put back to 0 by the user after 4.14.0 stays at 0", r.changed[0] === false && r.depthSlider === 0, r);
+moveCase("presets_defaults.json: exactly the light presets with a floor carry depth 60, every other preset 0",
+  defaultsNow.every((p) => p.cfg.cycDepth === (LIGHT_FLOOR.includes(p.id) ? 60 : 0)), defaultsNow.map((p) => [p.id, p.cfg.cycDepth]));
 
 const FLOOR_NOW = ["std", "medium_shot", "wide_shot", "clean_stands", "lowkey", "lowkey_medium", "lowkey_wide"];
 moveCase("presets_defaults.json: exactly the presets with a floor carry \"Циклорама\" 65",

@@ -1481,6 +1481,11 @@ html, body {
 }
 
 /* Viewport & Photo Stage */
+/* The photo holds the keyboard of the window (main.js, keepKeysInWindow): that is not shown with a frame around it. */
+.r4m-viewport:focus {
+  outline: none;
+}
+
 .r4m-viewport {
   flex: 1;
   position: relative;
