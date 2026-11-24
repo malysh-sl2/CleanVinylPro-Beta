@@ -152,6 +152,44 @@ written here and in the repository.
   over the rows below; the time line read «17 с · AI-заливка: 38 пл. за 5,2 с (відеокарта)». No option
   card was shown. 4.12.0 answers these messages. He did not write «зливай».
 
+- **2026-11-24, on 4.12.0** (one message, seven files). Verbatim:
+  «[]  працює але я начимаю і небачу як змінилась коки не посуну мишку поправ.давай пресет з димом
+  приберемо він поганий.прибрати стійки винеси біля всіх галочок у меню. любу галочку нажимаю перераховує
+  що треба. коли нажимаю перераховати може не треба щоб усе перераховувало а тільки те що треба ( я не
+  розумію може треба все зроби як краще )».
+  Read as: (1) `[` and `]` work in Photoshop, but the ring of the brush keeps its size until the mouse
+  moves; (2) remove the preset «Зйомка з димом», it is bad (he does not say why; he works with «Дальній
+  план» and the smoke tick); (3) put «Прибирати стійки» next to the other ticks at the top; (4) every
+  tick must recompute what has to be recomputed; (5) must «Перерахувати» compute everything? - decide.
+  Files (the dates are in their EXIF):
+  - two screenshots of 4.12.0 in Photoshop, the settings open (asked for in reply #20). They show: the
+    captions of the check boxes have the right size now; THE ROWS OF THE SETTINGS ARE SQUEEZED - every
+    slider lies on the caption of the row below, two check boxes run into each other (the list is a flex
+    column with a height limit, and Photoshop shrinks its items); the pill «Мікс» and the button
+    «↻ Перерахувати» look right; his window is about 1560 x 960 px, the display scaled by about 1.6;
+    «Останній розрахунок: 28 с · AI-заливка: 125 пл. за 15 с (відеокарта)» on the smoke frame, «10 с ·
+    12 пл. за 1,5 с» on the other; preset «Дальній план», smoke 80 %, «Прибирати стійки» ticked, «Мікс»
+    ticked at 50 %, «Детальний перегляд» unticked;
+  - `0Q5A2507 копия.jpg` and `0Q5A2507 копия 2.jpg`: the files of 2026-11-23 again (as shot; the result of
+    4.11.0). `0Q5A2507 копи.jpg`: THE RESULT OF 4.12.0, saved 27 s after the first screenshot, so with
+    its settings. The cloud is kept, the curtain is gone, the wall has 0.39 of its grain (the mixer
+    brush). Wrong in it: a band above the right cloud is 2-6 levels darker and ends sharply where the
+    smoke map begins (the grain there is untouched); the lit strip of floor between two smoke zones is
+    brushed while the smoke around it is not; a thin line across the floor at 0.70 of the height stays;
+  - `0Q5A3534 копия2.jpg` - A NEW FRAME AS SHOT (3741 x 5612: a pregnant woman in a red dress and a man
+    kneeling, dark grey wall lit from the top right, a black curtain over the left tenth of the frame, a
+    light stand at the right border, hard cast shadows on the floor that run to both borders) - and
+    `0Q5A3534 копия.jpg`, its result (4.12.0, «Дальній план», «Прибирати стійки» ticked). Mind the names:
+    here «копия2» is the frame and «копия» the result. In it: the stand is gone; in place of the curtain
+    there is a LIGHTER column with soft edges and a dark block left at the top (the AI fill of an area
+    this large - the real LaMa; it cannot be seen here); the edges of the two cast shadows are smeared
+    and a piece of the shadow under the man's leg is gone (they counted as gear and were "removed");
+    76 % of the frame is pixel for pixel the frame as shot, the whole wall included - NO MIXER BRUSH in
+    this result although «Мікс» is ticked in the screenshot taken eight minutes earlier (asked in reply
+    #21; here the brush works on that wall).
+  He said nothing about any of these results. No option card was shown. 4.13.0 answers this message. He
+  did not write «зливай».
+
 ## 2. What is in the repository
 
 | Path | What it is | Rule |
@@ -818,6 +856,85 @@ second plugin next to the installed one and lose his presets.
     on a light wall); the walks toggle the mixer brush with random numbers of their own; the window
     test has 106 scenarios, the settings test 63 cases; `tests/try_defects.py` holds the 45 defects of
     4.12.0.
+
+- **4.13.0** — five wishes for the panel and four findings from his own results, after his message of
+  2026-11-24 (section 1). Decided alone, no option card.
+  - **Panel.** (a) The ring of the brush: `refreshBrushCursor()` draws it again where the pointer was last
+    seen over the photo (`sessState.hoverClient`, window pixels; null off the photo) - after
+    `adjustBrushSize` (the keys and the two buttons), after a zoom and after `setActiveTool` (B / E / H).
+    (b) The built-in preset «Зйомка з димом» is gone: `RETIRED_PRESET_IDS = ["smoke"]`,
+    `dropRetiredPresets()` at the start of the panel, in `syncPresetsFromServer` and in
+    `applySettingsBackup`; by id only - a preset of the user's own has an id `usr_...` and stays whatever
+    its name; when it was the active one, the first preset of the list takes its place WITH its values.
+    `presets_defaults.json` has 10 presets. (c) «Прибирати стійки» is the pill `dlgWrapStands` /
+    `dlgChkStands` on the top bar; the row `gChkRemoveStands` of the settings is gone. Still a value of the
+    preset. (d) Every tick and switch that changes the frame calls `recomputeExactNow()`: smoke (since
+    4.12.0), the stands, the mixer brush (tick and switch), the shadows, the seam switch. Sliders, the
+    fraction buttons, the passes and a preset click still give the light refresh; the clothing tick keeps
+    its own instant preview. (e) After an exact recompute `recomputeSummary(stats)` says in the hint line
+    how long it took and what was taken ready (`reused_stages`: `heal` / `detect` / `fg`); the time line
+    of the settings says «AI-заливку взято готову» when the fill did not run (it used to keep the time
+    of the run before). (f) The list of the settings: `.gear-scroll > *` and every kind of row by name
+    get `flex-shrink: 0` (Photoshop gives a flex item no minimum height, so a list longer than its box
+    was squeezed: his two screenshots); `fitGearList()` gives the list the height the window has
+    (window height - 360, between 300 and 760 px) when the settings are opened.
+  - **«Перерахувати» computes only what changed** - it always did (the stage cache), he could not see it.
+    Measured here on `0Q5A3534` with the stand-in networks, the window open (9.8 s): nothing changed
+    1.0 s; the mixer brush 0.7-1.0 s; stains 3.4 s; the corner tool on / off 6.1 s (it changes what the
+    seam search may take, so the fill runs again); the shadows 8.1 s, the stands 9.0 s, smoke 8.7 s
+    (they change the maps: everything but the person). Nothing was changed in the server for this.
+  - **What "remove the stands" takes away** (`GEAR_TAKE_DEPTH`, `GEAR_PERSON_REACH`, `GEAR_ALONG_PERSON`,
+    `_edge_blobs_along_person`, `take_mask`). The removal mask was every dark pixel (L < 72) inside the
+    strip of ANY group of strong edges that counts as gear, and a group that leaves the frame over the
+    left, right or top border always counts. On `0Q5A3534` two such groups are the hard edges of the
+    couple's own cast shadows: repainted strips, a smeared edge, a bite out of a shadow. Now, of a gear
+    group, only what is thin and dark is taken - (closing with `GEAR_BODY_K` - L) / (closing + 6) at
+    least 0.62, asked per pixel, with a rim of 9 px - and only in a group that does not run along the
+    person (half of its strip within 3 % of the long side of the silhouette). `border_dark` (black and
+    large) is taken as before. Measured: the pole of his stand 0.84; the strip along the shadow beside a
+    shoe 0.06; the drawn shadows of the check 0.58 and 0.80, the drawn stand 0.92. On `0Q5A3534` the
+    removal mask is the curtain and the stand (6.4 % of the frame); on `0Q5A2507` the curtain. The legacy
+    regime (`gearBody` false) is unchanged.
+  - **Gear that stays is left alone with the tick on** (`GEAR_KEPT_MAX`, `gear_kept` in `lines_out` of
+    `_compute_protection_maps_small`, `_gear_protection`; the record of the stage `maps` has a seventh
+    element, the analysis dict a key `gear_kept_s`). With `removeStands` the protection map used to be
+    ZERO for every stage - an inheritance of v3.2.1: gear was either repainted or worked on like
+    backdrop. Now a gear group of which less than 10 % is marked for removal stays protected. On
+    `0Q5A3534`: the dust search marked a row of specks along the edge of the big shadow (0.82 % of that
+    zone); with the protection 0.04 %.
+  - **A corner seen through smoke only is no corner** (`CORNER_IN_SMOKE`, `smoke_all_s` of
+    `_corner_line_of_frame`). The line is looked for on the backdrop in view, and thin smoke counts as
+    backdrop there. On `0Q5A2507` here (GrabCut silhouette, the JPEG) the finder took a line at 0.696 of
+    the height, seen on a quarter of the width in the haze (score 0.31, coverage 0.25), and the corner
+    tool moved the tone of the smoke by up to 36 levels with hard-edged shapes between the clouds. His
+    own result does NOT show that - on his PC the finder decided otherwise (another silhouette, the
+    document instead of its JPEG) - so this is a defect found here, not one he saw. Rule: of the columns
+    of the found line that are in view (the finder's `valid`), fewer than 60 % may lie in the map of
+    everything protected as smoke; otherwise no corner. A corner in plain view beside a cloud is still
+    found; a corner under a thin haze over a part of it still goes (`check_smoke`, 38 % of the line).
+    The price: a real corner that shows only through haze stays (the seam search may still take a thin
+    line of it: on his frame it now marks the piece at the left, x 0-0.28, y 0.70).
+    A first rule ("thick smoke on 30 % of the line", commit `d513f64`) was dropped: it gave up a corner
+    in plain view beside a cloud.
+  - **The corner tool fades out towards thick smoke** (`CORNER_SMOKE_FADE` = 3 % of the height; the gate
+    of `_apply_cyclorama_curve`). It stopped at the outline of the cloud at full strength.
+  - **The stains stage and the mixer brush fade out before the smoke map** (`SMOKE_TONE_HALO` = 2.5 % of
+    the long side, `_smoke_with_halo`: full at the edge of the map, a third at 2.5 %, nothing at 5 %).
+    Read from his result: the band above the cloud is the stains stage evening the outermost haze,
+    which the map does not hold; the mixer brush was kept off the same band by the SHADOW map (the wall
+    next to a bright cloud is "darker than the floor reference"), which is why the grain is untouched
+    there. That reading could not be reproduced here (the smoke map differs a little on the JPEG); the
+    drawn frame of `check_haze` shows the mechanism. Side effect, wanted: the small open islands between
+    smoke zones are no longer brushed (the limit of 4.12.0). Side effect, known: with the smoke switch
+    on, every patch that is taken for smoke - also a false one - keeps the tone tools 5 % of the frame
+    away (the frame of `check_mask`: the layer covers 80 % instead of 88 %).
+  - NOT changed: the smoke tick is still a value of the preset (every built-in preset switches it off; a
+    series with smoke needs a preset of his own - the manual and the reply say how). The lighter column
+    that the real LaMa left in place of the curtain of `0Q5A3534` cannot be seen here and was not
+    worked on.
+  - Checks: groups `stands` and `haze` are new; `check_smoke`: the thick cloud WITHOUT the user's word is
+    marked for removal on 42 % (70 %), since only what is thin and dark is; the window test has 115
+    scenarios, the settings test 68 cases; `tests/try_defects.py` holds the 43 defects of 4.13.0.
 
 ## 3. Current state — update this at the end of every session
 

@@ -2290,10 +2290,10 @@ function sayInWindow(text) {
   if (el("gTipBox") && gearPop && gearPop.classList.contains("visible")) el("gTipBox").textContent = text;
 }
 
-// The list of the settings takes the height that the window has for it. The style sheet gives it 360 px, which a
-// window of the default size has; the list is about 650 px long, and a window that was made taller has the room
-// (the owner's is about 960 px high: nothing has to be scrolled there). Where the size of the window cannot be
-// read, the 360 px stay.
+// The list of the settings takes the height that the window has for it. The style sheet gives it 360 px, about
+// what a window of the default size has; the list is about 650 px long, and a window that was made taller has
+// more room (the owner's is about 960 px high: the list gets 600 px there and hardly scrolls). Where the size of
+// the window cannot be read, the 360 px stay.
 const GEAR_LIST_AROUND = 360;  // px of the window that are not the list: the two bars, the head, the note, the tip box
 const GEAR_LIST_MIN = 300;
 const GEAR_LIST_MAX = 760;

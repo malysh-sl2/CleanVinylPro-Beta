@@ -4287,7 +4287,8 @@ def check_gear():
 def _stands_frame(w=1500, h=2000):
     """
     What "Прибирати стійки" may take away, and what it may not (4.13.0). On a plain studio frame:
-      stand    a black stand with a foot - thin and dark: goes;
+      stand    a black stand with a foot - thin and dark (and black): goes;
+      boom     a dark-grey pole (78 % of the light gone) - thin and dark, but not black: goes by its depth alone;
       curtain  a black curtain at the left border - black and large: goes;
       hem      the hard-edged shadow of the person that runs to the left border (55 % of the light gone) - wide: stays;
       leg      a thin shadow that runs to the right border (60 % gone) - thin, but no black thing: stays;
@@ -4314,11 +4315,12 @@ def _stands_frame(w=1500, h=2000):
         leg=hard(line((0.56, 0.905), (1.0, 0.985), 40)),
         arm=hard(line((0.5891, 0.34), (0.6378, 0.66), 22)),          # (parallel to the side of the dress, 45 px off it)
         stand=hard(np.maximum(line((0.93, 0.28), (0.93, 0.80), 12), line((0.93, 0.80), (0.88, 0.83), 10))),
+        boom=hard(line((0.70, 0.04), (0.70, 0.22), 12)),
         curtain=hard(poly([(0.0, 0.0), (0.085, 0.0), (0.085, 0.50), (0.0, 0.56)])),
         flag=hard(poly([(0.78, 0.0), (1.0, 0.0), (1.0, 0.09), (0.78, 0.09)])),
     )
     f = img.astype(np.float32)
-    for name, gone in (("hem", 0.55), ("leg", 0.60), ("arm", 0.80), ("stand", 0.94), ("curtain", 0.97), ("flag", 0.55)):
+    for name, gone in (("hem", 0.55), ("leg", 0.60), ("arm", 0.80), ("stand", 0.94), ("boom", 0.78), ("curtain", 0.97), ("flag", 0.55)):
         f *= (1.0 - gone * parts[name])[..., None]
     f[person] = img[person]
     grown = lambda m, k: cv2.dilate(m.astype(np.uint8), np.ones((k, k), np.uint8)) > 0  # noqa: E731
@@ -4328,7 +4330,8 @@ def _stands_frame(w=1500, h=2000):
     inner[20:-20, 20:-20] = True
     away = ~grown(person, 161)
     zones = {"hem": edge_of(parts["hem"]) & away & inner, "leg": (parts["leg"] > 0.5) & away & inner, "arm": parts["arm"] > 0.5,
-             "stand": parts["stand"] > 0.5, "curtain": shrunk(parts["curtain"] > 0.5, 31), "flag": edge_of(parts["flag"]) & inner}
+             "stand": parts["stand"] > 0.5, "boom": parts["boom"] > 0.5, "curtain": shrunk(parts["curtain"] > 0.5, 31),
+             "flag": edge_of(parts["flag"]) & inner}
     parts["person"] = person
     return np.clip(f, 0, 255).astype(np.uint8), sil, zones, parts
 
@@ -4342,7 +4345,7 @@ def check_stands():
     bad = []
     w, h = 1500, 2000
     frame, sil, zones, parts = _stands_frame(w, h)
-    stays, goes = ("hem", "leg", "arm", "flag"), ("stand", "curtain")
+    stays, goes = ("hem", "leg", "arm", "flag"), ("stand", "boom", "curtain")
 
     def maps(**consts):
         eng = H.make_engine(E, sil)
@@ -4354,13 +4357,13 @@ def check_stands():
         return {k: float(up(keep)[z].mean()) for k, z in zones.items()}, {k: float(up(rem)[z].mean()) for k, z in zones.items()}
 
     said = lambda d: ", ".join(f"{k} {d[k] * 100:.0f}%" for k in zones)  # noqa: E731
-    # the frame is what it should be: all six count as gear, and the old way marks five of them for removal
+    # the frame is what it should be: the shadows count as gear, and the former way marks them for removal
     kept, old = maps(GEAR_TAKE_DEPTH=-1.0, GEAR_ALONG_PERSON=2.0)
-    if min(kept[k] for k in ("hem", "leg", "arm", "stand", "curtain")) < 0.9 or min(old[k] for k in ("hem", "leg", "arm", "stand", "curtain")) < 0.6 or old["flag"] < 0.2:
+    if min(kept[k] for k in ("hem", "leg", "arm")) < 0.9 or min(old[k] for k in ("hem", "leg", "arm")) < 0.6 or old["flag"] < 0.2:
         bad.append(f"the frame of this check must be one where the former way marks the shadows for removal: gear {said(kept)}; marked {said(old)}")
     _, now = maps()
     if max(now[k] for k in stays) > 0.0 or min(now[k] for k in goes) < 0.95:
-        bad.append(f"marked for removal must be the stand and the curtain, nothing of the shadows and of the grey panel: {said(now)}")
+        bad.append(f"marked for removal must be the stand, the dark-grey pole and the curtain, nothing of the shadows and of the grey panel: {said(now)}")
     # each of the two rules is needed: the depth alone lets the black shadow along the person go, "not along the
     # person" alone the edges of the wide things
     _, by_depth = maps(GEAR_ALONG_PERSON=2.0)
@@ -4386,13 +4389,26 @@ def check_stands():
         bad.append(f"with the tick the stand must go: {was:.0f} in the frame, {after:.0f} after, the backdrop around it {wall:.0f}")
     if max(moved[False].values()) > 0.0:
         bad.append("without the tick none of it is touched: " + ", ".join(f"{k} {v:.2f}" for k, v in moved[False].items()))
+    # Where the stand stood, the backdrop is backdrop again: the stages that follow work there like on the wall
+    # around (the protection of what was taken away is gone - no sleeve of old grain around the place). Asked with
+    # the mixer brush at full strength.
+    brushed = gray(_comp(frame, _quiet(H.make_engine(E, sil).process, frame, 8, dict(base, removeStands=True, mixOn=True, mix=100))[0]))
+    fine = lambda g: g - cv2.GaussianBlur(g, (0, 0), 1.5)  # noqa: E731
+    grain_left = lambda z: float(np.sqrt((fine(brushed)[z] ** 2).mean()) / np.sqrt((fine(res[True])[z] ** 2).mean()))  # noqa: E731
+    wall_far = np.zeros((h, w), bool)
+    wall_far[int(h * 0.30):int(h * 0.55), int(w * 0.72):int(w * 0.84)] = True
+    sleeve, open_wall = grain_left(around), grain_left(wall_far)
+    if open_wall > 0.6 or sleeve > open_wall + 0.15:
+        bad.append(f"where the stand stood the mixer brush must work as on the wall around: {sleeve * 100:.0f}% of the grain left next to the place, "
+                   f"{open_wall * 100:.0f}% on the open wall")
     # the depth of the shadows, measured over each of them whole
     for name in ("hem", "leg", "arm"):
         inside = cv2.erode((parts[name] > 0.9).astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
         if abs(float(res[True][inside].mean()) - float(g0[inside].mean())) > 0.3:
             bad.append(f"the shadow '{name}' changed its depth: {g0[inside].mean():.1f} -> {res[True][inside].mean():.1f}")
     report("stands", not bad,
-           f"'remove the stands' takes the stand ({was:.0f} -> {after:.0f}, backdrop {wall:.0f}) and marks the black curtain; the hard shadow of a hem "
+           f"'remove the stands' takes the stand ({was:.0f} -> {after:.0f}, backdrop {wall:.0f}), a dark-grey pole and marks the black curtain; the place of "
+           f"the stand is brushed like the wall around ({sleeve * 100:.0f}% / {open_wall * 100:.0f}% of the grain left); the hard shadow of a hem "
            f"that leaves the frame, a thin shadow, a nearly black shadow along the person and the edge of a grey panel stay as shot "
            f"(the former way marked {old['hem'] * 100:.0f}% / {old['leg'] * 100:.0f}% / {old['arm'] * 100:.0f}% / {old['flag'] * 100:.0f}% of them); "
            "without the tick nothing is touched" if not bad else "wrong:\n  " + "\n  ".join(bad))
