@@ -198,7 +198,7 @@ written here and in the repository.
 | `tests/baseline_v321/` | six files of the ORIGINAL program, v3.2.1, byte for byte: `engine.py`, `server.py`, `setup_launcher.py`, `manifest.json`, `install_windows.bat`, `pyvenv.cfg` | **Never modify.** They are the reference the checks compare with. |
 | `CleanVinylPro2.zip` | the download for the owner: the folder `CleanVinylPro2`, zipped | never edit by hand; rebuild with `tools/build_zip.py` |
 | `tests/` | self-checks that need no GPU, no models and no Photoshop; `tests/README.md` (Ukrainian) describes them | keep them passing |
-| `tools/` | `build_ccx.py`, `build_zip.py`, `serve_download.py` | |
+| `tools/` | `build_ccx.py`, `build_zip.py`, `serve_download.py`; `owner_frames.py` - a look at the owner's frames and results (section 4) | |
 | `README.md` | the owner's own instruction (Ukrainian): download, install, how to continue with an agent | keep it true |
 
 The original program (folder `CleanVinylPro/`, 7,812 files, 666 MB with a committed Windows `.venv`) was removed
@@ -938,12 +938,12 @@ second plugin next to the installed one and lose his presets.
 
 ## 3. Current state — update this at the end of every session
 
-_Last updated: by the agent of the first session, after releasing 4.12.0 (the answer to his messages of
-2026-11-23 on 4.11.0)._
+_Last updated: by the agent of the first session, after releasing 4.13.0 (the answer to his message of
+2026-11-24 on 4.12.0)._
 
-- **Released:** 4.12.0, tag `cvp2-v4.12.0`, as a pre-release. Direct download:
-  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.12.0/CleanVinylPro2.zip`
-- **Owner's progress:** 4.2.0 to 4.11.0 have been installed and work on his PC (program in
+- **Released:** 4.13.0, tag `cvp2-v4.13.0`, as a pre-release. Direct download:
+  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.13.0/CleanVinylPro2.zip`
+- **Owner's progress:** 4.2.0 to 4.12.0 have been installed and work on his PC (program in
   `D:\Plugin Photoshop\CleanVinylPro2`, models in `D:\model AI fotoshop`, LaMa on `CUDAExecutionProvider`,
   Python 3.12.10). So the `.bat` files, the installer, the GPU, the real models and the panel HAVE run on
   Windows. The old program (`D:\CleanVinylPro`) is removed from his PC. His report on 4.9.0 (2026-11-22,
@@ -957,60 +957,95 @@ _Last updated: by the agent of the first session, after releasing 4.12.0 (the an
   words (reply #19). On 4.11.0 (2026-11-23, section 1) he sent his first frame with real smoke, its
   result and a screenshot, and a list of wishes; 4.12.0 answers them (reply #20). In that result thin
   smoke and the floor were kept, the top of the thick cloud was painted over. One computation took 17 s
-  there, 38 tiles in 5.2 s on the video card. **He has not reported on 4.12.0 yet.**
+  there, 38 tiles in 5.2 s on the video card. On 4.12.0 (2026-11-24, section 1): `[` and `]` DO reach
+  the window in Photoshop; the captions of the check boxes have their size (the `<label>` rewrite
+  worked), but the rows of the settings are squeezed into one another; the pill «Мікс» and the button on
+  the bottom bar look right; thick smoke is kept on `0Q5A2507` with «Прибирати стійки» ticked and the
+  mixer brush works there (0.39 of the grain on the wall at 50 %); a computation takes 28 s on the smoke
+  frame (125 tiles in 15 s) and 10 s on `0Q5A3534`. He works with the preset «Дальній план», the smoke
+  tick at 80 %, «Прибирати стійки» and «Мікс» ticked, «Детальний перегляд» unticked. 4.13.0 answers that
+  message (reply #21). **He has not reported on 4.13.0 yet.**
   The path to the plugin list of Creative Cloud (Stock & Marketplace → Plugins → Manage plugins → the three
   dots → Uninstall; the same list opens from Photoshop with Plugins → Manage Plugins) is in section 6 of
   the manual since 4.8.0. Whether his Creative Cloud shows these names in English or in Ukrainian is not
   known.
-- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (44 results in
-  1,679 s; 106 scenarios of the panel test and 63 cases of the settings test among them) on
-  2026-11-23 (the clock of the sandbox), with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4, with
+- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (46 results in
+  2,054 s; 115 scenarios of the panel test and 68 cases of the settings test among them) on
+  2026-11-24 (the clock of the sandbox), with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4, with
   nothing running next to it and nothing of the program changed after it.
-  Deliberate defects for what is new in 4.12.0 (`tests/try_defects.py`), put in one by one: 45 (21 in the
-  engine - 5 for the group `smoke`, 13 for `mix`, 3 for `restart` - and 24 in the panel). All are caught
-  by the checks as they are now, each by the check of the rule it breaks. They ran in a copy of the tree
-  after the last change of the engine, the panel and the checks: 45 in one run of 1,066 s.
-  Holes found while 4.12.0 was built, all closed:
-  - the first run of the list let four defects of the mixer brush through:
-    - "the grain never goes under a third": the check read `MIX_GRAIN_MIN` from the engine and set its
-      limits around it - so it followed the constant down to 0. A check names its limit itself;
-    - "the shadow is not brushed over": the check asked the engine's own shadow map where the shadow
-      is. On the blotchy test frame that map marks specks all over the backdrop and the edge of the
-      stand; the texture measure was ruled by such edges and stayed at 97 % with the shadow brushed
-      flat. The zone is the ellipse that the harness draws now, the measure is the mean change (0.0
-      against 4.4 levels);
-    - "nothing of the person in the smooth copy" and "a plane, not a plain average": with the
-      transition next to the person at 60, as in every other question, the brush hardly comes within
-      60 px of the person, and neither defect moved the tone there by more than 0.4 levels. They are
-      asked with the transition at 0 and a fall of light of 60 levels across the frame now (0.4 as
-      built, 1.1 and 4.2 with the defects), the plain average also around the shadow (+0.3 / +1.3).
-      Ask a rule where it is hardest for the program, not at the values of the other questions;
-  - a limit of that check had been made to pass by shortening its zone, and the change of the engine
-    made just before got the credit (see «4.12.0» in section 2). The defect run showed it: the old
-    code passed as well. Before writing what a change cured, put the old code back and measure it
-    with the check as it finally is;
-  - the walks of `quick` and `session`: new keys in the list of `_mutate` shift every walk, and a
-    shifted walk met an old difference of the «Маска» picture («Known limits»). New keys draw from a
-    generator of their own;
-  - a second helper named `key` in the window test replaced the first without a word; the four small
-    harnesses of `plugin_settings.test.js` need every new global of `main.js` (section 4, «Traps»);
-  - "a soft pole stays gear" is shown by `check_smoke` on the LIGHT wall only: on the dark wall
-    another rule keeps the pole gear whatever the direction rule says.
-  Not in the list, because no check here can tell: the person is kept out of the brush twice (by the
-  ramp and by the last line of `_mix_brush_small`; either alone is enough); how fast the real server
-  lets go of a run (the stand-in fill is over at once).
-  Holes found while earlier versions were built are told in the history of this file (4.11.0: at
-  `07e8995`; 4.10.0: at `64700aa`; 4.9.0: at `78a08b8`; 4.8.0: at `0f4cb46`). Their lessons stay rules:
-  read the reason after "<-" of every caught defect - when it names another rule than the one the
-  defect breaks, the check that should have noticed is too weak (the runner shows only the FIRST failed
-  rule: put the defect in by hand and read the whole list when in doubt); read the NUMBERS in that
-  reason; a new rule can empty an older scenario, so run ALL the defects again after the last change;
-  a new key of `_clean_signature` needs its own question, not the walk; and a defect that changes
-  nothing visible does not belong in the list.
-  The runners of earlier versions are gone or replaced (4.11.0: 30 defects, in the history at
-  `07e8995`; 4.10.0: 54, at `64700aa`; 4.9.0: 35, at `78a08b8`; 4.8.0: 71, at `0f4cb46`; 4.7.0: 29, at
-  `c3be3ed`; 4.6.0: 34, at `50bae15`; 4.5.0: 71 and 4.4.0: 41, never committed); their checks are still
-  in `tests/run_checks.py`.
+  Deliberate defects for what is new in 4.13.0 (`tests/try_defects.py`), put in one by one: 43 (15 in the
+  engine - 8 for the group `stands`, 7 for `haze` - and 28 in the panel). All are caught by the checks
+  as they are now, each by the check of the rule it breaks. They ran in a copy of the tree after the
+  last change of the engine, the panel and the checks: 43 in one run of 391 s.
+  Holes found while 4.13.0 was built, all closed:
+  - the first run of the list let one defect through: "with the tick everything stays protected, the
+    stand too". The AI fill takes the stand away whatever the protection says, so nothing differed in
+    the frame; what the protection is for shows only with a tone stage on - the place of the stand
+    keeps its old grain under the mixer brush, a sleeve. `check_stands` asks with the mixer brush now;
+  - "the black stand is not taken away (the depth is asked too high)" was caught at 93 % against a
+    limit of 95 %: a black stand is taken by the rule for what is black and large as well, so the
+    depth rule had nothing of its own in the frame. A dark-grey pole was added (0 % with the defect);
+  - "the black curtain is not taken away" was caught by the line that says "the frame of this check
+    must be ..." - that line asked the former way for the curtain too, and the defect broke the former
+    way with it. A line of that kind may ask only for what makes the frame worth testing (here: the
+    shadows are marked by the former way);
+  - "the rim around the smoke is ten times / three times as wide" did not show the rule "the tone tools
+    are back a little further off": a wide Gaussian over a small smoke zone makes a WEAK rim, so a
+    constant that is too large behaves like none (the first was caught by "faded out next to the map",
+    the second by nothing). The defect that shows the rule is a rim that does not fade;
+  - the smoke preset in the two panel tests: the lists of earlier versions were built from the built-in
+    presets of today, so they lost the preset together with the program. They carry their own copy of
+    it now (`SMOKE_PRESET_412`); a test of a migration must own the data of the version it migrates
+    from.
+  Not in the list, because no check here can tell: `GEAR_KEPT_MAX` (in the drawn frame every group is
+  taken whole or not at all); the corner finder of the green preview (`preview_action_mask`) without
+  `smoke_all_s` (the preview is compared with the cleaning on frames without smoke only); the ring of
+  the brush after a zoom (jsdom lays nothing out: the ring has one size at every zoom there).
+  Holes found while earlier versions were built are told in the history of this file (4.12.0: at
+  `8b620e2`; 4.11.0: at `07e8995`; 4.10.0: at `64700aa`; 4.9.0: at `78a08b8`; 4.8.0: at `0f4cb46`). Their
+  lessons stay rules: read the reason after "<-" of every caught defect - when it names another rule
+  than the one the defect breaks, the check that should have noticed is too weak (the runner shows only
+  the FIRST failed rule: put the defect in by hand and read the whole list when in doubt); read the
+  NUMBERS in that reason; a new rule can empty an older scenario, so run ALL the defects again after the
+  last change; a check names its limit itself and does not read it from the engine; a rule is asked
+  where it is hardest for the program, not at the values of the other questions; before writing what a
+  change cured, put the old code back and measure it with the check as it finally is; a new key of
+  `_clean_signature` needs its own question, not the walk; and a defect that changes nothing visible
+  does not belong in the list.
+  The runners of earlier versions are gone or replaced (4.12.0: 45 defects, in the history at `8b620e2`;
+  4.11.0: 30, at `07e8995`; 4.10.0: 54, at `64700aa`; 4.9.0: 35, at `78a08b8`; 4.8.0: 71, at `0f4cb46`;
+  4.7.0: 29, at `c3be3ed`; 4.6.0: 34, at `50bae15`; 4.5.0: 71 and 4.4.0: 41, never committed); their
+  checks are still in `tests/run_checks.py`.
+- **Decided by the agent alone for 4.13.0** (no option card; change it if he says otherwise):
+  - EVERY tick and switch that changes the frame recomputes in full, with the progress card (he: "any
+    tick"); sliders, the fraction buttons, the passes and a preset click still give the light refresh;
+  - «Перерахувати» was left as it is - it computes only what changed already; what is new is that the
+    window SAYS so (the hint line, the time line). A press with nothing changed still asks the server
+    (1 s here): a button that refuses would be worse than a short run;
+  - «Прибирати стійки» was MOVED to the top bar (he: "take it out to the ticks"), not copied: the row of
+    the settings is gone. It stays a value of the preset («Без стійок (AI)» ticks it);
+  - the smoke preset was removed without a replacement; the smoke tick stays a value of the preset, so
+    every built-in preset - and the automatic one at every opening - switches it off. For a series with
+    smoke he is told to save a preset of his own with the tick on and to untick «Авто». If he finds that
+    a nuisance: make the tick a setting of the user like «Мікс» (see `mixEnabled`);
+  - when the removed preset was the active one, «Студія (Стандарт)» takes its place with its values;
+  - the four changes of the engine (section 2, «4.13.0») - he asked for none of them; they come from his
+    two results. Each makes the program do LESS: fewer things removed, a corner left alone, the tone
+    tools kept away from smoke;
+  - the list of the settings takes up to 760 px of the window's height.
+- **Not run in Photoshop yet (4.13.0):** all of it. In particular:
+  - whether the rows of the settings keep their height now (`flex-shrink: 0`), whether the list
+    scrolls, and whether `fitGearList()` reads the height of the window there (`offsetHeight` of
+    `r4mShell`); if the rows are still squeezed, the next thing to try is a list that is no flex box;
+  - the look of the pill «Стійки» and whether the top bar still fits in a window of the default width
+    (1020 px: five pills, the blend slider, the preset button);
+  - whether the ring of the brush is redrawn at once after a key (the position comes from the last
+    mouse event; a host that sends no mouse-move events while the pointer rests would still be fine);
+  - how long the recomputes after a tick take on his PC, and whether the sentence in the hint line is
+    read at all;
+  - the band above the cloud of `0Q5A2507`: gone or not (it could not be reproduced here);
+  - what the real fill makes of the curtain of `0Q5A3534` now that the shadows are not marked any more
+    (the lighter column is the fill's own doing).
 - **Decided by the agent alone for 4.12.0** (no option card; change it if he says otherwise):
   - the smoke tick and the smoke switch of the settings recompute IN FULL, with the progress card (he
     asked for "a recompute"; every other control still gives its light refresh, and the button is at
@@ -1284,13 +1319,17 @@ _Last updated: by the agent of the first session, after releasing 4.12.0 (the an
   when he wants it. Merge it when he writes that or when the session ends (section 6). If `main` already
   contains this file, that has happened. Merging also removes the folder `CleanVinylPro/` from `main`.
 
-### Open questions (ask when he reports on 4.12.0)
+### Open questions (ask when he reports on 4.13.0)
 
-- New with 4.12.0: is the thick smoke of `0Q5A2507` kept now with «Прибирати стійки…» on, and is the
-  curtain still removed? Is the mixer brush what he does by hand - is 50 % right, should it go over the
-  shadows or closer to the person? Do `[` and `]` work in Photoshop? Do the captions of the check boxes
-  look right now (a screenshot of the settings was asked for)? Does a change during the bar restart the
-  run fast enough? More frames with smoke were asked for.
+- New with 4.13.0 (asked in reply #21): a screenshot of the open settings - are the rows apart now? Was
+  «Мікс» ticked when he applied `0Q5A3534` (its result shows no mixer brush at all, the wall is pixel for
+  pixel the frame)? Does the lighter column in place of the curtain of that frame bother him (then: a
+  fill for large areas at the border that continues the tone of the wall)? Why was the smoke preset
+  bad - only said as "bad"?
+- From 4.12.0, answered by his files of 2026-11-24: thick smoke is kept and the curtain removed; `[` and
+  `]` work; the captions have their size. Not answered: is the mixer brush what he does by hand - is
+  50 % right, should it go over the shadows or closer to the person? Does a change during the bar
+  restart the run fast enough? More frames with smoke were asked for (he sent the same one again).
 
 - From 4.11.0: he sent a frame with real smoke (dark grey wall, not a light one) and its result: thin
   smoke and the floor were kept, thick smoke was not (4.12.0). Not answered: what share the note names
@@ -1428,9 +1467,20 @@ _Last updated: by the agent of the first session, after releasing 4.12.0 (the an
   - the far, soft rim of a shadow that the shadow map no longer counts (40-110 px outside the drawn
     shadow of the test frame, 3 levels deep) is flattened like any curved tone: a ring 0.5-1.0 levels
     darker around the shadow;
-  - with the smoke tick on, a floor under haze is smoke and is not brushed (5 % of the floor of
-    `0Q5A2507` is open); the small open islands between the smoke are brushed (tone moved by up to 1.3
-    levels there) while the haze around them keeps all its grain.
+  - with the smoke tick on, a floor under haze is smoke and is not brushed. Up to 4.12.0 the small open
+    islands between the smoke were brushed; since 4.13.0 the tone tools stay 5 % of the long side away
+    from everything that is taken for smoke (`SMOKE_TONE_HALO`) - also from a false patch of "smoke" on
+    a frame without any, while the switch is on.
+- «Прибирати стійки» (4.13.0) takes away what is thin and dark (62 % of the light gone against the
+  backdrop on both sides, thinner than 3 % of the long side) and what is black and large. It leaves: a
+  wide thing that is not black (the back of a softbox, a grey flag) - before, the strip along its edge
+  was repainted, which removed nothing; a light-coloured or chrome stand (as ever: only dark pixels are
+  taken); anything that runs along the person within 3 % of the long side for half its length - also
+  a stand that stands that close. It still takes: a thin hard shadow that is darker than 62 % and lies
+  away from the person (a limb's shadow in harsh light on a light floor). The AI fill of a large area
+  is the fill's own: on `0Q5A3534` the real LaMa put a lighter column in place of the curtain.
+- A wall-floor corner that shows only through haze stays (4.13.0, `CORNER_IN_SMOKE`): the corner tool
+  works when the line is seen on clean backdrop along at least 40 % of what is in view of it.
 - The «Маска» view of a LIGHT refresh is not the exact one when «Сліди взуття» stands very low (found
   when the random walk of `quick` changed its steps, as old as the light refresh): at 6 % the layer
   covers 11 % of the frame in the light picture and 67 % in the exact one; at 20 % and at 65 % the mask
@@ -1635,6 +1685,20 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
 - Useful numbers for a tone stage: what is left of a known stain pattern; depth of shadows before and after;
   growth of the gradient of the low-passed frame (new edges); change of a row profile across a slope of light.
 - Do not open a picture in the same step that writes it: the viewer shows the previous file.
+- `tools/owner_frames.py` (since 4.13.0) does what had to be programmed anew after every replacement of
+  the sandbox: `dates` (the EXIF date of each file - which is the frame and which the result, and how
+  long after a screenshot it was saved; he names his files alike and re-sends old ones), `zones FRAME
+  RESULT OUT.jpg` (where HIS result differs from the frame: a map of the grain that is left - dark where
+  the mixer brush or a repaint went - and a map of the tone that moved; the share of pixels that are
+  exactly the frame), `silhouette FRAME POLYGON.json OUT.npy` (GrabCut from a polygon drawn by eye, in
+  shares of the frame - MediaPipe is not installed here any more, and plain GrabCut from a rectangle took
+  half a wall for a person standing before a dark backdrop) and `run FRAME SILHOUETTE.npy "preset"
+  OUT.jpg key=value ... [RESULT]` (the engine here with what the panel sends). To place the corners of
+  the polygon, look at the frame with a grid of tenths drawn over it.
+  What comparing his result with a run here is good for: the maps (smoke, gear, shadow, what is marked,
+  where the corner is). They are close to his, not equal - on `0Q5A2507` the corner finder decided
+  otherwise here than on his PC - so a defect seen only here is a defect of the program all the same,
+  but not one he saw; say so. What the real fill paints into a large area cannot be seen here at all.
 - Brush strokes on his frames are made by script, the way `check_brush` in `tests/run_checks.py` does it:
   `r = eng.start_session(image, 8, params)`, then
   `eng.edit_session_mask(r["session_id"], "stroke", [{"x": 0.5, "y": 0.5, "norm": 1}, ...], radius, erase,
@@ -1646,6 +1710,12 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
 
 ### Traps already paid for
 
+- Memory: 3.9 GB. A run of several check groups, a probe on a 21-megapixel frame and the window test at the
+  same time ended with the checks killed (exit code 137, no message, the groups after it never ran - the
+  log just stops). Heavy things one at a time; after a kill, run the missing groups again.
+- A constant that a check wants to set on ONE engine (`setattr(eng, "SMOKE_TONE_HALO", 0.0)`) must be
+  read through `self` in the engine. A `@classmethod` / `@staticmethod` that reads `cls.X` or
+  `CleanVinylEngine.X` does not see it, and the check then compares the program with itself.
 - The quick preview must be built by `_session_proxies_quick`. A preview made from a twice-reduced frame
   changed the person; do not go back to it.
 - A rule about what a run does (for example "a corner that the selection holds only partly is left alone")
