@@ -4284,6 +4284,262 @@ def check_gear():
            "a shadow edge is not taken for smoke" if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
+def _stands_frame(w=1500, h=2000):
+    """
+    What "Прибирати стійки" may take away, and what it may not (4.13.0). On a plain studio frame:
+      stand    a black stand with a foot - thin and dark: goes;
+      curtain  a black curtain at the left border - black and large: goes;
+      hem      the hard-edged shadow of the person that runs to the left border (55 % of the light gone) - wide: stays;
+      leg      a thin shadow that runs to the right border (60 % gone) - thin, but no black thing: stays;
+      arm      a thin shadow along the person, nearly black (80 % gone): stays, because it runs along the person;
+      flag     a dark-grey panel in the top right corner (55 % gone) - wide: its edge stays as it is.
+    Returns (frame, silhouette 1024, zones: name -> bool map of where each is asked about, parts: float maps).
+    """
+    img, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=31)
+    person = cv2.resize(sil, (w, h), interpolation=cv2.INTER_LINEAR) > 0.5
+
+    def line(p0, p1, thick):
+        m = np.zeros((h, w), np.float32)
+        cv2.line(m, (int(p0[0] * w), int(p0[1] * h)), (int(p1[0] * w), int(p1[1] * h)), 1.0, thick, cv2.LINE_AA)
+        return m
+
+    def poly(pts):
+        m = np.zeros((h, w), np.float32)
+        cv2.fillPoly(m, [np.array([(int(x * w), int(y * h)) for x, y in pts], np.int32)], 1.0, cv2.LINE_AA)
+        return m
+
+    hard = lambda m: cv2.GaussianBlur(m, (0, 0), 1.5)  # noqa: E731
+    parts = dict(
+        hem=hard(poly([(0.0, 0.845), (0.47, 0.895), (0.47, 0.940), (0.0, 0.965)])),
+        leg=hard(line((0.56, 0.905), (1.0, 0.985), 40)),
+        arm=hard(line((0.5891, 0.34), (0.6378, 0.66), 22)),          # (parallel to the side of the dress, 45 px off it)
+        stand=hard(np.maximum(line((0.93, 0.28), (0.93, 0.80), 12), line((0.93, 0.80), (0.88, 0.83), 10))),
+        curtain=hard(poly([(0.0, 0.0), (0.085, 0.0), (0.085, 0.50), (0.0, 0.56)])),
+        flag=hard(poly([(0.78, 0.0), (1.0, 0.0), (1.0, 0.09), (0.78, 0.09)])),
+    )
+    f = img.astype(np.float32)
+    for name, gone in (("hem", 0.55), ("leg", 0.60), ("arm", 0.80), ("stand", 0.94), ("curtain", 0.97), ("flag", 0.55)):
+        f *= (1.0 - gone * parts[name])[..., None]
+    f[person] = img[person]
+    grown = lambda m, k: cv2.dilate(m.astype(np.uint8), np.ones((k, k), np.uint8)) > 0  # noqa: E731
+    shrunk = lambda m, k: cv2.erode(m.astype(np.uint8), np.ones((k, k), np.uint8)) > 0  # noqa: E731
+    edge_of = lambda m: grown(m > 0.5, 9) & ~shrunk(m > 0.5, 9)  # noqa: E731
+    inner = np.zeros((h, w), bool)
+    inner[20:-20, 20:-20] = True
+    away = ~grown(person, 161)
+    zones = {"hem": edge_of(parts["hem"]) & away & inner, "leg": (parts["leg"] > 0.5) & away & inner, "arm": parts["arm"] > 0.5,
+             "stand": parts["stand"] > 0.5, "curtain": shrunk(parts["curtain"] > 0.5, 31), "flag": edge_of(parts["flag"]) & inner}
+    parts["person"] = person
+    return np.clip(f, 0, 255).astype(np.uint8), sil, zones, parts
+
+
+def check_stands():
+    """
+    "Прибирати стійки" (removeStands) takes away what can be taken away as a whole - see GEAR_TAKE_DEPTH of
+    engine.py. Up to 4.12.0 it repainted the strip along every edge that counted as gear: on the owner's 0Q5A3534
+    the hard edges of the couple's own cast shadows.
+    """
+    bad = []
+    w, h = 1500, 2000
+    frame, sil, zones, parts = _stands_frame(w, h)
+    stays, goes = ("hem", "leg", "arm", "flag"), ("stand", "curtain")
+
+    def maps(**consts):
+        eng = H.make_engine(E, sil)
+        for name_c, value_c in consts.items():
+            setattr(eng, name_c, value_c)
+        fg, core = eng._clean_fg_mask(np.clip(sil * 255, 0, 255).astype(np.uint8), w, h, 70.0)
+        keep, rem, _, _ = eng._compute_protection_maps_small(frame, fg, core, 80.0, False, True, smoke_auto=True, gear_body=True, smoke_faint=True)
+        up = lambda m: cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR) > 100  # noqa: E731
+        return {k: float(up(keep)[z].mean()) for k, z in zones.items()}, {k: float(up(rem)[z].mean()) for k, z in zones.items()}
+
+    said = lambda d: ", ".join(f"{k} {d[k] * 100:.0f}%" for k in zones)  # noqa: E731
+    # the frame is what it should be: all six count as gear, and the old way marks five of them for removal
+    kept, old = maps(GEAR_TAKE_DEPTH=-1.0, GEAR_ALONG_PERSON=2.0)
+    if min(kept[k] for k in ("hem", "leg", "arm", "stand", "curtain")) < 0.9 or min(old[k] for k in ("hem", "leg", "arm", "stand", "curtain")) < 0.6 or old["flag"] < 0.2:
+        bad.append(f"the frame of this check must be one where the former way marks the shadows for removal: gear {said(kept)}; marked {said(old)}")
+    _, now = maps()
+    if max(now[k] for k in stays) > 0.0 or min(now[k] for k in goes) < 0.95:
+        bad.append(f"marked for removal must be the stand and the curtain, nothing of the shadows and of the grey panel: {said(now)}")
+    # each of the two rules is needed: the depth alone lets the black shadow along the person go, "not along the
+    # person" alone the edges of the wide things
+    _, by_depth = maps(GEAR_ALONG_PERSON=2.0)
+    _, by_person = maps(GEAR_TAKE_DEPTH=-1.0)
+    if by_depth["arm"] < 0.9 or max(by_depth[k] for k in ("hem", "leg", "flag")) > 0.0:
+        bad.append(f"the depth rule alone: the shadows that are no black things stay, the nearly black one along the person does not: {said(by_depth)}")
+    if by_person["arm"] > 0.0 or min(by_person[k] for k in ("hem", "leg")) < 0.6:
+        bad.append(f"'not along the person' alone: only the shadow along the person stays: {said(by_person)}")
+
+    # the result
+    base = dict(H.STD, speedMode="fast", scuffs=0, blur=0, cycCurve=0, seamOn=False, smokeOn=False)
+    gray = lambda im: im.astype(np.float32).mean(axis=2)  # noqa: E731
+    res = {on: gray(_comp(frame, _quiet(H.make_engine(E, sil).process, frame, 8, dict(base, removeStands=on))[0])) for on in (True, False)}
+    g0 = gray(frame)
+    moved = {on: {k: float(np.abs(res[on] - g0)[z].mean()) for k, z in zones.items()} for on in (True, False)}
+    if max(moved[True][k] for k in stays) > 0.3:
+        bad.append("with the tick the shadows and the grey panel must stay as they were shot: changed by "
+                   + ", ".join(f"{k} {moved[True][k]:.2f}" for k in stays) + " levels")
+    st = zones["stand"]
+    around = cv2.dilate(st.astype(np.uint8), np.ones((61, 61), np.uint8)).astype(bool) & ~cv2.dilate(st.astype(np.uint8), np.ones((31, 31), np.uint8)).astype(bool)
+    was, after, wall = float(g0[st].mean()), float(res[True][st].mean()), float(np.median(res[True][around]))
+    if (after - was) < 0.6 * (wall - was):
+        bad.append(f"with the tick the stand must go: {was:.0f} in the frame, {after:.0f} after, the backdrop around it {wall:.0f}")
+    if max(moved[False].values()) > 0.0:
+        bad.append("without the tick none of it is touched: " + ", ".join(f"{k} {v:.2f}" for k, v in moved[False].items()))
+    # the depth of the shadows, measured over each of them whole
+    for name in ("hem", "leg", "arm"):
+        inside = cv2.erode((parts[name] > 0.9).astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
+        if abs(float(res[True][inside].mean()) - float(g0[inside].mean())) > 0.3:
+            bad.append(f"the shadow '{name}' changed its depth: {g0[inside].mean():.1f} -> {res[True][inside].mean():.1f}")
+    report("stands", not bad,
+           f"'remove the stands' takes the stand ({was:.0f} -> {after:.0f}, backdrop {wall:.0f}) and marks the black curtain; the hard shadow of a hem "
+           f"that leaves the frame, a thin shadow, a nearly black shadow along the person and the edge of a grey panel stay as shot "
+           f"(the former way marked {old['hem'] * 100:.0f}% / {old['leg'] * 100:.0f}% / {old['arm'] * 100:.0f}% / {old['flag'] * 100:.0f}% of them); "
+           "without the tick nothing is touched" if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
+def check_haze():
+    """
+    Smoke and the tools that move the tone (4.13.0, the owner's 0Q5A2507 with the smoke tick and an ordinary preset):
+    a wall-floor line seen through smoke only is no corner; beside a thick cloud the corner tool fades out; the
+    stains stage and the mixer brush fade out before they reach the smoke map (see CORNER_IN_SMOKE,
+    CORNER_SMOKE_FADE and SMOKE_TONE_HALO of engine.py).
+    """
+    bad = []
+    w, h = 1500, 2000
+    img, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=21)
+    person = cv2.resize(sil, (w, h), interpolation=cv2.INTER_LINEAR) > 0.5
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+
+    def noise(seed_n, sigma):
+        n = cv2.GaussianBlur(np.random.default_rng(seed_n).standard_normal((h, w)).astype(np.float32), (0, 0), sigma)
+        return n / float(n.std())
+
+    def oval(cx, cy, rx, ry, soft):
+        m = np.zeros((h, w), np.float32)
+        cv2.ellipse(m, (int(w * cx), int(h * cy)), (int(w * rx), int(h * ry)), 0, 0, 360, 1.0, -1)
+        return cv2.GaussianBlur(m, (0, 0), soft)
+
+    def thick(zone):   # thick smoke with strong soft edges (the cloud of check_smoke)
+        return 90.0 * cv2.GaussianBlur(zone / (1.0 + np.exp(-6.0 * noise(5, 14.0))), (0, 0), 3.0)
+
+    def drawn(extra):
+        f = img.astype(np.float32) + extra[..., None]
+        f[person] = img[person]
+        return np.clip(f, 0, 255).astype(np.uint8)
+
+    def maps(frame):
+        eng = H.make_engine(E, sil)
+        fg, core = eng._clean_fg_mask(np.clip(sil * 255, 0, 255).astype(np.uint8), w, h, 70.0)
+        lines = {}
+        sm = eng._compute_protection_maps_small(frame, fg, core, 80.0, True, True, smoke_auto=True, gear_body=True, smoke_faint=True, lines_out=lines)[2]
+        up = lambda m: cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR) > 100  # noqa: E731
+        return up(sm), up(lines["smoke"])
+
+    def after(frame, consts=None, **over):
+        eng = H.make_engine(E, sil)
+        for name_c, value_c in (consts or {}).items():
+            setattr(eng, name_c, value_c)
+        out, stats = _quiet(eng.process, frame, 8, dict(H.STD, speedMode="fast", smokeAuto=True, smokeFaint=True, smokeOn=True, smoke=80,
+                                                        spots=0, seamOn=False, **over))
+        return _comp(frame, out), stats
+
+    def corner_left(res):   # the steepest change across the wall-floor corner, left of the person (levels per pixel)
+        g = res[:, int(0.05 * w):int(0.30 * w)].astype(np.float32).mean(axis=(1, 2))
+        g = cv2.GaussianBlur(g.reshape(-1, 1), (0, 0), 3).ravel()
+        return float(np.abs(np.gradient(g))[int(0.62 * h) - 40:int(0.62 * h) + 40].max())
+
+    tone = lambda a, b: cv2.GaussianBlur((a - b).mean(axis=2), (0, 0), 6.0)  # noqa: E731
+
+    # 1. The corner lies behind a thick cloud on one side of the person and under a thin haze on the other: what
+    #    is in view of it is seen through smoke only. The corner tool leaves the frame alone.
+    cloud_env, haze_env = oval(0.80, 0.62, 0.16, 0.10, 30), oval(0.17, 0.62, 0.17, 0.13, 25)
+    behind = drawn(thick(cloud_env) + 2.0 * noise(7, 22.0) * haze_env)
+    sm_all, sm_thick = maps(behind)
+    haze = (haze_env > 0.3) & ~person
+    if float(sm_all[haze_env > 0.6].mean()) < 0.7 or float(sm_thick[haze_env > 0.6].mean()) > 0.05 or float(sm_thick[cloud_env > 0.6].mean()) < 0.9:
+        bad.append(f"the frame of this check must have a thin haze ({sm_all[haze_env > 0.6].mean() * 100:.0f}% of it smoke, "
+                   f"{sm_thick[haze_env > 0.6].mean() * 100:.0f}% thick) and a thick cloud ({sm_thick[cloud_env > 0.6].mean() * 100:.0f}% thick)")
+    ref, _ = after(behind, scuffs=0, cycCurve=0)
+    res, stats = after(behind, scuffs=0, cycCurve=65)
+    moved_now = float(np.abs(tone(res, ref))[haze].max())
+    res_old, stats_old = after(behind, dict(CORNER_IN_SMOKE=2.0), scuffs=0, cycCurve=65)
+    moved_old = float(np.abs(tone(res_old, ref))[haze].max())
+    if stats_old.get("corner_row") is None or moved_old < 3.0:
+        bad.append(f"the frame of this check must be one where the former way finds a line through the haze and bends the tone there: "
+                   f"corner {stats_old.get('corner_row')}, the haze moved by {moved_old:.1f} levels")
+    if stats.get("corner_row") is not None or moved_now > 0.0 or not np.array_equal(res, ref):
+        bad.append(f"a line seen through smoke only is no corner: corner {stats.get('corner_row')}, the haze moved by {moved_now:.1f} levels")
+
+    # 2. The corner in plain view beside a thick cloud: found, removed where it is in view, and the correction
+    #    fades out towards the cloud instead of ending at its outline.
+    beside = drawn(thick(oval(0.88, 0.62, 0.10, 0.10, 25)))
+    _, thick_b = maps(beside)
+    off_cloud = cv2.distanceTransform((~thick_b).astype(np.uint8), cv2.DIST_L2, 5)
+    rows = (np.abs(yy - 0.62 * h) < 0.03 * h) & ~person
+    ref_b, _ = after(beside, scuffs=0, cycCurve=0)
+    res_b, stats_b = after(beside, scuffs=0, cycCurve=65)
+    d_b = np.abs(tone(res_b, ref_b))
+    at_rim, far = float(d_b[rows & (off_cloud >= 1) & (off_cloud < 10)].max()), float(d_b[rows & (off_cloud >= 120) & (off_cloud < 240)].max())
+    res_nf, _ = after(beside, dict(CORNER_SMOKE_FADE=1e-6), scuffs=0, cycCurve=65)
+    rim_nf = float(np.abs(tone(res_nf, ref_b))[rows & (off_cloud >= 1) & (off_cloud < 10)].max())
+    left_b = corner_left(res_b)
+    if stats_b.get("corner_row") is None or abs(float(stats_b["corner_row"]) - 0.62) > 0.01 or left_b > 0.15:
+        bad.append(f"a corner in plain view beside a thick cloud must still go: corner {stats_b.get('corner_row')}, {corner_left(beside):.2f} -> {left_b:.2f} levels/px left of the person")
+    if far < 5.0 or rim_nf < 3.0:
+        bad.append(f"the frame of this check must show the fade: the corner tool moves the tone by {far:.1f} levels along the corner away from the "
+                   f"cloud, and by {rim_nf:.1f} at its outline without the fade")
+    if at_rim > 0.5:
+        bad.append(f"towards thick smoke the corner tool must fade out: it moves the tone by {at_rim:.1f} levels right at the outline of the cloud "
+                   f"({far:.1f} away from it; {rim_nf:.1f} at the outline without the fade)")
+
+    # 3. The haze goes on beyond its map: a cloud whose texture the search finds, in a glow without texture that
+    #    reaches further. The stains stage and the mixer brush fade out before the map.
+    core = oval(0.78, 0.30, 0.10, 0.08, 20)
+    glow = np.exp(-(((xx - 0.78 * w) / (0.20 * w)) ** 2 + ((yy - 0.30 * h) / (0.16 * h)) ** 2))
+    hazy = drawn(3.0 * noise(5, 22.0) * core + 7.0 * glow)
+    sm_h, _ = maps(hazy)
+    off_map = cv2.distanceTransform((~sm_h).astype(np.uint8), cv2.DIST_L2, 5)
+    top = (yy < 0.55 * h) & ~person
+    rim, well_off = top & (off_map >= 2) & (off_map < 50), top & (off_map >= 50) & (off_map < 100)
+    if float(sm_h[core > 0.6].mean()) < 0.8 or float(sm_h.mean()) > 0.10 or int(rim.sum()) < 20000:
+        bad.append(f"the frame of this check: the map must hold the core of the cloud ({sm_h[core > 0.6].mean() * 100:.0f}%) and little else "
+                   f"({sm_h.mean() * 100:.1f}% of the frame)")
+
+    def grain(a):
+        g = a.astype(np.float32).mean(axis=2)
+        return g - cv2.GaussianBlur(g, (0, 0), 1.5)
+
+    def near_map(consts):
+        ref_h, _ = after(hazy, consts, scuffs=0, cycCurve=0)
+        stains_h, _ = after(hazy, consts, scuffs=78, cycCurve=0)
+        mix_h, _ = after(hazy, consts, scuffs=0, cycCurve=0, mixOn=True, mix=100)
+        left_g = lambda z: float(np.sqrt((grain(mix_h)[z] ** 2).mean()) / np.sqrt((grain(ref_h)[z] ** 2).mean()))  # noqa: E731
+        return float(np.abs(tone(stains_h, ref_h))[rim].mean()), left_g(top & (off_map >= 2) & (off_map < 20)), left_g(well_off)
+
+    stains_now, grain_now, grain_off = near_map(None)
+    stains_old, grain_old, _ = near_map(dict(SMOKE_TONE_HALO=0.0))
+    if stains_old < 0.3 or grain_old > 0.7:
+        bad.append(f"the frame of this check must be one where the former way works right up to the map: the stains stage moves the tone at its "
+                   f"rim by {stains_old:.2f} levels, the mixer brush leaves {grain_old * 100:.0f}% of the grain there")
+    if stains_now > 0.15 or grain_now < 0.9:
+        bad.append(f"next to the smoke map the tone tools must have faded out: the stains stage moves the tone by {stains_now:.2f} levels there "
+                   f"(without the rim: {stains_old:.2f}), the mixer brush leaves {grain_now * 100:.0f}% of the grain ({grain_old * 100:.0f}%)")
+    if grain_off > 0.75:
+        bad.append(f"...and be back a little further off: the mixer brush leaves {grain_off * 100:.0f}% of the grain 50-100 px from the map")
+    # a frame without smoke: nothing of this exists
+    eng = H.make_engine(E, sil)
+    none = np.zeros((40, 60), np.float32)
+    if eng._smoke_with_halo(none) is not none:
+        bad.append("an empty smoke map must come back as it is")
+    report("haze", not bad,
+           f"a wall-floor line seen through smoke only is no corner (the former way moved the haze by {moved_old:.1f} levels); a corner in plain view "
+           f"beside a thick cloud goes ({corner_left(beside):.2f} -> {left_b:.2f} levels/px) and the correction fades out towards the cloud "
+           f"({at_rim:.1f} levels at its outline, {far:.1f} away from it; {rim_nf:.1f} without the fade); next to the smoke map the stains stage moves "
+           f"the tone by {stains_now:.2f} levels ({stains_old:.2f} without the rim) and the mixer brush leaves {grain_now * 100:.0f}% of the grain "
+           f"({grain_old * 100:.0f}%)" if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
 def _shadow_frame(w=2800, h=4200, seed=8, stain=12.3, faint=9.8):
     """
     A light floor with a broad cast shadow next to the person (denser towards one side, as real shadows are), and:
@@ -5929,10 +6185,11 @@ def check_plugin():
 GROUPS = [("convert", check_convert), ("process", check_process), ("stage", check_stage), ("quick", check_quick),
           ("session", check_session),
           ("white", check_white), ("gpu", check_gpu), ("fallback", check_fallback), ("fastwin", check_fastwin),
-          ("cyc", check_cyc), ("dress", check_dress), ("speed", check_speed), ("smoke", check_smoke), ("empty", check_empty),
+          ("cyc", check_cyc), ("dress", check_dress), ("speed", check_speed), ("smoke", check_smoke), ("haze", check_haze),
+          ("empty", check_empty),
           ("format", check_format), ("scene", check_scene), ("stains", check_stains), ("seam", check_seam), ("mask", check_mask),
           ("brush", check_brush),
-          ("dark", check_dark), ("gear", check_gear), ("shadow", check_shadow), ("undo", check_undo),
+          ("dark", check_dark), ("gear", check_gear), ("stands", check_stands), ("shadow", check_shadow), ("undo", check_undo),
           ("exact", check_exact), ("restart", check_restart), ("mix", check_mix), ("sharp", check_sharp),
           ("edge", check_edge), ("line", check_line), ("hair", check_hair),
           ("server", check_server), ("http", check_http),

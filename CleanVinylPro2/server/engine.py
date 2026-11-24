@@ -1029,6 +1029,23 @@ class CleanVinylEngine:
     GEAR_TAKE_DEPTH = 0.62
     GEAR_PERSON_REACH = 0.03
     GEAR_ALONG_PERSON = 0.50
+    # ...and what stays is left alone. With "Прибирати стійки" on, NOTHING used to count as gear for the other
+    # stages (the dust search, the seams, the stains, the mixer brush): the gear was either repainted or, when it
+    # was not dark, cleaned like backdrop. Now that the tick takes away only what it can, the rest must not be
+    # worked on either: a group of strong edges of which less than GEAR_KEPT_MAX is marked for removal stays gear
+    # for every stage, with the tick as without it (`gear_kept` of _compute_protection_maps_small, see
+    # _gear_protection). The legacy regime keeps the former rule.
+    GEAR_KEPT_MAX = 0.10
+
+    @staticmethod
+    def _gear_protection(stand_protect_s: np.ndarray, gear_kept_s: np.ndarray | None, remove_stands: bool) -> np.ndarray:
+        """
+        The gear that every stage leaves alone: all of it, or - with "remove the stands" - what is not taken away
+        (see GEAR_KEPT_MAX). `gear_kept_s` is None in the legacy regime: nothing is protected then, as in v3.2.1.
+        """
+        if not remove_stands:
+            return stand_protect_s
+        return gear_kept_s if gear_kept_s is not None else np.zeros_like(stand_protect_s)
 
     @staticmethod
     def _edge_blobs_with_body(L: np.ndarray, gx: np.ndarray, gy: np.ndarray, grad: np.ndarray,
@@ -1240,6 +1257,16 @@ class CleanVinylEngine:
         stand_remove = np.maximum(separate_fg, np.maximum(dark_gear, edge_gear.astype(np.float32)))
         stand_remove = cv2.dilate(stand_remove, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11)))
         stand_remove[core_s > 0.35] = 0.0
+        if lines_out is not None and gear_body:
+            # the gear that stays when the stands are taken away (see GEAR_KEPT_MAX), shaped like `stand_protect`
+            kept_lut = edge_lut.copy()
+            if num_lbl > 1:
+                area = np.bincount(labels.ravel(), minlength=num_lbl).astype(np.float32)
+                taken = np.bincount(labels.ravel(), weights=(stand_remove > 0.5).ravel().astype(np.float32), minlength=num_lbl)
+                kept_lut[taken > self.GEAR_KEPT_MAX * np.maximum(area, 1.0)] = 0.0
+            kept_lut[0] = 0.0
+            gear_kept = cv2.GaussianBlur(cv2.dilate(kept_lut[labels], np.ones((7, 7), np.uint8)), (15, 15), 0)
+            lines_out["gear_kept"] = np.clip(gear_kept * 255, 0, 255).astype(np.uint8)
 
         # B. White & colored smoke protection
         smoke_mask, smoke_dense = self._smoke_zone_small(L, A, B, fg_s, stand_mask, edges_any, smoke_strength,
@@ -3656,12 +3683,11 @@ class CleanVinylEngine:
     # twice that. The search for dust and the AI fill go by the map itself, as before.
     SMOKE_TONE_HALO = 0.025
 
-    @classmethod
-    def _smoke_with_halo(cls, sm: np.ndarray) -> np.ndarray:
+    def _smoke_with_halo(self, sm: np.ndarray) -> np.ndarray:
         """The smoke map (float 0..1, any size) with the fading rim of SMOKE_TONE_HALO around it."""
-        if float(sm.max()) <= 0.3:
+        if float(sm.max()) <= 0.3 or self.SMOKE_TONE_HALO <= 0:
             return sm
-        sigma = max(1.0, cls.SMOKE_TONE_HALO * float(max(sm.shape[:2])))
+        sigma = max(1.0, self.SMOKE_TONE_HALO * float(max(sm.shape[:2])))
         halo = np.clip(cv2.GaussianBlur((sm > 0.3).astype(np.float32), (0, 0), sigma) * 2.0, 0.0, 1.0)
         return np.maximum(sm, halo)
 
@@ -4364,7 +4390,7 @@ class CleanVinylEngine:
                     gear_body=gear_body, smoke_faint=smoke_faint, lines_out=lines,
                 )
                 smoke_lines_s = lines.get("smoke", smoke_s)
-                eff_stand_protect = np.zeros_like(stand_protect_s) if remove_stands else stand_protect_s
+                eff_stand_protect = self._gear_protection(stand_protect_s, lines.get("gear_kept"), remove_stands)
                 eff_fg_for_spots = core_mask_u8 if remove_stands else fg_mask_u8
 
                 seam_mask = np.zeros((h, w), dtype=np.uint8)
@@ -4780,7 +4806,7 @@ class CleanVinylEngine:
                         "fg_mask_u8": r_fg[1][0], "core_mask_u8": r_fg[1][1],
                         "stand_protect_s": r_maps[1][0], "stand_remove_s": r_maps[1][1],
                         "smoke_s": r_maps[1][2], "shadow_s": r_maps[1][3], "smoke_info": r_maps[1][4],
-                        "smoke_lines_s": r_maps[1][5],
+                        "smoke_lines_s": r_maps[1][5], "gear_kept_s": r_maps[1][6],
                         "heal_mask": r_det[1][0], "seam_px": r_det[1][1], "spot_px": r_det[1][2],
                         "grain_sigma": float(r_det[1][3]), "reused_stages": ["fg", "maps", "detect"],
                         "corner_line": (corner_of_this_run(r_cor[1][0], r_fg[1][1] if remove_stands else r_fg[1][0])
@@ -4803,6 +4829,7 @@ class CleanVinylEngine:
             stand_protect_s = np.zeros((1, 1), dtype=np.uint8)
             smoke_s = np.zeros((1, 1), dtype=np.uint8)
             smoke_lines_s = smoke_s   # the smoke that the tools for lines respect, see _smoke_zone_small
+            gear_kept_s = None        # the gear that stays when the stands are taken away, see _gear_protection
             shadow_s = np.zeros((1, 1), dtype=np.uint8)
             eff_stand_protect = np.zeros((1, 1), dtype=np.uint8)
             eff_fg_for_spots = np.zeros((h, w), dtype=np.uint8)
@@ -4841,6 +4868,7 @@ class CleanVinylEngine:
                     stand_protect_s, stand_remove_s = analysis["stand_protect_s"], analysis["stand_remove_s"]
                     smoke_s, shadow_s = analysis["smoke_s"], analysis["shadow_s"]
                     smoke_lines_s = analysis.get("smoke_lines_s", smoke_s)
+                    gear_kept_s = analysis.get("gear_kept_s")
                     smoke_info = analysis.get("smoke_info")
                     corner_line = analysis.get("corner_line")
                     if corner_line is not None and render_scale != 1.0:
@@ -4849,7 +4877,7 @@ class CleanVinylEngine:
                     tight_1024 = analysis.get("tight_1024") if need_tight else None
                     near_mask = analysis.get("near_mask")
                     hair_px = int(analysis.get("hair_px", 0))
-                    eff_stand_protect = np.zeros_like(stand_protect_s) if remove_stands else stand_protect_s
+                    eff_stand_protect = self._gear_protection(stand_protect_s, gear_kept_s, remove_stands)
                     eff_fg_for_spots = core_mask_u8 if remove_stands else fg_mask_u8
                     heal_mask = analysis["heal_mask"]
                     seam_px, spot_px = int(analysis["seam_px"]), int(analysis["spot_px"])
@@ -4884,7 +4912,7 @@ class CleanVinylEngine:
 
                         rec = _sc_get("maps", k_maps)
                         if rec is not None:
-                            stand_protect_s, stand_remove_s, smoke_s, shadow_s, smoke_info, smoke_lines_s = rec
+                            stand_protect_s, stand_remove_s, smoke_s, shadow_s, smoke_info, smoke_lines_s, gear_kept_s = rec
                         else:
                             _prog(40, "Аналіз стійок, диму й тіней...")
                             smoke_info, lines = {}, {}
@@ -4894,10 +4922,11 @@ class CleanVinylEngine:
                                 lines_out=lines,
                             )
                             smoke_lines_s = lines.get("smoke", smoke_s)
+                            gear_kept_s = lines.get("gear_kept")
                             smoke_info.update({"on": bool(smoke_on), "auto": bool(smoke_auto), "faint": bool(smoke_faint)})
                             _sc_put("maps", k_maps,
-                                    (stand_protect_s, stand_remove_s, smoke_s, shadow_s, smoke_info, smoke_lines_s))
-                        eff_stand_protect = np.zeros_like(stand_protect_s) if remove_stands else stand_protect_s
+                                    (stand_protect_s, stand_remove_s, smoke_s, shadow_s, smoke_info, smoke_lines_s, gear_kept_s))
+                        eff_stand_protect = self._gear_protection(stand_protect_s, gear_kept_s, remove_stands)
                         eff_fg_for_spots = core_mask_u8 if remove_stands else fg_mask_u8
                         if corner_wanted:
                             rec = _sc_get("corner", k_corner)
@@ -5022,7 +5051,7 @@ class CleanVinylEngine:
                         "fg_mask_u8": fg_mask_u8, "core_mask_u8": core_mask_u8,
                         "stand_protect_s": stand_protect_s, "stand_remove_s": stand_remove_s,
                         "smoke_s": smoke_s, "shadow_s": shadow_s, "smoke_info": smoke_info,
-                        "smoke_lines_s": smoke_lines_s,
+                        "smoke_lines_s": smoke_lines_s, "gear_kept_s": gear_kept_s,
                         "heal_mask": heal_mask, "seam_px": seam_px, "spot_px": spot_px,
                         "grain_sigma": float(grain_sigma), "reused_stages": reused_stages,
                         "corner_line": corner_line,
