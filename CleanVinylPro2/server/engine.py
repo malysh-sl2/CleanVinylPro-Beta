@@ -1051,14 +1051,59 @@ class CleanVinylEngine:
     GEAR_BLACK_UNDER = 13.0
     GEAR_BLACK_REACH = 0.08
     GEAR_BLACK_MAX = 0.15
+    # At the border, the whole of it (4.15.0). The owner's 0Q5A3610, 2026-11-25: "ще паркет треба приберати", and two
+    # places circled on his result. A softbox stood at the left border of a low-key frame. Its black body was taken
+    # away, and
+    #   - the lit side of the softbox, between the body and the border, stayed: it is light, no rule takes it. The
+    #     wall was "continued" into the place of the body from both sides - a glow at the border, 55 levels fading
+    #     into the 13 of the wall;
+    #   - the far edge of its black base stayed as a thin dark line: on a wall as dark as that one (L 11 of 255)
+    #     nothing is GEAR_BLACK_UNDER below the middle of its row;
+    #   - the parquet beyond the edge of the paper, in the corner of the frame, stayed: it is neither thin nor dark.
+    # So, with "Прибирати стійки":
+    #   1. Black is also what the strip rule (`solid_edge_dark`) calls black on a dark wall: L under GEAR_BLACK_DEEP
+    #      where the middle of the row is above GEAR_BLACK_WALL - and what is black outright, under GEAR_BLACK_PURE,
+    #      whatever the middle of its row is: on 0Q5A3413 the middle of the rows is the black dress (L 4..8), and
+    #      the lower half of the flag at the border (L 0..1 beside a wall of 5..7) stayed when its upper half went.
+    #      Along the left and the right border (twice the strip) such a thing is followed as far as it goes, not
+    #      only GEAR_BLACK_REACH from what was marked.
+    #   2. What a taken thing at the left or right border cuts off from the frame goes with it: row by row everything
+    #      between the border and the far side of the thing, and GEAR_HULL_RIM (of the width) further; rows left out
+    #      between two such rows are closed (GEAR_HULL_GAP of the height). Only for a thing that reaches the border
+    #      itself somewhere - behind a pole that stands free the wall stays - and no further into the frame than
+    #      GEAR_HULL_MAX of the width: a cable that comes in over the border takes nothing with it out there.
+    #   3. The floor beyond the sheet: what has the colour of wood (the hue between the two numbers of
+    #      GEAR_FLOOR_HUE, at least GEAR_FLOOR_CHROMA away from the colour of the backdrop), reaches a border of the
+    #      frame, ends in a sharp edge (GEAR_FLOOR_EDGE: the colour changes by that much from one pixel of the 1024
+    #      copy to the next along half of its outline - a pool of warm light fades) and does not touch the person
+    #      (a stool, a hand) is taken away, GEAR_FLOOR_RIM further. Of the owner's ten frames this finds the parquet
+    #      of 0Q5A3610 (0.22% of the frame) and nothing else; the people are warm too, and never at the border.
+    # What is taken at the border is large as a rule, so it gets the wall beside it (section 5a).
+    GEAR_BLACK_DEEP = 4.5
+    GEAR_BLACK_WALL = 8.5
+    GEAR_BLACK_PURE = 2.5
+    GEAR_HULL_MAX = 0.16
+    GEAR_HULL_RIM = 0.015
+    GEAR_HULL_GAP = 0.03
+    GEAR_FLOOR_CHROMA = 9.0
+    GEAR_FLOOR_HUE = (35.0, 100.0)
+    GEAR_FLOOR_EDGE = 1.5
+    GEAR_FLOOR_MIN = 0.0005
+    GEAR_FLOOR_MAX = 0.15
+    GEAR_FLOOR_RIM = 0.012
 
     def _whole_black_thing(self, L: np.ndarray, row_mid_l: np.ndarray, marked: np.ndarray, fg_s: np.ndarray,
                            core_s: np.ndarray, fg_border_excl: np.ndarray) -> np.ndarray:
         """`marked` (uint8, 0/1: the dark things at the border) with the rest of every black thing it holds a part of."""
         reach = max(3, int(round(self.GEAR_BLACK_REACH * L.shape[1])))
         near = cv2.dilate(marked, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * reach + 1, 2 * reach + 1))) > 0
-        black = ((L < self.GEAR_BLACK_L) & ((row_mid_l - L) > self.GEAR_BLACK_UNDER) & near
-                 & (fg_s < 0.2) & (core_s < 0.15) & (~fg_border_excl))
+        # (along the border a thing goes on as far as it goes: twice the strip from the left and the right border)
+        near[:, :2 * reach] = True
+        near[:, -2 * reach:] = True
+        black = ((((L < self.GEAR_BLACK_L) & ((row_mid_l - L) > self.GEAR_BLACK_UNDER))
+                  | ((L < self.GEAR_BLACK_DEEP) & (row_mid_l > self.GEAR_BLACK_WALL))    # (on a dark wall)
+                  | (L < self.GEAR_BLACK_PURE))
+                 & near & (fg_s < 0.2) & (core_s < 0.15) & (~fg_border_excl))
         black |= marked > 0
         n, lbl, st, _ = cv2.connectedComponentsWithStats(black.view(np.uint8), connectivity=8)
         if n <= 1:
@@ -1068,6 +1113,79 @@ class CleanVinylEngine:
         held[0] = False
         held &= st[:, cv2.CC_STAT_AREA] <= self.GEAR_BLACK_MAX * L.size
         return np.maximum(marked, held[lbl].view(np.uint8))
+
+    def _whole_to_border(self, take: np.ndarray) -> np.ndarray:
+        """
+        `take` (bool, the 1024 copy: what "remove the stands" takes away) with what its things at the left and right
+        border cut off from the frame (see GEAR_HULL_MAX).
+        """
+        sh, sw = take.shape
+        if self.GEAR_HULL_MAX <= 0.0:
+            return take
+        cap = max(4, int(round(self.GEAR_HULL_MAX * sw)))
+        rim = max(1, int(round(self.GEAR_HULL_RIM * sw)))
+        gap = max(3, int(round(self.GEAR_HULL_GAP * sh))) | 1
+        wide = min(sw, cap + rim)
+        out = take.copy()
+        for mirrored in (False, True):
+            view = out[:, ::-1] if mirrored else out
+            zone = np.ascontiguousarray(take[:, ::-1][:, :cap] if mirrored else take[:, :cap]).view(np.uint8)
+            n, lbl = cv2.connectedComponents(zone, connectivity=8)
+            if n <= 1:
+                continue
+            at_border = np.unique(lbl[:, :2])
+            at_border = at_border[at_border > 0]
+            if at_border.size == 0:
+                continue
+            hull = np.zeros((sh, wide), dtype=np.uint8)
+            thing = np.isin(lbl, at_border)
+            hull[:, :cap] = np.maximum.accumulate(thing[:, ::-1], axis=1)[:, ::-1]   # from the border to the far side
+            hull = cv2.morphologyEx(hull, cv2.MORPH_CLOSE, np.ones((gap, 1), np.uint8))
+            hull = cv2.dilate(hull, np.ones((1, 2 * rim + 1), np.uint8))
+            np.logical_or(view[:, :wide], hull > 0, out=view[:, :wide])
+        return out
+
+    def _foreign_floor(self, L: np.ndarray, A: np.ndarray, B: np.ndarray, fg_s: np.ndarray,
+                       fg_border_excl: np.ndarray) -> np.ndarray:
+        """
+        The floor beyond the sheet of the backdrop (see GEAR_FLOOR_CHROMA): bool, the 1024 copy. L in 0..255, A and
+        B around 0; `fg_s`: the person, 0..1; `fg_border_excl`: the person with the band around it.
+        """
+        sh, sw = L.shape
+        found = np.zeros((sh, sw), dtype=bool)
+        back = fg_s < 0.1
+        if int(back.sum()) < 0.05 * back.size:
+            return found
+        da, db = A - float(np.median(A[back])), B - float(np.median(B[back]))
+        far = np.hypot(da, db)                       # how far the colour is from the backdrop's
+        hue = np.degrees(np.arctan2(db, da))
+        lo, hi = self.GEAR_FLOOR_HUE
+        wood = (far > self.GEAR_FLOOR_CHROMA) & (hue > lo) & (hue < hi) & (L > 20.0) & (fg_s < 0.2) & (~fg_border_excl)
+        wood = cv2.morphologyEx(wood.view(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        wood = cv2.morphologyEx(wood, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
+        n, lbl, st, _ = cv2.connectedComponentsWithStats(wood, connectivity=8)
+        if n <= 1:
+            return found
+        soft = cv2.GaussianBlur(far, (0, 0), 1.0)
+        step = np.hypot(cv2.Sobel(soft, cv2.CV_32F, 1, 0, ksize=3), cv2.Sobel(soft, cv2.CV_32F, 0, 1, ksize=3)) * 0.125
+        person = cv2.dilate(fg_border_excl.view(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        k3 = np.ones((3, 3), np.uint8)
+        for i in range(1, n):
+            x0, y0, bw, bh, area = (int(v) for v in st[i])
+            if not (self.GEAR_FLOOR_MIN * sh * sw <= area <= self.GEAR_FLOOR_MAX * sh * sw):
+                continue
+            if not (x0 <= 1 or y0 <= 1 or x0 + bw >= sw - 1 or y0 + bh >= sh - 1):
+                continue                             # not at a border of the frame
+            ya, yb, xa, xb = max(0, y0 - 2), min(sh, y0 + bh + 2), max(0, x0 - 2), min(sw, x0 + bw + 2)
+            piece = (lbl[ya:yb, xa:xb] == i).view(np.uint8)
+            around = cv2.dilate(piece, k3) > 0
+            if bool(person[ya:yb, xa:xb][around].any()):
+                continue                             # it touches the person: a prop, a limb
+            outline = around & (piece == 0)
+            if int(outline.sum()) < 8 or float(np.median(step[ya:yb, xa:xb][outline])) < self.GEAR_FLOOR_EDGE:
+                continue                             # no sharp edge: light, not a thing
+            found[ya:yb, xa:xb] |= piece > 0
+        return found
 
     @staticmethod
     def _gear_protection(stand_protect_s: np.ndarray, gear_kept_s: np.ndarray | None, remove_stands: bool) -> np.ndarray:
@@ -1290,6 +1408,15 @@ class CleanVinylEngine:
         edge_gear = ((grad > 18.0) | (L < 38.0)) & (edge_strip > 0) & (take_mask > 0.25) & (core_s < 0.15)
         stand_remove = np.maximum(separate_fg, np.maximum(dark_gear, edge_gear.astype(np.float32)))
         stand_remove = cv2.dilate(stand_remove, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11)))
+        if gear_body:
+            # at the border, the whole of it (see GEAR_HULL_MAX): the floor beyond the sheet, and what a taken thing
+            # cuts off from the frame
+            floor = self._foreign_floor(L, A, B, fg_s, fg_border_excl)
+            if bool(floor.any()):
+                k_f = 2 * max(1, int(round(self.GEAR_FLOOR_RIM * sw))) + 1
+                floor = cv2.dilate(floor.view(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_f, k_f)))
+                stand_remove = np.maximum(stand_remove, floor.astype(np.float32))
+            stand_remove = self._whole_to_border(stand_remove > 0.5).astype(np.float32)
         stand_remove[core_s > 0.35] = 0.0
         if lines_out is not None and gear_body:
             # the gear that stays when the stands are taken away (see GEAR_KEPT_MAX), shaped like `stand_protect`
@@ -2304,6 +2431,76 @@ class CleanVinylEngine:
             heal[hard_bad_work] = 0
         return heal, grain_sigma
 
+    # What lies along the outline of the person is the person's (4.15.0). The owner's 0Q5A3610: a sheer tulle skirt
+    # lies on the floor, and the network's silhouette ends a little inside its lower rim. The dark rim that was left
+    # outside - 10 to 27 px thick, 780 px long, right along the protected band - is a thin dark line on a light
+    # floor to the searches for dust and for joints: it was repainted with the tone of the floor, a row of white
+    # dashes under the hem (circled by the owner). On his other frames, with stand-in silhouettes, what the dust
+    # search marks right at the outline is the same kind of thing: the ends of hair, a finger, the edge of a foot.
+    # So a piece the searches found is dropped when it
+    #   - comes right up to the protected band of the person (within half of PERSON_EDGE_REACH), and
+    #   - lies along it: at least PERSON_EDGE_SHARE of the piece within PERSON_EDGE_REACH (of the long side).
+    # A stain that touches a shoe reaches further out than that and is still repaired; so is a crumb that lies a
+    # few pixels off the band. Of the JOINTS of the floor only a strip longer than PERSON_EDGE_JOINT times the
+    # reach is dropped: a joint ends at the person, it does not run along it, and the short piece of it that shows
+    # in a narrow gap between two legs must go with the rest of the line. The single hairs of the hairdo have a
+    # search of their own (4b) and are not asked.
+    PERSON_EDGE_REACH = 0.0045
+    PERSON_EDGE_SHARE = 0.5
+    PERSON_EDGE_JOINT = 4.0
+
+    def _along_person(self, found: np.ndarray, fg_u8: np.ndarray, long_only: bool = False) -> np.ndarray | None:
+        """
+        Which of the pieces of `found` (uint8, >0: what a search marked) lie along the outline of the person (see
+        PERSON_EDGE_REACH): bool, the size of the frame - or None when there is none. `fg_u8`: the person with the
+        protected band. long_only: only strips longer than PERSON_EDGE_JOINT times the reach (the joints).
+        """
+        h, w = found.shape[:2]
+        person = fg_u8 > 22
+        rows, cols = np.flatnonzero(person.any(axis=1)), np.flatnonzero(person.any(axis=0))
+        if rows.size == 0:
+            return None
+        reach = max(3.0, self.PERSON_EDGE_REACH * max(h, w))
+        pad = int(4 * reach) + 2
+        y0, y1 = max(0, int(rows[0]) - pad), min(h, int(rows[-1]) + 1 + pad)
+        x0, x1 = max(0, int(cols[0]) - pad), min(w, int(cols[-1]) + 1 + pad)
+        marked = np.ascontiguousarray(found[y0:y1, x0:x1] > 0).view(np.uint8)
+        if not bool(marked.any()):
+            return None
+        n, lbl, st, _ = cv2.connectedComponentsWithStats(marked, connectivity=8)
+        if n <= 1:
+            return None
+        # how far every pixel is from the protected band
+        away = cv2.distanceTransform(1 - np.ascontiguousarray(person[y0:y1, x0:x1]).view(np.uint8), cv2.DIST_L2, 3)
+        area = st[:, cv2.CC_STAT_AREA].astype(np.float64)
+        along = np.bincount(lbl.ravel(), weights=(away <= reach).ravel(), minlength=n)
+        touch = np.zeros(n, dtype=bool)
+        touch[np.unique(lbl[away <= 0.5 * reach])] = True
+        gone = touch & (along >= self.PERSON_EDGE_SHARE * area)
+        if long_only:
+            gone &= np.maximum(st[:, cv2.CC_STAT_WIDTH], st[:, cv2.CC_STAT_HEIGHT]) >= self.PERSON_EDGE_JOINT * reach
+        gone[0] = False
+        if not bool(gone.any()):
+            return None
+        out = np.zeros((h, w), dtype=bool)
+        out[y0:y1, x0:x1] = gone[lbl]
+        return out
+
+    def _found_beside_person(self, seam_mask: np.ndarray, spot_mask: np.ndarray, fg_u8: np.ndarray):
+        """
+        What the two searches found, joined, without what lies along the person (see PERSON_EDGE_REACH). Returns
+        (the joined mask, pixels dropped from the joints, pixels dropped from the spots). The two masks themselves
+        stay as they were found: the stage cache holds them.
+        """
+        gone_j = self._along_person(seam_mask, fg_u8, long_only=True)
+        gone_s = self._along_person(spot_mask, fg_u8)
+        if gone_j is None and gone_s is None:
+            return np.maximum(seam_mask, spot_mask), 0, 0
+        keep_j = seam_mask if gone_j is None else np.where(gone_j, np.uint8(0), seam_mask)
+        keep_s = spot_mask if gone_s is None else np.where(gone_s, np.uint8(0), spot_mask)
+        return (np.maximum(keep_j, keep_s), int(np.count_nonzero(seam_mask)) - int(np.count_nonzero(keep_j)),
+                int(np.count_nonzero(spot_mask)) - int(np.count_nonzero(keep_s)))
+
     # ------------------------------------------------------------------
     # 4b. Single hairs that stick out of the hairdo ("Поодинокі волоски")
     # ------------------------------------------------------------------
@@ -2924,11 +3121,14 @@ class CleanVinylEngine:
                 u = np.where(k3, v, cv2.filter2D(u, -1, kern, borderType=cv2.BORDER_REPLICATE))
         return u
 
-    def _big_pieces(self, src_u8: np.ndarray, heal_mask: np.ndarray, fg_u8: np.ndarray, render_scale: float = 1.0) -> dict | None:
+    def _big_pieces(self, src_u8: np.ndarray, heal_mask: np.ndarray, fg_u8: np.ndarray, render_scale: float = 1.0,
+                    gear_s: np.ndarray | None = None) -> dict | None:
         """
         The pieces of the repair mask that are too large for the network (see BIG_FILL_THICK), with the tone of the
         wall continued into them. `src_u8`: the frame the repair reads (the person painted over); `fg_u8`: the
-        person with the protected band. Returns None when there is no such piece, else
+        person with the protected band; `gear_s`: the gear that stays (uint8, any size) - it is no wall: the lit
+        side of a softbox next to its body, which was taken away, must not shine into the place of that body.
+        Returns None when there is no such piece, else
             "full":  uint8, the size of the frame: 0, or the number of the piece (1, 2, ...);
             "tone":  float32 0..1, long side 1024: what to paint there;
             "grain": float32, one value per number: the grain of the wall beside that piece (0..1, see
@@ -2953,8 +3153,10 @@ class CleanVinylEngine:
         person = cv2.resize(fg_u8, (sw, sh), interpolation=cv2.INTER_AREA) > 22
         big_s = np.isin(lab, ids)
         k3 = np.ones((3, 3), np.uint8)
-        # the wall: what is neither a piece (with a rim of two pixels), nor another repair, nor the person
+        # the wall: what is neither a piece (with a rim of two pixels), nor another repair, nor the person, nor gear
         wall = ~(cv2.dilate(big_s.view(np.uint8), np.ones((5, 5), np.uint8)) > 0) & (cover < 64) & (~person)
+        if gear_s is not None and gear_s.size > 1:
+            wall &= cv2.resize(gear_s, (sw, sh), interpolation=cv2.INTER_LINEAR) < 75
         tone = np.zeros((sh, sw, 3), dtype=np.float32)
         done = np.zeros((sh, sw), dtype=np.uint8)
         grain = [0.0]
@@ -4674,7 +4876,10 @@ class CleanVinylEngine:
                     shadow_spots=bool(params.get("shadowSpots", True)),
                 )
 
-                action_bin = np.maximum(seam_mask, spot_mask)
+                if gear_body:
+                    action_bin = self._found_beside_person(seam_mask, spot_mask, eff_fg_for_spots)[0]   # as process() does
+                else:
+                    action_bin = np.maximum(seam_mask, spot_mask)
                 if remove_stands:
                     stand_rm_full = (cv2.resize(stand_remove_s, (w, h), interpolation=cv2.INTER_LINEAR) > 80).astype(np.uint8)
                     stand_rm_full[core_mask_u8 > 120] = 0
@@ -5090,6 +5295,7 @@ class CleanVinylEngine:
             eff_fg_for_spots = np.zeros((h, w), dtype=np.uint8)
             seam_mask = np.zeros((h, w), dtype=np.uint8)
             spot_mask = np.zeros((h, w), dtype=np.uint8)
+            edge_gone = (0, 0)  # pixels of the two that were strips along the person (see PERSON_EDGE_REACH)
             grain_sigma = 1.5
             smoke_info = None  # what was seen of smoke (see _compute_protection_maps_small); None = not looked for
             corner_line = None  # the wall-floor corner (_corner_line_of_frame); None = not looked for or not there
@@ -5266,7 +5472,12 @@ class CleanVinylEngine:
                                         img_rgb_u8, tight_1024, eff_fg_for_spots, eff_stand_protect, smoke_s, hair_eff)
                                     _sc_put("hair", k_hair, (near_mask,))
 
-                            heal_mask = np.maximum(seam_mask, spot_mask)
+                            if gear_body:
+                                # what lies along the person is the person's (see PERSON_EDGE_REACH)
+                                heal_mask, gone_j, gone_s = self._found_beside_person(seam_mask, spot_mask, eff_fg_for_spots)
+                                edge_gone = (gone_j, gone_s)
+                            else:
+                                heal_mask = np.maximum(seam_mask, spot_mask)
                             if near_mask is not None:
                                 heal_mask = np.maximum(heal_mask, near_mask)
                             if remove_stands and has_any_frac:
@@ -5294,7 +5505,7 @@ class CleanVinylEngine:
                         if not do_inpaint:
                             heal_mask[:] = 0
                             near_mask = None
-                        seam_px, spot_px = int(seam_mask.sum()), int(spot_mask.sum())
+                        seam_px, spot_px = int(seam_mask.sum()) - edge_gone[0], int(spot_mask.sum()) - edge_gone[1]
                         hair_px = int(near_mask.sum()) if near_mask is not None else 0
                         if hair_px == 0:
                             near_mask = None
@@ -5375,7 +5586,8 @@ class CleanVinylEngine:
                         del solid_full, hair_zone, hair_zone_s
                     # What is too large for the network is not asked of it (see BIG_FILL_THICK): the wall beside it
                     # is continued there. The network sees that wall, not the thing, when it repairs what lies near.
-                    big = self._big_pieces(heal_src_u8, heal_mask, eff_fg_for_spots, render_scale) if big_fill else None
+                    big = (self._big_pieces(heal_src_u8, heal_mask, eff_fg_for_spots, render_scale,
+                                            gear_s=(eff_stand_protect if gear_body else None)) if big_fill else None)
                     heal_net = heal_mask
                     if big is not None:
                         heal_net = heal_mask.copy()
@@ -5665,6 +5877,11 @@ class CleanVinylEngine:
                     shadow_spots=shadow_spots,
                 )
                 spot2_mask[heal_mask > 0] = 0
+                if gear_body:
+                    gone_2 = self._along_person(spot2_mask, eff_fg_for_spots)   # (see PERSON_EDGE_REACH)
+                    if gone_2 is not None:
+                        spot2_mask[gone_2] = 0
+                    del gone_2
                 self._checkpoint()
                 if np.any(spot2_mask > 0):
                     p2_src = pass2_u8

@@ -4582,6 +4582,10 @@ def check_stands():
            "without the tick nothing is touched" if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
+# The rules of 4.15.0 for what stands at the border, switched off (constants of the engine): the former way.
+_BORDER_OFF = dict(GEAR_BLACK_DEEP=-1.0, GEAR_BLACK_PURE=-1.0, GEAR_HULL_MAX=0.0, GEAR_FLOOR_MAX=0.0)
+
+
 def _curtain_frame(w=1500, h=2000):
     """
     What is too large for the network (4.14.0). On a plain studio frame with grain:
@@ -4653,7 +4657,8 @@ def check_bigfill():
                 "stand": float(up[parts["stand"] > 0.5].mean()), "band": float(up[off_band].mean())}
 
     said = lambda d: ", ".join(f"{k} {v * 100:.0f}%" for k, v in d.items())  # noqa: E731
-    was, now, near = marked(GEAR_BLACK_L=-1.0), marked(), marked(GEAR_BLACK_REACH=0.002)
+    # (the former way: the rules of 4.14.0 and of 4.15.0 for what is black off - see _BORDER_OFF)
+    was, now, near = marked(GEAR_BLACK_L=-1.0, **_BORDER_OFF), marked(), marked(GEAR_BLACK_REACH=0.002)
     if was["top"] > 0.2 or was["curtain"] < 0.5:
         bad.append(f"the frame of this check must be one where the former way leaves the wide top of the curtain unmarked: {said(was)}")
     if min(now["curtain"], now["top"], now["strip"], now["stand"]) < 0.97 or now["band"] > 0.02:
@@ -4665,23 +4670,26 @@ def check_bigfill():
     eng0 = H.make_engine(E, sil)
     L = np.full((200, 600), 120.0, np.float32)
     L[:, :60] = 3.0                      # a black thing, 60 px wide and marked up to x = 24...
-    L[60:140, 60:110] = 3.0              # ...with an arm; a person in black stands against its end (x = 90..110)
+    L[80:120, 60:200] = 3.0              # ...with a long arm; a person in black stands in it (x = 150..170)
     row_mid = np.full((200, 1), 120.0, np.float32)
     mark = np.zeros((200, 600), np.uint8)
     mark[:, :24] = 1
     fg_s = np.zeros((200, 600), np.float32)
-    fg_s[60:140, 90:110] = 1.0
+    fg_s[80:120, 150:170] = 1.0
     none = np.zeros((200, 600), bool)
     whole = eng0._whole_black_thing(L, row_mid, mark, fg_s, np.zeros_like(fg_s), none)
-    reach = int(round(eng0.GEAR_BLACK_REACH * 600))      # 48: what is marked, and 48 px on
-    if not (whole[:, :60].all() and whole[60:140, 60:24 + reach - 2].all() and not whole[:, 24 + reach + 2:].any()):
-        bad.append("the whole black thing: what is black, hangs together with a marked piece and lies within the reach is taken, "
-                   f"and nothing further (reach {reach} px: taken to x={int(np.flatnonzero(whole.any(axis=0)).max())})")
+    reach = int(round(eng0.GEAR_BLACK_REACH * 600))      # 48: what is marked and 48 px on - or, along the border,
+    zone = 2 * reach                                     # twice the strip (96 px), since 4.15.0
+    if not (whole[:, :60].all() and whole[80:120, 60:zone - 2].all() and not whole[:, zone + 2:].any()):
+        bad.append("the whole black thing: what is black, hangs together with a marked piece and lies within the reach - along the "
+                   f"border: within twice the strip - is taken, and nothing further (zone {zone} px: taken to "
+                   f"x={int(np.flatnonzero(whole.any(axis=0)).max())})")
     eng0.GEAR_BLACK_REACH = 0.5
     far = eng0._whole_black_thing(L, row_mid, mark, fg_s, np.zeros_like(fg_s), none)
-    if not far[60:140, 60:90].all() or far[60:140, 90:110].any():
-        bad.append("with a reach that covers it, the arm of the black thing must be taken up to the person, and nothing of the person")
-    eng0.GEAR_BLACK_MAX = 0.10           # (thing and arm are 12% of this frame)
+    if not far[80:120, 60:150].all() or far[:, 150:].any():
+        bad.append("with a reach that covers it, the arm of the black thing must be taken up to the person, and nothing of the person "
+                   "or behind the person")
+    eng0.GEAR_BLACK_MAX = 0.10           # (thing and arm, up to the person, are 13% of this frame)
     if int(eng0._whole_black_thing(L, row_mid, mark, fg_s, np.zeros_like(fg_s), none).sum()) != int(mark.sum()):
         bad.append("black that hangs together over more of the frame than GEAR_BLACK_MAX is a backdrop, not a thing: it must be left as it was marked")
 

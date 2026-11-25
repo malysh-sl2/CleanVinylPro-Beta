@@ -226,6 +226,24 @@ written here and in the repository.
   hand, brush 67, zoom 100 %; the view «ПІСЛЯ · чисте фото».
   He said nothing about the keys, about «Глибина» or about the questions of reply #22, and did not
   write «зливай».
+  What the two pictures show, measured (grey 0..255; frame against result, 51.6 % of the pixels are
+  exactly the frame - the person, the parquet with its rim, a strip under the hem):
+  - the left strip, top: the black body of the softbox was taken away, its LIT SIDE (44-62 at the
+    border) stayed, and the wall was "continued" into the place of the body from both sides: 39-55 at
+    the border falling to the 13 of the wall at 12 % of the width - a glow where the softbox stood;
+  - the left strip, middle: the far edge of the black base stayed as a thin dark line (9.2 % of the
+    width, 52-60 % of the height); the rest of the place has the tone of the wall right beside it
+    (8-11, the wall there 9-13);
+  - the left strip, bottom: the parquet is untouched (55-74 against the 85-94 of the paper) - it was
+    "gear that stays";
+  - under the hem: a row of light dashes 780 px long and 10-27 px thick (+95 levels: 47 -> 142) right
+    below a stair-stepped line - the edge of the person's protection. The dark rim of the tulle that
+    the silhouette left outside was repainted with the tone of the floor;
+  - the rest is as it should be: the joint of the two paper sheets is gone on both sides of her, the
+    corner is bent (wall +10 at 67 % of the height), the floor is evened.
+  The same run here - his settings, the silhouette taken from his result (the untouched blob), the
+  stand-in fill - gives his numbers in the left strip within one level: what stands there is painted
+  by the program, not by the network. No option card was shown. 4.15.0 answers this message.
 
 ## 2. What is in the repository
 
