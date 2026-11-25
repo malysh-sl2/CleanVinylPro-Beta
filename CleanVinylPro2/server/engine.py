@@ -2439,13 +2439,18 @@ class CleanVinylEngine:
     # search marks right at the outline is the same kind of thing: the ends of hair, a finger, the edge of a foot.
     # So a piece the searches found is dropped when it
     #   - comes right up to the protected band of the person (within half of PERSON_EDGE_REACH), and
-    #   - lies along it: at least PERSON_EDGE_SHARE of the piece within PERSON_EDGE_REACH (of the long side).
+    #   - lies along it: at least PERSON_EDGE_SHARE of the piece no more than PERSON_EDGE_REACH (of the long side)
+    #     further from the band than its nearest point (the searches keep a few pixels off the band themselves).
+    # The searches mark a thing with a rim around it, and that rim is a number of PIXELS (a dilation by 13, at any
+    # size of the frame): PERSON_EDGE_RIM is added to the reach, so that the reduced copy of the window, where the
+    # rim is most of the piece, decides as the frame does.
     # A stain that touches a shoe reaches further out than that and is still repaired; so is a crumb that lies a
     # few pixels off the band. Of the JOINTS of the floor only a strip longer than PERSON_EDGE_JOINT times the
     # reach is dropped: a joint ends at the person, it does not run along it, and the short piece of it that shows
     # in a narrow gap between two legs must go with the rest of the line. The single hairs of the hairdo have a
     # search of their own (4b) and are not asked.
     PERSON_EDGE_REACH = 0.0045
+    PERSON_EDGE_RIM = 7.0
     PERSON_EDGE_SHARE = 0.5
     PERSON_EDGE_JOINT = 4.0
 
@@ -2461,7 +2466,8 @@ class CleanVinylEngine:
         if rows.size == 0:
             return None
         reach = max(3.0, self.PERSON_EDGE_REACH * max(h, w))
-        pad = int(4 * reach) + 2
+        rim = float(self.PERSON_EDGE_RIM)
+        pad = int(4 * (reach + rim)) + 2
         y0, y1 = max(0, int(rows[0]) - pad), min(h, int(rows[-1]) + 1 + pad)
         x0, x1 = max(0, int(cols[0]) - pad), min(w, int(cols[-1]) + 1 + pad)
         marked = np.ascontiguousarray(found[y0:y1, x0:x1] > 0).view(np.uint8)
@@ -2470,13 +2476,15 @@ class CleanVinylEngine:
         n, lbl, st, _ = cv2.connectedComponentsWithStats(marked, connectivity=8)
         if n <= 1:
             return None
-        # how far every pixel is from the protected band
+        # how far every marked pixel is from the protected band, and every piece at its nearest
         away = cv2.distanceTransform(1 - np.ascontiguousarray(person[y0:y1, x0:x1]).view(np.uint8), cv2.DIST_L2, 3)
+        at = np.flatnonzero(marked)
+        piece, dist = lbl.ravel()[at], away.ravel()[at]
+        nearest = np.full(n, np.inf, dtype=np.float32)
+        np.minimum.at(nearest, piece, dist)
         area = st[:, cv2.CC_STAT_AREA].astype(np.float64)
-        along = np.bincount(lbl.ravel(), weights=(away <= reach).ravel(), minlength=n)
-        touch = np.zeros(n, dtype=bool)
-        touch[np.unique(lbl[away <= 0.5 * reach])] = True
-        gone = touch & (along >= self.PERSON_EDGE_SHARE * area)
+        along = np.bincount(piece, weights=(dist - nearest[piece]) <= reach + rim, minlength=n)
+        gone = (nearest <= 0.5 * (reach + rim)) & (along >= self.PERSON_EDGE_SHARE * area)
         if long_only:
             gone &= np.maximum(st[:, cv2.CC_STAT_WIDTH], st[:, cv2.CC_STAT_HEIGHT]) >= self.PERSON_EDGE_JOINT * reach
         gone[0] = False

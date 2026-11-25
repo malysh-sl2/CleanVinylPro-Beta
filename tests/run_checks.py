@@ -4807,6 +4807,296 @@ def check_bigfill():
            if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
+def _border_frame(w=1500, h=2000):
+    """
+    What stands at the border, and what lies along the person (4.15.0) - the owner's 0Q5A3610 drawn: a wall as
+    dark as his (grey 10..13) over a lit floor.
+      body     the black body of a softbox at the left border; it reaches the border above and below the...
+      face     ...lit side of the softbox: a light strip BETWEEN the body and the border;
+      base     its black base lower down, wider than the strip things are looked for in (`far`: what of it lies
+               beyond that strip and the rims);
+      leg      a thin dark leg of the stand, running out over the floor;
+      parquet  the floor beyond the sheet, at the left border: the colour of wood, planks, a sharp edge (`paper`:
+               the sheet beside it);
+      pool     a pool of warm light at the right border: the same colour, but it fades;
+      bench    a wooden bench the person leans on: it reaches the right border AND the person;
+      pole     a thin dark pole that stands free, 6% of the width from the right border (`behind`: the wall
+               between it and the border);
+      strap    a dark strip along the outer side of a leg of the person, half under the protected band;
+      stain    a light streak that touches the band of the other leg and reaches out from it, and
+      crumb    a dark crumb a little way off that leg;
+      joint    the joint of the floor, which the drawn frame has anyway: the piece of it between the two legs.
+    Returns (frame, silhouette 1024, parts: bool maps).
+    """
+    img, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=43)
+    person = cv2.resize(sil, (w, h), interpolation=cv2.INTER_LINEAR) > 0.5
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    f = img.astype(np.float32)
+    # the wall: grey 13 in the middle, 10 at the borders - with the grain of a camera put back (the floor keeps its own)
+    wall_rows = slice(0, int(0.615 * h))
+    f[wall_rows] = f[wall_rows] * 0.085 + np.random.default_rng(44).normal(0.0, 1.1, (int(0.615 * h), w, 1)).astype(np.float32)
+    cx = int(w * 0.5)
+
+    def poly(pts):
+        m = np.zeros((h, w), np.float32)
+        cv2.fillPoly(m, [np.array([(int(round(x * w)), int(round(y * h))) for x, y in pts], np.int32)], 1.0, cv2.LINE_AA)
+        return m
+
+    def line(p0, p1, thick):
+        m = np.zeros((h, w), np.float32)
+        cv2.line(m, (int(p0[0] * w), int(p0[1] * h)), (int(p1[0] * w), int(p1[1] * h)), 1.0, thick, cv2.LINE_AA)
+        return m
+
+    hard = lambda m: cv2.GaussianBlur(m, (0, 0), 1.5)  # noqa: E731
+    maps = dict(
+        body=hard(poly([(0.0, 0.0), (0.10, 0.0), (0.10, 0.40), (0.06, 0.46), (0.0, 0.46), (0.0, 0.33), (0.04, 0.33), (0.04, 0.06), (0.0, 0.06)])),
+        face=hard(poly([(0.0, 0.06), (0.04, 0.06), (0.04, 0.33), (0.0, 0.33)])),
+        base=hard(poly([(0.0, 0.50), (0.14, 0.50), (0.14, 0.60), (0.0, 0.60)])),
+        leg=hard(line((0.03, 0.60), (0.14, 0.685), 10)),
+        parquet=hard(poly([(0.0, 0.76), (0.11, 0.76), (0.11, 0.90), (0.0, 0.97)])),
+        bench=hard(poly([(0.545, 0.685), (1.0, 0.685), (1.0, 0.72), (0.545, 0.72)])),
+        pole=hard(line((0.93, 0.10), (0.93, 0.58), 10)),
+    )
+    # the lit side of the softbox, then the black things over it
+    f = f * (1.0 - maps["face"])[..., None] + np.float32([66.0, 64.0, 62.0]) * maps["face"][..., None]
+    for name in ("body", "base", "leg", "pole"):
+        f *= (1.0 - 0.97 * maps[name])[..., None]
+    # wood: the parquet (planks) and the bench
+    planks = 1.0 - 0.22 * (np.mod(xx * 0.6 + yy, 26.0) < 2.0)
+    wood = np.float32([98.0, 70.0, 36.0])[None, None, :] * planks[..., None]
+    for name in ("parquet", "bench"):
+        f = f * (1.0 - maps[name])[..., None] + wood * maps[name][..., None]
+    # a pool of warm light at the right border: it fades
+    glow = np.exp(-(((xx - w) / (0.05 * w)) ** 2 + ((yy - 0.87 * h) / (0.035 * h)) ** 2))
+    f += glow[..., None] * np.float32([34.0, 16.0, -8.0])
+    # along the person: a strap beside the right leg, a stain and a crumb beside the left one
+    # (at this size the protected band reaches 6 px beyond a leg; the rule asks about the 9 px after that)
+    x_leg_r, x_leg_l = cx + int(w * 0.045), cx - int(w * 0.045)
+    strap = np.zeros((h, w), np.float32)
+    strap[int(0.7325 * h):int(0.775 * h), x_leg_r - 4:x_leg_r + 16] = 1.0   # (it ends well above the joint of the floor)
+    stain = np.zeros((h, w), np.float32)
+    stain[int(0.765 * h) - 5:int(0.765 * h) + 5, x_leg_l - 62:x_leg_l - 7] = 1.0
+    crumb = np.zeros((h, w), np.float32)
+    cv2.circle(crumb, (x_leg_l - 40, int(0.845 * h)), 5, 1.0, -1, cv2.LINE_AA)
+    for m in (strap, crumb):
+        f *= (1.0 - 0.55 * hard(m))[..., None]
+    f *= (1.0 + 0.30 * hard(stain))[..., None]         # (a light stain: a dark one next to a leg reads as its shadow)
+    f[person] = img[person]
+    parts = {k: v > 0.5 for k, v in maps.items()}
+    parts.update(person=person, strap=(strap > 0.5) & ~person & (xx > x_leg_r + 8), stain=stain > 0.5, crumb=crumb > 0.5, pool=glow > 0.5)
+    parts["far"] = parts["base"] & (xx > 0.118 * w)
+    parts["behind"] = (xx > 0.95 * w) & (yy > 0.12 * h) & (yy < 0.56 * h)
+    parts["paper"] = (xx > 0.16 * w) & (xx < 0.22 * w) & (yy > 0.82 * h) & (yy < 0.90 * h)
+    parts["wood"] = parts["parquet"] & (yy > 0.82 * h) & (yy < 0.90 * h) & (xx < 0.09 * w)
+    ys = int(0.80 * h)
+    gap = np.zeros((h, w), bool)
+    gap[ys - 1:ys + 2, cx - int(w * 0.012) + 3:cx + int(w * 0.012) - 3] = True
+    parts["joint"] = gap
+    return np.clip(f, 0, 255).astype(np.uint8), sil, parts
+
+
+def check_border():
+    """
+    At the border the whole of a thing goes, the floor beyond the sheet goes, and what lies along the person is
+    the person's (4.15.0; GEAR_HULL_MAX, GEAR_FLOOR_CHROMA, GEAR_BLACK_PURE, PERSON_EDGE_REACH of engine.py). The
+    owner's 0Q5A3610 in 4.14.0: the lit side of a softbox stayed and shone into the wall that was continued into
+    the place of its body, the far edge of its black base stayed as a dark line on a dark wall, the parquet
+    stayed, and the dark rim of a sheer skirt, outside the silhouette, was repainted with the tone of the floor.
+    """
+    bad = []
+    w, h = 1500, 2000
+    frame, sil, parts = _border_frame(w, h)
+    yy, xx = np.mgrid[0:h, 0:w]
+    gray = lambda im: im.astype(np.float32).mean(axis=2)  # noqa: E731
+    warm = lambda im: im[..., 0].astype(np.float32) - im[..., 2].astype(np.float32)  # noqa: E731
+    said = lambda d: ", ".join(f"{k} {v * 100:.0f}%" for k, v in d.items())  # noqa: E731
+    names = ("body", "face", "base", "far", "leg", "parquet", "pool", "bench", "pole", "behind")
+
+    # ---- what is marked for removal ----
+    def marked(**consts):
+        eng = H.make_engine(E, sil)
+        for name_c, value_c in consts.items():
+            setattr(eng, name_c, value_c)
+        fg, core = eng._clean_fg_mask(np.clip(sil * 255, 0, 255).astype(np.uint8), w, h, 70.0)
+        lines = {}
+        _, rem, _, _ = eng._compute_protection_maps_small(frame, fg, core, 80.0, False, True, smoke_auto=True, gear_body=True,
+                                                          smoke_faint=True, lines_out=lines)
+        up = cv2.resize(rem, (w, h), interpolation=cv2.INTER_LINEAR) > 100
+        kept = cv2.resize(lines["gear_kept"], (w, h), interpolation=cv2.INTER_LINEAR) > 100
+        got = {k: float(up[parts[k]].mean()) for k in names}
+        got["kept"] = float(kept[parts["face"] | parts["parquet"]].mean())   # how much of the two is "gear that stays"
+        return got
+
+    was, now = marked(**_BORDER_OFF), marked()
+    if was["face"] > 0.6 or was["far"] > 0.6 or was["parquet"] > 0.05:
+        bad.append("the frame of this check must be one where the former way leaves the lit side of the softbox, the far edge of its "
+                   f"base and the parquet: {said(was)}")
+    if min(now[k] for k in ("body", "face", "base", "far", "leg", "parquet", "pole")) < 0.97:
+        bad.append(f"the softbox with its lit side, its base to the far edge, the leg, the pole and the parquet must be marked for removal: {said(now)}")
+    if max(now[k] for k in ("pool", "bench", "behind")) > 0.02:
+        bad.append("a pool of warm light, a wooden bench the person leans on and the wall behind a pole that stands free must not be "
+                   f"marked: {said(now)}")
+    if now["kept"] > 0.02:
+        bad.append(f"what is taken away is not gear that stays: {now['kept'] * 100:.0f}% of the lit side and the parquet are still protected as gear")
+    # each rule by itself
+    no_hull, no_black, no_floor = marked(GEAR_HULL_MAX=0.0), marked(GEAR_BLACK_DEEP=-1.0, GEAR_BLACK_PURE=-1.0), marked(GEAR_FLOOR_MAX=0.0)
+    if no_hull["face"] > 0.6:
+        bad.append(f"the lit side must be what the rule 'to the border' takes (GEAR_HULL_MAX): without it {no_hull['face'] * 100:.0f}% of it is marked")
+    if no_black["far"] > 0.6:
+        bad.append(f"the far edge of the base must be what the rule for black on a dark wall takes: without it {no_black['far'] * 100:.0f}% of it is marked")
+    if no_floor["parquet"] > 0.05:
+        bad.append(f"the parquet must be what the rule for the floor beyond the sheet takes: without it {no_floor['parquet'] * 100:.0f}% of it is marked")
+
+    # the rules themselves, on drawn maps
+    eng0 = H.make_engine(E, sil)
+    take = np.zeros((200, 600), bool)
+    take[20:120, 30:60] = True           # a thing that reaches the border in one place only...
+    take[60:70, 0:30] = True
+    take[130:160, 40:50] = True          # ...a pole that stands free...
+    for i in range(300):                 # ...and a cable that comes in over the border and runs on, rising
+        take[190 - i // 4, i] = True
+    cap, rim = int(round(eng0.GEAR_HULL_MAX * 600)), int(round(eng0.GEAR_HULL_RIM * 600))
+    hull = eng0._whole_to_border(take)
+    if not hull[20:120, :60].all():
+        bad.append("to the border: every row of a thing that reaches the border somewhere must be taken from the border to its far side")
+    if hull[130:160, :38].any():
+        bad.append("to the border: behind a pole that stands free the wall stays")
+    if (hull & ~take)[:, cap + rim + 1:].any():
+        bad.append(f"to the border: nothing is added further into the frame than GEAR_HULL_MAX and the rim ({cap} + {rim} px)")
+    if not np.array_equal(eng0._whole_to_border(take[:, ::-1])[:, ::-1], hull):
+        bad.append("to the border: the right border must be treated like the left one")
+
+    def floor_of(a_val, b_val, x0=0, soft=False, touch_person=False, size=(60, 80)):
+        """A patch of one colour at the left border (or `x0` from it) of a grey sheet: what _foreign_floor takes of it."""
+        L = np.full((300, 400), 120.0, np.float32)
+        A, B = np.zeros_like(L), np.zeros_like(L)
+        m = np.zeros_like(L)
+        m[100:100 + size[1], x0:x0 + size[0]] = 1.0
+        m = cv2.GaussianBlur(m, (0, 0), 14.0 if soft else 0.8)
+        A += a_val * m
+        B += b_val * m
+        fg_s = np.zeros_like(L)
+        if touch_person:
+            fg_s[90:200, x0 + size[0] + 4:x0 + size[0] + 40] = 1.0
+        excl = cv2.dilate((fg_s > 0.12).astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))) > 0
+        return float(eng0._foreign_floor(L, A, B, fg_s, excl)[110:170, x0 + 8:x0 + size[0] - 8].mean())
+
+    floors = {"wood at the border": floor_of(8.0, 18.0), "the same colour, fading": floor_of(8.0, 18.0, soft=True),
+              "wood away from the border": floor_of(8.0, 18.0, x0=40), "wood that touches the person": floor_of(8.0, 18.0, touch_person=True),
+              "blue at the border": floor_of(2.0, -20.0), "wood over a third of the frame": floor_of(8.0, 18.0, size=(390, 150))}
+    if floors["wood at the border"] < 0.95 or max(v for k, v in floors.items() if k != "wood at the border") > 0.02:
+        bad.append("the floor beyond the sheet is what has the colour of wood, reaches a border, has a sharp edge, does not touch the "
+                   f"person and is no backdrop of its own: {said(floors)}")
+
+    # the wall is continued from backdrop only: gear that stays is no wall
+    rng = np.random.default_rng(45)
+    src = np.clip(100.0 + rng.normal(0.0, 1.5, (300, 400, 3)), 0, 255).astype(np.uint8)
+    src[:, :40] = 215                                    # a lit thing at the border...
+    heal = np.zeros((300, 400), np.uint8)
+    heal[:, 40:130] = 1                                  # ...and beside it what was taken away
+    gear = np.zeros((300, 400), np.uint8)
+    gear[:, :44] = 255
+    tone = {}
+    for label, g_map in (("no", None), ("yes", gear)):
+        big = eng0._big_pieces(src, heal, np.zeros((300, 400), np.uint8), 0.25, gear_s=g_map)
+        tone[label] = None if big is None else float(big["tone"][100:200, 50:70].mean() * 255.0)
+    if tone["no"] is None or tone["yes"] is None or tone["no"] < 125.0 or abs(tone["yes"] - 100.0) > 3.0:
+        bad.append(f"the wall is continued from backdrop only: next to gear that stays the place must have the tone of the wall (100): "
+                   f"{tone['yes']} with the gear named, {tone['no']} without")
+
+    # ---- the result ----
+    base = dict(H.STD, speedMode="quality", scuffs=0, blur=0, cycCurve=0, smokeOn=False, removeStands=True)
+    g0 = gray(frame)
+
+    def run(consts=None, src=None, scale=None, **over):
+        eng = H.make_engine(E, sil)
+        eng.lama_sess = H.LightLama()
+        for name_c, value_c in (consts or {}).items():
+            setattr(eng, name_c, value_c)
+        pic = frame if src is None else src
+        out, st = _quiet(eng.process, pic, 8, dict(base, **over), **({} if scale is None else {"render_scale": scale}))
+        return _comp(pic, out), st, out
+
+    def measure(c):
+        g = gray(c)
+        rows = slice(int(0.10 * h), int(0.30 * h))
+        place, wall = (xx > 0.01 * w) & (xx < 0.08 * w), (xx > 0.15 * w) & (xx < 0.21 * w)
+        return dict(
+            softbox=float(np.median(g[rows][place[rows]]) - np.median(g[rows][wall[rows]])),
+            parquet=float(np.median(g[parts["wood"]]) - np.median(g[parts["paper"]])),
+            wood=float(np.median(warm(c)[parts["wood"]]) - np.median(warm(c)[parts["paper"]])),
+            strap=float(np.median((g - g0)[parts["strap"]])), strap_max=float(np.abs(g - g0)[parts["strap"]].max()),
+            stain=float(np.median((g - g0)[parts["stain"]])), crumb=float(np.median((g - g0)[parts["crumb"]])),
+            joint=float(np.median((g - g0)[parts["joint"]])),
+            pool=float(np.median(warm(c)[parts["pool"]]) - np.median(warm(frame)[parts["pool"]])),
+            bench=float(np.abs(g - g0)[parts["bench"]].max()), behind=float(np.abs(g - g0)[parts["behind"]].max()),
+            person=float(np.abs(c - frame.astype(np.float32))[_person_core(cv2.resize(sil, (w, h)))].max()),
+        )
+
+    old_way = dict(_BORDER_OFF, PERSON_EDGE_SHARE=2.0)
+    c_was, st_was, _ = run(old_way)
+    c_now, st_now, _ = run()
+    m_was, m_now = measure(c_was), measure(c_now)
+    num = lambda d: ", ".join(f"{k} {v:+.1f}" for k, v in d.items())  # noqa: E731
+    if m_was["strap"] < 30.0 or m_was["wood"] < 30.0 or abs(m_was["softbox"]) < 6.0:
+        bad.append(f"the frame of this check must be one where the former way repaints the strap, leaves the parquet and the softbox: {num(m_was)}")
+    if abs(m_now["softbox"]) > 3.0:
+        bad.append(f"where the softbox stood the wall must be the wall beside it: {m_now['softbox']:+.1f} levels against it")
+    if abs(m_now["parquet"]) > 5.0 or abs(m_now["wood"]) > 3.0:
+        bad.append(f"where the parquet lay the floor must be the sheet beside it: {m_now['parquet']:+.1f} levels against it, "
+                   f"red minus blue {m_now['wood']:+.1f} against it")
+    if m_now["strap_max"] > 1.0:
+        bad.append(f"a strip along the person is the person's: the strap must stay as shot, it was moved by up to {m_now['strap_max']:.1f} levels")
+    if m_now["stain"] > -10.0 or m_now["crumb"] < 30.0 or m_now["joint"] < 15.0:
+        bad.append("a stain that reaches out from the person, a crumb a little way off and the joint between the legs must still be "
+                   f"repaired: {num({k: m_now[k] for k in ('stain', 'crumb', 'joint')})} levels "
+                   f"(the former way: {num({k: m_was[k] for k in ('stain', 'crumb', 'joint')})})")
+    if abs(m_now["pool"]) > 2.0 or m_now["bench"] > 1.0 or m_now["behind"] > 1.0 or m_now["person"] > 0.0:
+        bad.append(f"the pool of light, the bench, the wall behind the free pole and the person must stay: {num({k: m_now[k] for k in ('pool', 'bench', 'behind', 'person')})}")
+    big = st_now.get("big_fill") or {}
+    if big.get("pieces") != 2:
+        bad.append(f"the place of the softbox and the place of the parquet are too large for the network - two pieces: the answer says {st_now.get('big_fill')}")
+    if not (500 < st_was["spot_px"] - st_now["spot_px"] < 4000):
+        bad.append(f"what was dropped along the person is not counted as found: spot_px {st_was['spot_px']} -> {st_now['spot_px']}")
+
+    # without the tick nothing is taken away; the strap is the person's with the tick and without it
+    c_no, st_no, _ = run(removeStands=False)
+    m_no = measure(c_no)
+    if m_no["wood"] < 30.0 or abs(m_no["softbox"]) < 6.0 or "big_fill" in st_no:
+        bad.append(f"without 'Прибирати стійки' the softbox and the parquet stay: {num(m_no)}; big_fill {st_no.get('big_fill')}")
+    if m_no["strap_max"] > 1.0:
+        bad.append(f"without 'Прибирати стійки' the strap must stay as well: moved by up to {m_no['strap_max']:.1f} levels")
+    # the second pass of the cleaning looks again, and must not find the strap either
+    m_two = measure(run(cleanPasses=2)[0])
+    if m_two["strap_max"] > 1.0:
+        bad.append(f"two passes: the second search must leave the strap as well: moved by up to {m_two['strap_max']:.1f} levels")
+    # the green preview shows what the cleaning does
+    green, _ = _quiet(H.make_engine(E, sil).preview_action_mask, frame, 8, dict(base))
+    shown = {k: float((green > 32)[parts[k]].mean()) for k in ("strap", "parquet", "face", "crumb")}
+    if shown["strap"] > 0.02 or min(shown["parquet"], shown["face"], shown["crumb"]) < 0.95:
+        bad.append(f"the green preview must show what will be cleaned - the parquet, the lit side, the crumb - and not the strap: {said(shown)}")
+    # the reduced copy of the window decides as the frame does
+    k = 0.5
+    small = cv2.resize(frame, (int(w * k), int(h * k)), interpolation=cv2.INTER_AREA)
+    c_s, st_s, _ = run(src=small, scale=k, speedMode="fast")
+    half = lambda m: cv2.resize(m.astype(np.uint8), (small.shape[1], small.shape[0]), interpolation=cv2.INTER_NEAREST) > 0  # noqa: E731
+    gs, gs0 = gray(c_s), gray(small)
+    strap_s = float(np.abs(gs - gs0)[cv2.erode(half(parts["strap"]).astype(np.uint8), np.ones((3, 3), np.uint8)) > 0].max())
+    wood_s = float(np.median(warm(c_s)[half(parts["wood"])]) - np.median(warm(c_s)[half(parts["paper"])]))
+    if strap_s > 1.5 or abs(wood_s) > 3.0 or (st_s.get("big_fill") or {}).get("pieces") != 2:
+        bad.append(f"a reduced copy of the frame must decide as the frame does: the strap moved by {strap_s:.1f} levels, the place of the parquet "
+                   f"is {wood_s:+.1f} warmer than the sheet, big_fill {st_s.get('big_fill')}")
+    report("border", not bad,
+           f"a softbox at the border goes whole - with its lit side between the body and the border and the far edge of its black base on a dark "
+           f"wall (the former way marked {was['face'] * 100:.0f}% and {was['far'] * 100:.0f}% of them) - and its place is the wall beside it "
+           f"({m_now['softbox']:+.1f} levels; continued from backdrop only: {tone['yes']:.0f} next to gear that stays, {tone['no']:.0f} when the gear "
+           f"counts as wall); the parquet goes ({m_now['parquet']:+.1f} levels against the sheet beside it, no warmer), a pool of warm light, a bench "
+           f"the person leans on and the wall behind a free pole stay; a dark strip along a leg is the person's (the former way repainted it by "
+           f"{m_was['strap']:+.0f} levels), a stain, a crumb and the joint between the legs are repaired as before; the green preview, the "
+           f"second pass and the reduced copy decide alike; without the tick nothing is taken away"
+           if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+
 def check_haze():
     """
     Smoke and the tools that move the tone (4.13.0, the owner's 0Q5A2507 with the smoke tick and an ordinary preset):
@@ -6600,6 +6890,7 @@ GROUPS = [("convert", check_convert), ("process", check_process), ("stage", chec
           ("format", check_format), ("scene", check_scene), ("stains", check_stains), ("seam", check_seam), ("mask", check_mask),
           ("brush", check_brush),
           ("dark", check_dark), ("gear", check_gear), ("stands", check_stands), ("bigfill", check_bigfill),
+          ("border", check_border),
           ("shadow", check_shadow), ("undo", check_undo),
           ("exact", check_exact), ("restart", check_restart), ("mix", check_mix), ("sharp", check_sharp),
           ("edge", check_edge), ("line", check_line), ("hair", check_hair),
