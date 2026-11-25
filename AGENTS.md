@@ -190,6 +190,22 @@ written here and in the repository.
   He said nothing about any of these results. No option card was shown. 4.13.0 answers this message. He
   did not write «зливай».
 
+- **2026-11-24, in the evening** (one message). THE TEXT OF THIS MESSAGE WAS NOT KEPT WHOLE: the notes of
+  the session were condensed before this entry was written, and only these pieces survived verbatim:
+  «Мішає світле замісь штори»;
+  «стоїть людина десь 5 метрів від стіни, коли вугол заберає, то виглядає, що стіна за метер… ілюзію
+  глибини даже на тих фото, що людина блисько біля стіни».
+  What the notes say he asked, in the agent's words: (a) where the black curtain is removed a lighter
+  column stands in its place and a dark block stays at the top (`0Q5A3534`; the same on `0Q5A2507`) -
+  the thing reply #21 had asked him about; (b) `[` and `]` work the first time and not the second - his
+  own words for it are lost, and what "the second time" was (the second press, the second photo, after
+  a click somewhere) is NOT known; (c) once the program takes the corner away, the wall looks a metre
+  behind a person who stood about five metres from it; he wants an illusion of depth, also on frames
+  where the person does stand close to the wall. Which frame he looked at is not known.
+  Not recorded either: which version he was on (4.12.0 or 4.13.0), whether new files came with the
+  message (none is known), whether he wrote anything about merging. The PR was left open.
+  4.14.0 answers this message (reply #22).
+
 ## 2. What is in the repository
 
 | Path | What it is | Rule |
@@ -936,13 +952,115 @@ second plugin next to the installed one and lose his presets.
     marked for removal on 42 % (70 %), since only what is thin and dark is; the window test has 115
     scenarios, the settings test 68 cases; `tests/try_defects.py` holds the 43 defects of 4.13.0.
 
+- **4.14.0** — the wall in place of the curtain, depth for the corner tool, the keys of the window, after
+  his message of the evening of 2026-11-24 (section 1). Decided alone, no option card.
+  - **What is too large for the network gets the wall beside it** (`bigFill`: on unless a request says
+    otherwise, off in the legacy regime; section «5a» of `engine.py`: `BIG_FILL_THICK`, `_big_pieces`,
+    `_membrane_fill`, `_paste_big_tone`). Measured in HIS results of 4.12.0 (the real LaMa on his PC),
+    the removed place against the wall beside it at 10 / 50 / 90 % of its height: the curtain of
+    `0Q5A3534` +12 / +22 / +25 levels, the black corner of `0Q5A2507` 0 / +11 / +14; the thin pieces of
+    the same frames (a light stand, a dark strip) -1 level each. The network repairs in tiles of 512
+    px; a thing that fills most of a tile leaves it nothing to go by, and it paints a guess.
+    The rule: a connected piece of the repair mask whose depth - twice the largest distance from a
+    point of it to its outline, in pixels of the REAL frame - is `BIG_FILL_THICK` (0.6) of a tile or
+    more is not given to the network (`heal_net`). That is 307 px: a thing about 150 px wide at the
+    frame border, where there is wall on one side only, or 300 px wide inside the frame. His two large
+    pieces measure 690 and 717 px, the two thin ones 190 and 265 px.
+    Its place gets the wall around it, continued on the 1024 copy: a membrane (every unknown pixel the
+    mean of its neighbours, solved from a coarse grid to the fine one) that hangs on the wall beside
+    the piece - the wall being what is neither a piece, nor another repair, nor the person. For a
+    piece at the left or right border the grid is squeezed `BIG_FILL_SQUEEZE` (4) times across, so the
+    tone is carried ALONG the rows: a shadow or a floor line that ran into the thing goes on to the
+    border (at the top or bottom border: along the columns). The continued wall is written into the
+    frame the network reads BEFORE the tiles run - it sees wall, not curtain, when it repairs what
+    lies near - and into its result. Grain: as much as the wall beside the piece has (the finest
+    detail of the frame itself, by the median) times the grain slider; the usual grain of a repair
+    follows the brightness of what stood there, which is next to none for a black curtain.
+    `stats["big_fill"] = {"pieces", "share"}` only when it happened, also when the repair came from
+    the stage cache (`big_info` in the record of `heal`); `k_heal`, the key of the proxy seed and
+    `_clean_signature` carry the switch. The panel sends nothing (the default applies) and shows
+    nothing of it.
+    Here, with the stand-ins (section 4, «Working on his photos»): `0Q5A3534` -1 / -1 / 0 levels, grain
+    1.11 of the wall's, 6.97 % of the frame, 42 tiles instead of 66; `0Q5A2507` -2 / -1 / -1, grain
+    0.91, 1.09 %.
+  - **A black thing at the border is marked whole** (`GEAR_BLACK_L` 10, `GEAR_BLACK_UNDER` 13,
+    `GEAR_BLACK_REACH` 0.08, `GEAR_BLACK_MAX` 0.15; `_whole_black_thing`, called on `bd_keep` in
+    `_compute_protection_maps_small`). What is black and large at the left or right border was looked
+    for in a strip of 8 % of the width. The curtain of `0Q5A3534` hangs wider at the top, in the shade
+    of the upper corner: a black triangle of 3 % of the width by 12 % of the height stayed, and the
+    fill carried its black on downwards - the "dark block" of his result. Now what is black (L under
+    10 of 255 - the curtain measures 0..8, the darkest of its wall and shadows 19 - and 13 under the
+    middle of its own row) and hangs together with a marked piece belongs to it: within 8 % of the
+    width of what was marked, never the person (a black dress next to a black stool), and not when it
+    hangs together over more than 15 % of the frame (a black backdrop). It adds to the removal mask:
+    `0Q5A3534` +0.94 % of the frame (the triangle), `2.jpg` +0.20 %, `0Q5A3417` +0.70 % (on both, a black
+    piece at the upper left border next to what was marked already), 0.00-0.01 % on his other six
+    frames; nothing of a person on any of the nine.
+  - **«Глибина»** (`cycDepth` 0..100, a value of the preset; `CORNER_DEPTH_WIDE` 2.5,
+    `CORNER_DEPTH_FLOOR` 0.4, `CORNER_DEPTH_SIGN` 0.012; `_apply_cyclorama_curve(..., depth=)`).
+    Read from his `1.jpg` (people about 5 m from the wall; grey 0..255 down the left side): wall 69,
+    the line at 57 % of the height, then floor 56, 56, 60, 67 (to 75 %), then 84, 101, 126, 140. The far
+    floor lies in grazing light and is DARKER than the wall; the plain cove (about 5 % of the height at
+    65) takes the line away and leaves that dark belt, and with the line gone the eye takes the end of
+    the lit floor for the end of the floor. THAT IS THE AGENT'S READING, not something he said. His
+    own retouch of that frame (`1 (2).jpg`: another crop, lighter all over; laid over the frame by
+    matched features, a weak fit of 78 matches of 875) reads wall 80, floor 76, 72, 71, 73, then 86,
+    118: the step at the line 5-8 levels instead of 13-15 (four columns measured), the belt 8-11
+    levels under the wall instead of 13-15. He widened the slope and took a part of the belt; he did
+    not level it. (An earlier draft of the comment and the manual said "level with the wall": wrong.)
+    The slider makes the cove up to 1 + 2.5 = 3.5 times as wide (the vertical blur and the zone it
+    works in). Above the line the whole wider zone is used. Below it the zone grows by
+    `CORNER_DEPTH_FLOOR` of the widening and ONLY WHERE THE CORRECTION LIFTS (`lifts`: a soft switch
+    on the sign of what the surroundings ask for, `CORNER_DEPTH_SIGN` wide); where the wider cove
+    would make the floor darker, the zone of the plain cove stays - the floor next to the camera, the
+    pool of light the person stands in, keeps its light. Two shapes were tried and dropped: wider on
+    both sides took 16 levels off the lit floor of `1.jpg` at 90 % of the height (125 -> 109) and 19
+    of 48 on the low-key `0Q5A3411`; a lower zone grown by 0.4 without the "lifts only" rule still
+    took 13 there. Nothing happens without the corner tool (the value is read as 0; `k_cyc` and the
+    signature carry 0) or where no corner is found (`0Q5A3534`: none).
+    Measured, the left backdrop at 10 .. 90 % of the height. `1.jpg`, depth 0: 65 65 65 67 68 60 60 83
+    125; depth 60: 65 65 65 66 65 65 71 85 125. `2.jpg`: 5 13 23 26 30 30 39 71 108, at 60: 5 13 23 26
+    30 36 50 73 108. So at 60 the belt of `1.jpg` is gone altogether - MORE than in his retouch.
+    Defaults: 60 in «Студія (Стандарт)», «Середній план», «Дальній план», «Без стійок (AI)»; 0 in the
+    dark presets and the close-ups (a wide cove drags the pool of light up a black wall).
+  - **Panel.** (a) «Глибина»: the slider `gSlDepth` with the badge `gValDepth`, the row right under
+    «Циклорама»; in the slider tables, `readCurrentConfig`, `normalizedPresetConfig` (`?? 0`: a preset
+    of his own saved before 4.14.0 stays at 0), `applyConfig`, `previewSettingsSignature` (0 without
+    the corner tool: a depth that does nothing asks for no new picture) and `updateSliderVisuals`
+    (without the corner tool the row is greyed and its badge reads «—»). A light refresh, like every
+    slider. The one-time move `depth60` of `PRESET_DEFAULT_MOVES` gives 60 to the four light presets
+    of a PC that has its presets stored, unless he changed the value himself;
+    `presets_defaults.json` carries `cycDepth` for all 10 presets.
+    (b) The keys of the window. ALL OF THE EXPLANATION IS A GUESS - nothing of it was seen in
+    Photoshop. `[` and `]`, B / E / H, Space and Ctrl + Z would reach the window only while something
+    inside it holds the keyboard, and nothing saw to that: they worked as long as the control clicked
+    last happened to hold it. What fits "the first time, not the second": the last thing clicked in
+    the first window is «Застосувати», which is disabled while the next photo is scanned and can hold
+    nothing; and a click on the photo could not help, because the photo could not take the keyboard.
+    Now the photo can hold the keyboard (`tabindex="0"` on
+    `dlgViewport`; `.r4m-viewport:focus` draws no ring) and takes it (`keepKeysInWindow`): 60, 400 and
+    1500 ms after the window opens, when the scan is over, when the mouse moves over the photo (at
+    most twice a second, `sessState.keysAskedMs`) and on every press on it. While a name is typed
+    into a text field (`typingInWindow`: an input that is no check box, or a textarea, in a form that
+    is open) the keyboard stays there until the photo is pressed. Where the host gives the keyboard
+    to no plain element, the button of the tool in hand takes it. The key handlers hang on
+    `retouchModal`, `document` and `window`, and one press counts once (`lastKeyDown`).
+  - NOT built: depth where no corner is found; the other things that make a wall look far (a softer
+    texture of the wall, a fainter shadow of the person on it); a line in the window that says what
+    was too large for the network (the answer carries `big_fill`).
+  - Checks: the groups `bigfill` and `depth` are new (41 groups). The stand-in network of `bigfill`
+    (`H.LightLama` of `tests/harness.py`) paints 22 levels lighter than what its tile shows, as his
+    LaMa did. The legacy regime of the comparisons has `bigFill` off; `_mutate` of the stage walk
+    changes `cycDepth` and `bigFill` too; the window test has 119 scenarios, the settings test 74
+    cases; `tests/try_defects.py` holds the 42 defects of 4.14.0.
+
 ## 3. Current state — update this at the end of every session
 
-_Last updated: by the agent of the first session, after releasing 4.13.0 (the answer to his message of
-2026-11-24 on 4.12.0)._
+_Last updated: by the agent of the first session, after releasing 4.14.0 (the answer to his message of
+the evening of 2026-11-24)._
 
-- **Released:** 4.13.0, tag `cvp2-v4.13.0`, as a pre-release. Direct download:
-  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.13.0/CleanVinylPro2.zip`
+- **Released:** 4.14.0, tag `cvp2-v4.14.0`, as a pre-release. Direct download:
+  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.14.0/CleanVinylPro2.zip`
 - **Owner's progress:** 4.2.0 to 4.12.0 have been installed and work on his PC (program in
   `D:\Plugin Photoshop\CleanVinylPro2`, models in `D:\model AI fotoshop`, LaMa on `CUDAExecutionProvider`,
   Python 3.12.10). So the `.bat` files, the installer, the GPU, the real models and the panel HAVE run on
@@ -964,58 +1082,103 @@ _Last updated: by the agent of the first session, after releasing 4.13.0 (the an
   mixer brush works there (0.39 of the grain on the wall at 50 %); a computation takes 28 s on the smoke
   frame (125 tiles in 15 s) and 10 s on `0Q5A3534`. He works with the preset «Дальній план», the smoke
   tick at 80 %, «Прибирати стійки» and «Мікс» ticked, «Детальний перегляд» unticked. 4.13.0 answers that
-  message (reply #21). **He has not reported on 4.13.0 yet.**
+  message (reply #21). In the evening of 2026-11-24 (section 1; the text of that message was not kept
+  whole, and whether he was on 4.12.0 or 4.13.0 is not known): a lighter column stands where the curtain
+  was removed, `[` and `]` work the first time and not the second, and with the corner gone the wall
+  looks a metre behind a person who stood five metres from it - he wants an illusion of depth. 4.14.0
+  answers that message (reply #22). **He has not reported on 4.14.0 yet, and nothing is known of how
+  4.13.0 went** (the rows of the settings, the pill «Стійки», the ring of the brush).
   The path to the plugin list of Creative Cloud (Stock & Marketplace → Plugins → Manage plugins → the three
   dots → Uninstall; the same list opens from Photoshop with Plugins → Manage Plugins) is in section 6 of
   the manual since 4.8.0. Whether his Creative Cloud shows these names in English or in Ukrainian is not
   known.
-- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (46 results in
-  2,054 s; 115 scenarios of the panel test and 68 cases of the settings test among them) on
-  2026-11-24 (the clock of the sandbox), with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4, with
+- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (48 results in
+  1,825 s; 119 scenarios of the panel test and 74 cases of the settings test among them) on
+  2026-11-25 (the clock of the sandbox), with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4, with
   nothing running next to it and nothing of the program changed after it.
-  Deliberate defects for what is new in 4.13.0 (`tests/try_defects.py`), put in one by one: 43 (15 in the
-  engine - 8 for the group `stands`, 7 for `haze` - and 28 in the panel). All are caught by the checks
-  as they are now, each by the check of the rule it breaks. They ran in a copy of the tree after the
-  last change of the engine, the panel and the checks: 43 in one run of 391 s.
-  Holes found while 4.13.0 was built, all closed:
-  - the first run of the list let one defect through: "with the tick everything stays protected, the
-    stand too". The AI fill takes the stand away whatever the protection says, so nothing differed in
-    the frame; what the protection is for shows only with a tone stage on - the place of the stand
-    keeps its old grain under the mixer brush, a sleeve. `check_stands` asks with the mixer brush now;
-  - "the black stand is not taken away (the depth is asked too high)" was caught at 93 % against a
-    limit of 95 %: a black stand is taken by the rule for what is black and large as well, so the
-    depth rule had nothing of its own in the frame. A dark-grey pole was added (0 % with the defect);
-  - "the black curtain is not taken away" was caught by the line that says "the frame of this check
-    must be ..." - that line asked the former way for the curtain too, and the defect broke the former
-    way with it. A line of that kind may ask only for what makes the frame worth testing (here: the
-    shadows are marked by the former way);
-  - "the rim around the smoke is ten times / three times as wide" did not show the rule "the tone tools
-    are back a little further off": a wide Gaussian over a small smoke zone makes a WEAK rim, so a
-    constant that is too large behaves like none (the first was caught by "faded out next to the map",
-    the second by nothing). The defect that shows the rule is a rim that does not fade;
-  - the smoke preset in the two panel tests: the lists of earlier versions were built from the built-in
-    presets of today, so they lost the preset together with the program. They carry their own copy of
-    it now (`SMOKE_PRESET_412`); a test of a migration must own the data of the version it migrates
-    from.
-  Not in the list, because no check here can tell: `GEAR_KEPT_MAX` (in the drawn frame every group is
-  taken whole or not at all); the corner finder of the green preview (`preview_action_mask`) without
-  `smoke_all_s` (the preview is compared with the cleaning on frames without smoke only); the ring of
-  the brush after a zoom (jsdom lays nothing out: the ring has one size at every zoom there).
-  Holes found while earlier versions were built are told in the history of this file (4.12.0: at
-  `8b620e2`; 4.11.0: at `07e8995`; 4.10.0: at `64700aa`; 4.9.0: at `78a08b8`; 4.8.0: at `0f4cb46`). Their
-  lessons stay rules: read the reason after "<-" of every caught defect - when it names another rule
+  Deliberate defects for what is new in 4.14.0 (`tests/try_defects.py`), put in one by one: 42 (22 in the
+  engine - 15 for the group `bigfill`, 7 for `depth` - and 20 in the panel: 9 for the keys of the
+  window, 8 for the slider «Глибина», 3 for the one-time move of the presets). All are caught by the
+  checks as they are now, each by the check of the rule it breaks. They ran in a copy of the tree
+  after the last change of the engine, the panel and the checks: 42 in one run of 670 s.
+  Holes found while 4.14.0 was built, all closed:
+  - "the new wall gets its grain whatever the grain slider says" was NOT caught: `check_bigfill` asked
+    the grain with the slider at 90 and at 0, and at 0 no grain is laid at all. It asks at 30 too now
+    (33 % of the grain at 90; with the defect 108 % against 108 %);
+  - "below the line nothing is widened" was caught only by the line that says "the frame of this check
+    must be ...": the dark belt of the drawn frame was shorter than the plain cove reaches, so the
+    wider zone below the line had nothing to do in it. The belt is as long as the owner's now (a fifth
+    of the height; 33 levels under the wall in the frame, 21 after the plain cove, 9.0 at depth 60,
+    5.4 at 100), and the check asks that the tone rises from the foot of the wall to the lit floor
+    without falling back (0.1 / 0.0 levels at 60 / 100, 4.7 after the plain cove; with the defect 3.9
+    and 7.0, and the belt 12.1 / 10.7 against the limits 10.5 / 6.5);
+  - "the row of depth stands above the corner tool" was NOT caught, and rightly: the defect planted a
+    hidden second element with the id of the corner slider, which changes nothing for anybody (section
+    4, traps). In its place: "the row of depth is no row of the list" (caught: «5 / -1»).
+  Not in the list, because no check here can tell (the closing comment of the list says why): the
+  second paste of the continued wall, into the result in full depth (it matters for a 16-bit document
+  only); "grain is laid although the network was not run" (the drawn frame always has something for
+  the network); `CORNER_DEPTH_SIGN` (a hard change between the two zones shows as a fraction of a
+  level); the key handlers at the window itself and at the host's window, and the three timers after
+  the opening (which of them a host needs is seen in Photoshop only).
+  Holes found while earlier versions were built are told in the history of this file (4.13.0: at
+  `155e1ce`; 4.12.0: at `8b620e2`; 4.11.0: at `07e8995`; 4.10.0: at `64700aa`; 4.9.0: at `78a08b8`; 4.8.0:
+  at `0f4cb46`).
+  Their lessons stay rules: read the reason after "<-" of every caught defect - when it names another rule
   than the one the defect breaks, the check that should have noticed is too weak (the runner shows only
   the FIRST failed rule: put the defect in by hand and read the whole list when in doubt); read the
   NUMBERS in that reason; a new rule can empty an older scenario, so run ALL the defects again after the
   last change; a check names its limit itself and does not read it from the engine; a rule is asked
   where it is hardest for the program, not at the values of the other questions; before writing what a
   change cured, put the old code back and measure it with the check as it finally is; a new key of
-  `_clean_signature` needs its own question, not the walk; and a defect that changes nothing visible
-  does not belong in the list.
-  The runners of earlier versions are gone or replaced (4.12.0: 45 defects, in the history at `8b620e2`;
-  4.11.0: 30, at `07e8995`; 4.10.0: 54, at `64700aa`; 4.9.0: 35, at `78a08b8`; 4.8.0: 71, at `0f4cb46`;
-  4.7.0: 29, at `c3be3ed`; 4.6.0: 34, at `50bae15`; 4.5.0: 71 and 4.4.0: 41, never committed); their
-  checks are still in `tests/run_checks.py`.
+  `_clean_signature` needs its own question, not the walk; a defect that changes nothing visible does
+  not belong in the list; a line that says "the frame of this check must be ..." may ask only for what
+  makes the frame worth testing, and a defect caught by that line alone is a hole; what a protection is
+  for shows only with a tone stage on; a constant that is far too large can behave like none - the
+  defect that shows a rule is the one that takes the rule away; and a test of a migration carries its
+  own copy of what the older version stored.
+  The runners of earlier versions are gone or replaced (4.13.0: 43 defects, in the history at `155e1ce`;
+  4.12.0: 45, at `8b620e2`; 4.11.0: 30, at `07e8995`; 4.10.0: 54, at `64700aa`; 4.9.0: 35, at `78a08b8`;
+  4.8.0: 71, at `0f4cb46`; 4.7.0: 29, at `c3be3ed`; 4.6.0: 34, at `50bae15`; 4.5.0: 71 and 4.4.0: 41, never
+  committed); their checks are still in `tests/run_checks.py`.
+- **Decided by the agent alone for 4.14.0** (no option card; change it if he says otherwise):
+  - what is "too large for the network": 0.6 of a tile (`BIG_FILL_THICK`), read from FOUR pieces of two of
+    his results - the two the network got right are 190 and 265 px deep, the two it painted lighter 690
+    and 717 px; the limit (307 px) is nearer the good ones. Nothing is known in between;
+  - no switch for it in the window: the wall is always continued (a request with `bigFill` false turns
+    it off; the panel sends nothing). The window does not say that it happened either;
+  - the continued wall gets the grain of the wall beside it times HIS grain slider, no setting of its
+    own;
+  - a black thing at the border is marked whole (he asked for the lighter column only; the dark block at
+    the top of his result is the part of the curtain that had stayed);
+  - «Глибина» is a SLIDER, and it only widens the slope between floor and wall. He asked for "an
+    illusion of depth"; the reading that the dark belt of far floor is what tells the eye where the
+    floor ends is the agent's (section 2, «4.14.0»). 60 in the four light presets with a floor - on a PC
+    that has its presets stored the one-time move `depth60` puts it there - and 0 in the dark presets
+    and the close-ups; presets of his own stay at 0. At 60 the belt of his `1.jpg` is gone altogether,
+    MORE than in his own retouch of that frame (he was told so and asked whether it is too much);
+  - depth never dims the floor next to the camera (below the line the wider zone only lifts);
+  - nothing was done to the two other things that make a wall look far: the texture of the wall stays
+    as sharp as it was and the shadow of the person on it keeps its depth;
+  - nothing where no corner is found (`0Q5A3534`: none) and nothing without «Циклорама»;
+  - the keys: the photo takes the keyboard whenever the mouse is over it, also away from a slider or a
+    check box that was just used; only a text field that is being typed in keeps it, until the photo is
+    pressed. No ring is drawn around the photo while it holds the keyboard.
+- **Not run in Photoshop yet (4.14.0):** all of it. In particular:
+  - whether `[` and `]` work every time now. The cause was GUESSED (nothing inside the window held the
+    keyboard), never seen; if they still stop, ask what was pressed last before they stopped. Whether
+    Photoshop gives the keyboard to a `div` with `tabindex` at all is not known either - then the button
+    of the tool takes it, and that path ran only in jsdom;
+  - whether typing a preset name, dragging a slider or the drop-down of the presets is disturbed by the
+    photo asking for the keyboard under the mouse (in jsdom: not);
+  - the join between the continued wall and what the REAL network paints right next to it, and the
+    grain of that wall beside real grain at 100 %: both were seen with stand-ins only;
+  - depth with the real silhouette: it shifts the tone of the backdrop further and higher up than the
+    plain cove, so a sheer sleeve or hem the silhouette misses gets a patch (here, with the GrabCut
+    stand-in, the sleeve of `0Q5A3384`: -31 / +27 levels);
+  - whether 60 % is what he meant, and on which frame;
+  - the look of the new row in the settings (the rows of the settings were squeezed in 4.12.0; whether
+    4.13.0 cured that is not known).
 - **Decided by the agent alone for 4.13.0** (no option card; change it if he says otherwise):
   - EVERY tick and switch that changes the frame recomputes in full, with the progress card (he: "any
     tick"); sliders, the fraction buttons, the passes and a preset click still give the light refresh;
@@ -1045,7 +1208,8 @@ _Last updated: by the agent of the first session, after releasing 4.13.0 (the an
     read at all;
   - the band above the cloud of `0Q5A2507`: gone or not (it could not be reproduced here);
   - what the real fill makes of the curtain of `0Q5A3534` now that the shadows are not marked any more
-    (the lighter column is the fill's own doing).
+    (the lighter column is the fill's own doing). ANSWERED in the evening of 2026-11-24: the column
+    bothers him; 4.14.0 does not give that place to the network any more.
 - **Decided by the agent alone for 4.12.0** (no option card; change it if he says otherwise):
   - the smoke tick and the smoke switch of the settings recompute IN FULL, with the progress card (he
     asked for "a recompute"; every other control still gives its light refresh, and the button is at
@@ -1313,19 +1477,25 @@ _Last updated: by the agent of the first session, after releasing 4.13.0 (the an
   - of 4.5.0, still unconfirmed: opening the backup folder from the panel, the look of the new buttons,
     the one-time preset moves. (Ctrl+Z works in Photoshop: he confirmed it.)
 - **Merging:** pull request #1 (`arena/33f1ced8-cleanvinylpro-beta` into `main`) is open and deliberately not
-  merged yet: fixes that follow his report on 4.12.0 should come from the session that knows the code. He
+  merged yet: fixes that follow his report on 4.14.0 should come from the session that knows the code. He
   asked what merging into `main` means and was told: the version is already published and can be downloaded;
   merging only marks it on GitHub as the main one and changes nothing on his PC; he should write «зливай»
   when he wants it. Merge it when he writes that or when the session ends (section 6). If `main` already
   contains this file, that has happened. Merging also removes the folder `CleanVinylPro/` from `main`.
 
-### Open questions (ask when he reports on 4.13.0)
+### Open questions (ask when he reports on 4.14.0)
 
-- New with 4.13.0 (asked in reply #21): a screenshot of the open settings - are the rows apart now? Was
-  «Мікс» ticked when he applied `0Q5A3534` (its result shows no mixer brush at all, the wall is pixel for
-  pixel the frame)? Does the lighter column in place of the curtain of that frame bother him (then: a
-  fill for large areas at the border that continues the tone of the wall)? Why was the smoke preset
-  bad - only said as "bad"?
+- New with 4.14.0 (asked in reply #22): which frame did he mean by "five metres from the wall", and is
+  «Глибина» 60 % what he wants there - or too much (it takes more of the dark belt than his own retouch
+  of `1.jpg`), or not enough of an illusion (then the next things are the texture of the wall and the
+  shadow of the person, section 2)? When exactly did `[` and `]` stop: at the second press, on the second
+  photo, after a click on something - and did a click on the photo bring them back? Do they work every
+  time now? Is the place of the curtain right now, also where it meets what the network painted?
+- From 4.13.0 (asked in reply #21). Answered in the evening of 2026-11-24: the lighter column in place
+  of the curtain does bother him (4.14.0). Not answered, as far as the notes of that evening go: a
+  screenshot of the open settings - are the rows apart now? Was «Мікс» ticked when he applied
+  `0Q5A3534` (its result shows no mixer brush at all, the wall is pixel for pixel the frame)? Why was
+  the smoke preset bad - only said as "bad"? (Both asked again in reply #22.)
 - From 4.12.0, answered by his files of 2026-11-24: thick smoke is kept and the curtain removed; `[` and
   `]` work; the captions have their size. Not answered: is the mixer brush what he does by hand - is
   50 % right, should it go over the shadows or closer to the person? Does a change during the bar
@@ -1481,6 +1651,30 @@ _Last updated: by the agent of the first session, after releasing 4.13.0 (the an
   is the fill's own: on `0Q5A3534` the real LaMa put a lighter column in place of the curtain.
 - A wall-floor corner that shows only through haze stays (4.13.0, `CORNER_IN_SMOKE`): the corner tool
   works when the line is seen on clean backdrop along at least 40 % of what is in view of it.
+- The wall continued into what is too large for the network (4.14.0) is a smooth surface with grain on
+  it. What the wall has between those two scales - folds of paper, stains, the weave of a cloth - is
+  not continued: the place is cleaner than the wall beside it. A shadow or a floor line that ran into
+  the thing goes on to the frame border only for a piece AT the left or right border (along the rows)
+  or at the top or bottom one (along the columns), and it fades on the way: in the drawn frame of the
+  check a shadow band reaches the border with 66 % of its depth. A piece in the middle of the frame
+  gets the plain surface between its sides. The limit (`BIG_FILL_THICK`) comes from four pieces of two
+  frames; a thing a little under it is still the network's and may come out lighter than the wall.
+  A piece with no wall in sight (fewer than 16 points of the 1024 copy within one and a half times its
+  depth that are neither a repair nor the person) is left to the network, as before.
+  What the real network paints right next to the continued wall was never seen.
+- The whole black thing (4.14.0): black means L under 10 of 255. A dark grey curtain that hangs wider
+  than the strip of 8 % it is looked for in keeps its upper part, as before.
+- «Глибина» (4.14.0) needs the corner tool and a FOUND corner; on `0Q5A3534` none is found and the slider
+  does nothing. It shifts the tone of the backdrop over up to 3.5 times the height the plain cove works
+  on, so what the silhouette misses there is shifted with the backdrop: with the GrabCut stand-in the
+  sheer sleeve of `0Q5A3384` got a patch of -31 / +27 levels at 60. A thin dark line across the floor
+  inside the wider zone (a vinyl seam) is lifted a little with its rows: 3 of its 16 levels in the
+  drawn frame of the check. A dark wall over a floor lit right up to it gets the light of the floor far
+  up the wall (+15 levels an eighth of the frame height above the line in the drawn frame) - that is
+  the tool at work, and the reason why the dark presets ship with 0. At 60 the dark belt of his `1.jpg`
+  is gone altogether, which is more than his own retouch took.
+- The keys of the window (4.14.0): what Photoshop does with the keyboard was never seen; the cure
+  follows a guess (section 2, «4.14.0»). jsdom gives the keyboard to whatever asks for it.
 - The «Маска» view of a LIGHT refresh is not the exact one when «Сліди взуття» stands very low (found
   when the random walk of `quick` changed its steps, as old as the light refresh): at 6 % the layer
   covers 11 % of the frame in the light picture and 67 % in the exact one; at 20 % and at 65 % the mask
@@ -1699,6 +1893,28 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   where the corner is). They are close to his, not equal - on `0Q5A2507` the corner finder decided
   otherwise here than on his PC - so a defect seen only here is a defect of the program all the same,
   but not one he saw; say so. What the real fill paints into a large area cannot be seen here at all.
+- What the real fill paints into a large area can be IMITATED since 4.14.0: `H.LightLama` of
+  `tests/harness.py` paints every masked pixel 22 levels lighter than what its tile shows outside the
+  mask - what his LaMa did with the curtain of `0Q5A3534`. It is a stand-in for that one fault, made to
+  see whether a cure works; it says nothing about how the real fill looks.
+- Silhouettes used for 4.14.0 (none is kept in the repository; the frames are his and are never
+  committed). `0Q5A3534`: `tools/owner_frames.py silhouette` with this polygon (x,y in shares):
+  0.34,0.20 0.40,0.185 0.46,0.195 0.49,0.23 0.495,0.30 0.485,0.37 0.50,0.40 0.52,0.395 0.58,0.39 0.62,0.41
+  0.64,0.44 0.645,0.47 0.68,0.49 0.74,0.53 0.77,0.60 0.79,0.66 0.80,0.69 0.80,0.72 0.79,0.78 0.86,0.81
+  0.90,0.80 0.92,0.785 0.95,0.80 0.99,0.87 0.99,0.91 0.96,0.91 0.90,0.875 0.80,0.885 0.70,0.895 0.67,0.90
+  0.66,0.925 0.60,0.94 0.50,0.95 0.47,0.945 0.47,0.925 0.50,0.915 0.48,0.92 0.44,0.905 0.40,0.915
+  0.33,0.915 0.28,0.90 0.27,0.895 0.29,0.85 0.295,0.70 0.27,0.62 0.25,0.56 0.255,0.50 0.27,0.455 0.19,0.42
+  0.165,0.395 0.18,0.35 0.22,0.30 0.26,0.28 0.29,0.275 0.30,0.24 0.32,0.21
+  The others: GrabCut on a copy 1000 px high, a rectangle as "probably the person", 6 rounds, pieces
+  under 0.2 % of the copy dropped, closed with 7 x 7, blurred by 1.2, resized to 1024 x 1024. Rectangles
+  (x0,y0,x1,y1 in shares): `0Q5A2507` 0.20,0.10,0.62,0.975; `1.jpg` 0.10,0.14,0.92,0.93; `2.jpg`
+  0.38,0.17,0.64,0.945; `3.jpg` 0.30,0.12,0.98,0.97; `0Q5A3417` 0.24,0.16,0.86,0.90; `0Q5A3384`
+  0.0,0.18,0.80,0.94 (it misses a sheer white sleeve); `0Q5A3411` 0.20,0.12,0.95,0.90; `0Q5A3413`
+  0.08,0.20,0.95,0.94. Good enough to see where a tone stage works; not for hair or hems.
+- His retouch laid over the frame when it WAS re-cropped (`1 (2).jpg` over `1.jpg`, 4.14.0): ORB
+  features and a similarity fit gave scale 1.0571, rotation -1.02 degrees with 78 matches of 875 - a
+  weak fit, the places are approximate. Enough to read a row profile of the backdrop (the median of a
+  column band, at fixed shares of the height) from both; not enough to subtract one from the other.
 - Brush strokes on his frames are made by script, the way `check_brush` in `tests/run_checks.py` does it:
   `r = eng.start_session(image, 8, params)`, then
   `eng.edit_session_mask(r["session_id"], "stroke", [{"x": 0.5, "y": 0.5, "norm": 1}, ...], radius, erase,
@@ -1710,6 +1926,33 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
 
 ### Traps already paid for
 
+- HIS MESSAGE GOES INTO SECTION 1 FIRST, word for word, before any work on it starts. The message of
+  the evening of 2026-11-24 was worked on for a whole session before it was written down; the notes of
+  the session were condensed in between, and what is left of his words is three fragments (section 1).
+  The same for files he sends: name them in section 1 at once, with what each one is.
+- A slider that scales something is asked in the MIDDLE too. `check_bigfill` asked the grain of the new
+  wall with the grain slider at 90 and at 0; at 0 no grain is laid at all, so "the new wall gets its
+  grain whatever the slider says" passed. It asks at 30 now (a third of the grain at 90).
+- A rule about how FAR something reaches needs a frame in which it has to reach that far. The belt of
+  `check_depth` was shorter than the plain cove reaches, so "below the line nothing is widened" changed
+  nothing the check asked about and was caught only by the line that says "the frame of this check
+  must be ...". The belt is as long as the owner's now (a fifth of the height), and the check asks that
+  the tone rises from the wall to the lit floor without falling back.
+- A defect that is not caught may be a badly made defect. "The row of depth stands above the corner
+  tool" was made by planting a second, hidden element with the id of the corner slider inside the row
+  of depth; `querySelector` finds the first one in the document, so nothing changed for the check - nor
+  for the program. Check what the defect does before strengthening the check.
+- `tests/try_defects.py WORD` takes a defect when the word is in its GROUPS or in its NAME: `depth`
+  picks the seven engine defects and every panel defect with "depth" in its name.
+- A new one-time move of the presets (`PRESET_DEFAULT_MOVES`): the window test counts the remembered
+  moves in the backup scenario (5 now), and the preset lists of earlier versions inside the tests
+  (`presets430`, `pc412`) must not carry the new key - they are what such a PC has stored.
+- The stage cache in a check works only when `cached_fg_raw_1024` is passed with `stage_cache`. The
+  names in `reused_stages`: `fg`, `maps`, `corner`, `detect`, `seam`, `spots`, `hair`, `heal`, `scuffs`,
+  `blur`, `mix`. The cove itself is no stage: `corner` is the FOUND line (it depends on no slider), the
+  cove is computed anew each time, and `k_cyc` only takes part in the keys of what follows it (`scuffs`,
+  `blur`, `mix`).
+- `tools/owner_frames.py run ... key=value` reads `True` / `False` and numbers; `true` raises ValueError.
 - Memory: 3.9 GB. A run of several check groups, a probe on a 21-megapixel frame and the window test at the
   same time ended with the checks killed (exit code 137, no message, the groups after it never ran - the
   log just stops). Heavy things one at a time; after a kill, run the missing groups again.

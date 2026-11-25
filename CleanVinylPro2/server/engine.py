@@ -3671,9 +3671,9 @@ class CleanVinylEngine:
     # one step behind the people. His own retouch of that frame ("1 (2).jpg": another crop, lighter all over; laid
     # over the frame by matched features - a weak fit, 78 matches of 875, so the places are approximate) reads
     #     wall 80 | floor 76, 72, 71, 73 (to 75%), then 86, 118, 145, 167
-    # There is no step at the line (5 levels where the frame has 13), the wall darkens slowly into the belt, and
-    # the belt is 8..11 levels under the wall instead of 13..15 (the four columns measured). He widened the cove
-    # and took a part of the belt; he did not level it.
+    # The step at the line is 5 levels where the frame has 13 (5..8 against 13..15 over the four columns measured),
+    # the wall darkens slowly into the belt, and the belt is 8..11 levels under the wall instead of 13..15. He
+    # widened the cove and took a part of the belt; he did not level it.
     # The slider widens the cove, so that the tone of the floor is carried up the wall and the belt takes the tone
     # of what lies around it: at 100 the cove is 1 + CORNER_DEPTH_WIDE times as wide. (At 60 the belt of 1.jpg is
     # gone altogether - more than in his retouch; how much he wants is his to say, the slider goes down to 0.)
