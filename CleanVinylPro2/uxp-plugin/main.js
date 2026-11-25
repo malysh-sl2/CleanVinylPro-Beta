@@ -6,7 +6,7 @@ const uxpShell = uxp.shell;
 const CANDIDATE_URLS = ["http://127.0.0.1:18746", "http://localhost:18746"];
 // The same number as in manifest.json and server.py. A server of another version still answers (for example the
 // previous one that was left running after an update) - the panel then says how to restart it.
-const PLUGIN_VERSION = "4.13.0";
+const PLUGIN_VERSION = "4.14.0";
 let SERVER_URL = CANDIDATE_URLS[0];
 
 const DEFAULT_PRESETS = [
@@ -2061,20 +2061,32 @@ function refreshBrushCursor() {
 
 // The keys of the big window ("[" and "]", B / E / H, Space, Ctrl + Z ...) reach it only while something inside it
 // holds the keyboard. Nothing saw to that: the keys worked as long as the control clicked last happened to hold
-// it. The owner, 4.13.0: "[" and "]" work in the first window and not when it is opened again - the last thing
-// clicked in the first one is «Застосувати», which is switched off while the next photo is scanned and can hold
-// nothing. A click on the photo did not help either: the photo could not take the keyboard.
+// it. The owner, 2026-11-24: "[" and "]" work the first time and not the second. It could not be tried here (no
+// Photoshop); what fits his words: the last thing clicked in the first window is «Застосувати», which is switched
+// off while the next photo is scanned and can hold nothing. A click on the photo did not help either: the photo
+// could not take the keyboard.
 // Now the photo can (tabindex on #dlgViewport) and takes it: when the window opens, when the scan is over, and
-// whenever the mouse is over the photo or pressed on it - unless a name is being typed into a text field.
+// whenever the mouse is over the photo or pressed on it. While a name is being typed into a text field the
+// keyboard stays there - until the mouse is pressed on the photo (`evenWhileTyping`): that ends the typing.
 // (A host that gives the keyboard to no plain element: the button of the tool in hand takes it, as after a click.)
-function keepKeysInWindow() {
+function typingInWindow() {
+  const a = document.activeElement;
+  const tag = a && a.tagName;
+  if (!(tag === "TEXTAREA" || (tag === "INPUT" && String(a.type || "text").toLowerCase() !== "checkbox"))) return false;
+  // (a field of a form that was closed since is not being typed in, whatever the host says about the focus)
+  return !["dlgAddPresetForm", "dlgPresetsPopover"].some((id) => {
+    const box = el(id);
+    return !!box && typeof box.contains === "function" && box.contains(a) && !box.classList.contains("visible");
+  });
+}
+
+function keepKeysInWindow(evenWhileTyping) {
   if (!sessState.open) return;
   const vp = el("dlgViewport");
   if (!vp || typeof vp.focus !== "function") return;
   const a = document.activeElement;
   if (a === vp) return;
-  const tag = a && a.tagName;
-  if (tag === "TEXTAREA" || (tag === "INPUT" && String(a.type || "text").toLowerCase() !== "checkbox")) return;
+  if (evenWhileTyping !== true && typingInWindow()) return;
   try { vp.focus(); } catch (_) {}
   if (document.activeElement !== vp) {
     const btn = el(sessState.tool === "pan" ? "dlgToolPan" : sessState.tool === "brush" ? "dlgToolBrush" : "dlgToolEraser");
@@ -3262,7 +3274,7 @@ async function openInteractiveWorkspace() {
   // Delay layout fit slightly until modal finishes opening
   setTimeout(() => { if (sessState.open) resetZoomFit(); }, 60);
   // ...and the photo takes the keyboard (see keepKeysInWindow); asked again later, for a host that is slow to show the window
-  [60, 400, 1500].forEach((ms) => setTimeout(keepKeysInWindow, ms));
+  [60, 400, 1500].forEach((ms) => setTimeout(() => keepKeysInWindow(), ms));
 
   try {
     await dlg.uxpShowModal({
@@ -4423,7 +4435,7 @@ function initEvents() {
   // (Pointer events: a host that reports the right button only through them is served as well. Where both kinds
   //  of events come, the second one finds the drag already started and changes nothing.)
   vp.addEventListener("pointerdown", (e) => {
-    if (sessState.open) keepKeysInWindow();
+    if (sessState.open) keepKeysInWindow(true);
     if (!sessState.open || e.button !== 2 || sessState.isPanning) return;
     startPan(e);
   });
@@ -4437,7 +4449,7 @@ function initEvents() {
 
   vp.addEventListener("mousedown", (e) => {
     if (!sessState.open) return;
-    keepKeysInWindow();  // (the press itself gives the photo nothing: its default is cancelled below)
+    keepKeysInWindow(true);  // (the press itself gives the photo nothing: its default is cancelled below)
     // Close open popovers when clicking viewport
     ["dlgPresetsPopover", "dlgGearPopover", "dlgInfoPopover"].forEach((id) => {
       if (el(id)) el(id).classList.remove("visible");

@@ -1912,7 +1912,8 @@ async function main() {
   const presets430 = () => {
     const now = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, "..", "server", "presets_defaults.json"), "utf8"));
     const list = IDS_OLD.map((id) => (id === "smoke" ? JSON.parse(JSON.stringify(SMOKE_PRESET_412)) : now.find((p) => p.id === id)));
-    list.forEach((p) => { p.cfg.cycCurve = 0; p.cfg.smokeOn = true; if (p.id === "lowkey") p.cfg.spots = 92; });
+    // (no word of "Глибина" either: that came with 4.14.0)
+    list.forEach((p) => { p.cfg.cycCurve = 0; p.cfg.smokeOn = true; delete p.cfg.cycDepth; if (p.id === "lowkey") p.cfg.spots = 92; });
     list.push({ id: "user_1", name: "Мій пресет", color: "#ffffff", builtin: false, cfg: Object.assign({}, list[0].cfg, { cycCurve: 0, spots: 33, smokeOn: true }) });
     return list;
   };
@@ -2511,7 +2512,11 @@ async function main() {
     expect(mine.spots === 33 && mine.smokeOn === true && mine.cycCurve === 0, "the user's own preset must be as it was saved");
     expect(env.state("activePresetId") === "lowkey" && env.state("getSliderVal('gSlSpots')") === 80 && env.state("getSliderVal('gSlCyc')") === 65 && !env.el("dlgChkSmoke").checked,
       "the controls of the active preset must follow");
-    expect(env.server.disk["user_settings.json"].presetMoves.length === 4, "the moves must be remembered: " + JSON.stringify(env.server.disk["user_settings.json"].presetMoves));
+    expect(env.server.disk["user_settings.json"].presetMoves.length === 5, "the moves must be remembered: " + JSON.stringify(env.server.disk["user_settings.json"].presetMoves));
+    // (4.14.0: "Глибина" is 60 in the light presets with a floor; the dark presets and the user's own know nothing of it)
+    const depths = ["std", "medium_shot", "wide_shot", "clean_stands", "lowkey", "user_1"].map((id) => cfgOf(env, id).cycDepth);
+    expect(JSON.stringify(depths) === JSON.stringify([60, 60, 60, 60, undefined, undefined]) && env.state("getSliderVal('gSlDepth')") === 0,
+      "depth must reach the restored light presets only, and the slider of the active dark preset stays at 0: " + JSON.stringify(depths));
   });
 
   // ---------------------------------------------------------------- one mode; the edge of the brush and the eraser
@@ -3258,6 +3263,7 @@ async function main() {
   // ("Зйомка з димом" as 4.12.0 shipped it - see SMOKE_PRESET_412 above - on a PC that had it as the active preset)
   const pc412 = () => {
     const now = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, "..", "server", "presets_defaults.json"), "utf8"));
+    now.forEach((p) => { delete p.cfg.cycDepth; });           // ("Глибина" came with 4.14.0)
     now.splice(now.findIndex((p) => p.id === "clean_stands"), 0, JSON.parse(JSON.stringify(SMOKE_PRESET_412)));
     now.push({ id: "usr_1700000000000", name: "Зйомка з димом", color: "#54d182", builtin: false, cfg: Object.assign({}, SMOKE_PRESET_412.cfg, { spots: 44 }) });
     return now;
@@ -3334,6 +3340,148 @@ async function main() {
     expect(Array.from(kinds).every((k) => covered.includes(k)), "every kind of row in the list is named in that rule: " + Array.from(kinds).join());
   });
 
+  // ------------------------------------------------------------------ 4.14.0: the owner's list of the evening of 2026-11-24
+  const holder = (env) => { const a = env.doc.activeElement; return a ? (a.id || a.tagName) : "nothing"; };
+
+  await scenario("the photo holds the keyboard of the window: at opening, under the mouse, after a press on it; a name being typed keeps it", { detail: false }, async (env, expect) => {
+    await env.open();
+    await env.settle(500);
+    const vp = env.el("dlgViewport");
+    const size = () => env.state("sessState.brushSize");
+    const hover = () => { env.state("sessState.keysAskedMs = 0"); env.move(200, { clientY: 300 }); };
+    expect(env.doc.activeElement === vp, "after opening the photo must hold the keyboard: " + holder(env));
+    const s0 = size();
+    env.keyDown({ key: "]", code: "BracketRight" }, vp);      // heard at the window, at the document and at the host's window
+    expect(size() === s0 + 5, `one press of ']' with the keyboard on the photo counts once: ${s0} -> ${size()}`);
+    env.keyDown({ key: "х", code: "BracketLeft" }, vp);
+    expect(size() === s0, "...and '[' takes it back: " + size());
+    env.keyDown({ key: " ", code: "Space" }, vp);
+    expect(env.state("sessState.spaceDown") === true, "Space is the hand while it is held");
+    vp.dispatchEvent(new env.w.KeyboardEvent("keyup", { bubbles: true, key: " ", code: "Space" }));
+    expect(env.state("sessState.spaceDown") === false && env.state("sessState.tool") === "eraser", "...and the tool is back when it is released");
+    // a tick of the settings was clicked last; the mouse comes back to the photo
+    env.click("dlgBtnGear");
+    env.el("gChkShadow").focus();
+    expect(holder(env) === "gChkShadow", "(the tick holds the keyboard now: " + holder(env) + ")");
+    hover();
+    expect(env.doc.activeElement === vp, "the mouse over the photo gives the keyboard back to it: " + holder(env));
+    // a name is being typed: the keyboard stays in the field, whatever the mouse passes over
+    env.click("dlgBtnPresets");
+    env.click("dlgBtnAddPreset");
+    expect(holder(env) === "dlgNewPresetName", "(the field of the new preset holds the keyboard: " + holder(env) + ")");
+    hover();
+    expect(holder(env) === "dlgNewPresetName", "while a name is typed the mouse over the photo must take nothing: " + holder(env));
+    env.keyDown({ key: "]", code: "BracketRight" }, env.el("dlgNewPresetName"));
+    expect(size() === s0, "...and ']' types its character there: " + size());
+    // a press on the photo area ends the typing (beside the photo: no stroke is made)
+    env.press("dlgViewport", 900, { clientY: 700 });
+    env.release();
+    expect(env.doc.activeElement === vp, "a press on the photo area takes the keyboard, from a text field too: " + holder(env));
+    // the form was closed while its field held the keyboard: that is no typing
+    env.click("dlgBtnPresets");
+    if (!env.el("dlgAddPresetForm").classList.contains("visible")) env.click("dlgBtnAddPreset");
+    env.el("dlgNewPresetName").focus();
+    env.click("dlgBtnCancelNewPreset");
+    hover();
+    expect(env.doc.activeElement === vp, "the field of a closed form is not being typed in: " + holder(env));
+    env.keyDown({ key: "]", code: "BracketRight" }, env.doc.activeElement);
+    expect(size() === s0 + 5, "...and the keys work again: " + size());
+    await env.settle(300);
+    expect(env.recomputes().length === 0 && env.edits().length === 0, "none of this asks the server for anything");
+  });
+
+  await scenario("the second window: 'Застосувати' was clicked last and holds nothing while the next photo is scanned - the keys arrive all the same", { detail: false }, async (env, expect) => {
+    await env.open();
+    await env.settle(500);
+    const size = () => env.state("sessState.brushSize");
+    env.el("dlgBtnApply").focus();
+    env.click("dlgBtnApply");
+    await env.waitFor(() => env.state("sessState.open") === false, 4000);
+    await env.settle(500);
+    // Photoshop: the control that held the keyboard is switched off for the scan of the next photo - nothing holds it
+    if (env.doc.activeElement && env.doc.activeElement.blur) env.doc.activeElement.blur();
+    expect(env.doc.activeElement === env.doc.body, "(nothing holds the keyboard between the two windows: " + holder(env) + ")");
+    env.click("btnRun");
+    await env.waitFor(() => env.of("/session/start").length === 2 && !!env.state("sessState.id"), 4000);
+    await env.settle(500);
+    expect(env.state("sessState.open") === true && env.doc.activeElement === env.el("dlgViewport"), "in the second window the photo must hold the keyboard: " + holder(env));
+    const s0 = size();
+    env.keyDown({ key: "ї", code: "BracketRight" }, env.doc.activeElement);
+    env.keyDown({ key: "ї", code: "BracketRight" }, env.doc.activeElement);
+    expect(size() === s0 + 10, `']' twice in the second window: ${s0} -> ${size()}`);
+    env.keyDown({ key: "х", code: "BracketLeft" }, env.doc.activeElement);
+    expect(size() === s0 + 5, "'[' once: " + size());
+  });
+
+  await scenario("a host that gives the keyboard to no plain element: the button of the tool in hand takes it", { detail: false }, async (env, expect) => {
+    env.el("dlgViewport").focus = () => {};
+    await env.open();
+    await env.settle(500);
+    const size = () => env.state("sessState.brushSize");
+    expect(holder(env) === "dlgToolEraser", "the eraser is the tool of a new window, and its button holds the keyboard: " + holder(env));
+    const s0 = size();
+    env.keyDown({ key: "]", code: "BracketRight" }, env.doc.activeElement);
+    expect(size() === s0 + 5, `']' arrives, once: ${s0} -> ${size()}`);
+    env.keyDown({ key: "b", code: "KeyB" }, env.doc.activeElement);
+    env.click("dlgBtnGear");
+    env.el("gChkShadow").focus();
+    env.state("sessState.keysAskedMs = 0");
+    env.move(200, { clientY: 300 });
+    expect(holder(env) === "dlgToolBrush", "after B the brush is in hand, and the mouse over the photo gives its button the keyboard: " + holder(env));
+  });
+
+  await scenario("'Глибина': a slider under 'Циклорама' - 60 in the light presets, 0 in the dark ones; one light refresh, Apply carries it; nothing without the corner tool", { detail: false },
+    async (env, expect) => {
+      env.check("dlgChkAutoPreset", false);
+      await env.open();
+      env.click("dlgBtnGear");
+      env.click("dlgBtnPresets");
+      const depth = () => env.state('getSliderVal("gSlDepth")');
+      const badge = () => env.el("gValDepth").textContent;
+      const quick = () => env.recomputes().filter((r) => r.body.quick === true);
+      const rows = Array.from(env.doc.querySelectorAll("#dlgGearPopover .gear-scroll > .g-row"));
+      const at = (id) => rows.findIndex((n) => !!n.querySelector("#" + id));
+      expect(at("gSlDepth") === at("gSlCyc") + 1 && at("gSlCyc") >= 0, "the row stands right under 'Циклорама': " + at("gSlCyc") + " / " + at("gSlDepth"));
+      const want = { "Студія (Стандарт)": 60, "Середній план": 60, "Дальній план": 60, "Без стійок (AI)": 60, "Темний ключ": 0, "Темний середній план": 0, "Темний дальній план": 0 };
+      for (const [name, value] of Object.entries(want)) {
+        env.clickPreset(name);
+        expect(depth() === value && badge() === (value ? value + "%" : "Вимк.") && !env.el("gSlDepth").classList.contains("disabled"),
+          `the preset '${name}': depth ${value} expected, the slider says ${depth()} / '${badge()}'`);
+      }
+      env.clickPreset("Дальній план");
+      await env.settle(1000);
+      let last = quick().pop();
+      expect(last && last.body.params.cycDepth === 60 && last.body.params.cycCurve === 65, "the refresh after a preset click carries its depth: " + (last && last.body.params.cycDepth));
+      const before = quick().length;
+      await env.drag("gSlDepth", 90);
+      await env.settle(1000);
+      last = quick().pop();
+      expect(quick().length === before + 1 && last.body.params.cycDepth === 90 && badge() === "90%", `one light refresh with depth 90: ${quick().length - before} refreshes, '${badge()}'`);
+      expect(env.exacts().length === 0, "a slider asks for the quick preview, not for the exact frame");
+      expect(env.state("presetConfigToSave().cycDepth") === 90, "depth is a value of the preset");
+      // without the corner tool depth is nothing: the row says so, cannot be moved, and asks for no new picture
+      env.clickPreset("Ближній план");
+      await env.settle(1000);
+      expect(badge() === "—" && env.el("gSlDepth").classList.contains("disabled") && depth() === 0,
+        `a preset without the corner tool: the row must say '—', be greyed and stand at 0 - it says '${badge()}', greyed: ${env.el("gSlDepth").classList.contains("disabled")}, depth ${depth()}`);
+      const n0 = env.recomputes().length;
+      const sig0 = env.state("previewSettingsSignature()");
+      await env.drag("gSlDepth", 70);
+      await env.settle(900);
+      expect(depth() === 0 && env.recomputes().length === n0, "the greyed slider does not move and sends nothing");
+      env.state('setSliderVal("gSlDepth", 70)');
+      expect(env.state("previewSettingsSignature()") === sig0, "...and a depth without the corner tool is no new setting for the picture");
+      env.state('setSliderVal("gSlDepth", 0)');
+      await env.drag("gSlCyc", 50);
+      expect(badge() === "Вимк." && !env.el("gSlDepth").classList.contains("disabled"), "with the corner tool moved up the row comes alive: '" + badge() + "'");
+      await env.drag("gSlDepth", 35);
+      await sleep(100);                      // sooner than the refresh would start
+      env.click("dlgBtnApply");
+      await env.settle(900);
+      const a = env.of("/session/apply");
+      expect(a.length === 1 && a[0].body.params.cycDepth === 35 && a[0].body.params.cycCurve === 50, "Apply carries depth: " + (a[0] && a[0].body.params.cycDepth));
+    });
+
   const failed = results.filter((r) => r.problems.length);
   if (!results.length) {
     console.log("plugin preview: no scenario has that text in its name");
@@ -3341,7 +3489,7 @@ async function main() {
   }
   console.log(failed.length
     ? `plugin preview: ${failed.length} of ${results.length} scenarios FAILED`
-    : `plugin preview: ${results.length} scenarios pass (the fast window; drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes, steps back and forward, preset reset, backup, one mode, soft and hard brush edge, the exact picture by itself, strokes on the cleaned photo, zoom keys, right-button drag, the hair slider)`);
+    : `plugin preview: ${results.length} scenarios pass (the fast window; drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes, steps back and forward, preset reset, backup, one mode, soft and hard brush edge, the exact picture by itself, strokes on the cleaned photo, zoom keys, right-button drag, the hair slider, the keyboard of the window, depth)`);
   process.exit(failed.length ? 1 : 0);
 }
 

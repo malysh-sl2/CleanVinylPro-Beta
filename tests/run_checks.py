@@ -10,8 +10,9 @@ No AI models, no GPU and no Photoshop needed.
 Part 1 - what was NOT meant to change still gives the pixels of the original program (folder CleanVinylPro,
 v3.2.1). These comparisons run in the "legacy regime": quality mode, smoke protection off, cyclorama 0, clothing
 off, stains 0, floor-joint pieces judged one by one - the places where this program works differently on
-purpose - and "toneEdge" off: the repair is blended under the protected band and hidden there by the layer, as
-it always was. (In the interactive window also: background blur 0. With the backdrop blurred the layer covers the
+purpose - "toneEdge" off: the repair is blended under the protected band and hidden there by the layer, as it
+always was - and "bigFill" off: what is too large for the network is given to it all the same, as it always was.
+(In the interactive window also: background blur 0. With the backdrop blurred the layer covers the
 whole backdrop; the window now shows that in two greens and repairs a brush stroke there - see `mask`.)
   convert   fast pixel conversions give the same numbers as the plain NumPy formulas (all 8/16-bit values)
   process   one-shot clean: current engine == v3.2.1 engine, pixel for pixel
@@ -95,6 +96,17 @@ Part 2 - what this program does differently from v3.2.1, each with its own measu
             run that was never disturbed and re-uses the stages the stopped one had finished; a request
             overtaken while it waited computes nothing; a light refresh gives way the same way; a brush stroke
             stops nothing
+  stands    the tick "remove the stands" (since 4.13.0) takes what can be taken whole - the thin and dark, the large
+            and black - and leaves the hard edge of a person's shadow, a thin shadow, a grey panel; the place of a
+            removed stand is treated as plain backdrop afterwards
+  haze      smoke and the tools that even the tone (since 4.13.0): a wall-floor line seen through smoke only is no
+            corner; next to a dense cloud the corner, the stains and the mixer brush fade out before the cloud
+  depth     "depth" of the corner tool (since 4.14.0): a wider cove - a dark belt of far floor takes the tone
+            around it, the tone of a lit floor is carried up a dark wall; the floor next to the camera, the far
+            wall and the person stay; nothing without a corner or without the corner tool
+  bigfill   what is too large for the network (since 4.14.0): a black curtain at the border is marked whole and
+            its place gets the wall beside it, continued - tone, a shadow that ran into it, grain - where a
+            network that paints too light is no longer asked; what is thin stays the network's
 
 Part 3 - the program around the engine:
   server    settings migration, binary packets, one version everywhere; the name a person reads has no 2 (since
@@ -870,7 +882,8 @@ def _depth_frame(kind, w=1500, h=2000):
     """
     The corner of the studio frame (at 0.62 of the height) with the light the "depth" slider is for (4.14.0):
       belt   the far floor lies in grazing light and is darker than the wall; nearer the camera the floor is lit
-             (the owner's 1.jpg: wall 69, floor 56 .. 67 over a fifth of the frame height, then 84 .. 140);
+             (the owner's 1.jpg: wall 69, floor 56 .. 67 over a fifth of the frame height, then 84 .. 140). The
+             belt is as long as his - a fifth of the height, further than the plain cove reaches (a sixth);
       pool   a dark wall, and the floor lit right up to it.
     Both with the grain of a camera. Returns (frame, silhouette 1024).
     """
@@ -878,7 +891,7 @@ def _depth_frame(kind, w=1500, h=2000):
     person = cv2.resize(sil, (w, h), interpolation=cv2.INTER_LINEAR) > 0.5
     y = np.linspace(0, 1, h, dtype=np.float32)[:, None]
     if kind == "belt":
-        u = np.clip((y - 0.62) / 0.38 / 0.75, 0.0, 1.0)
+        u = np.clip((y - 0.62) / 0.38 / 0.90, 0.0, 1.0)
         gain = np.where(y > 0.62, 0.68 + 0.52 * u * u * (3.0 - 2.0 * u), 1.0)
     else:
         gain = np.where(y > 0.62, 1.0, 0.45)
@@ -924,8 +937,21 @@ def check_depth():
     belt_frame = wall - float(at(p_frame, 0.63, 0.80).min())
     if belt_frame < 20.0 or belt[0] < 12.0:
         bad.append(f"the frame of this check must have a belt the plain cove leaves: {belt_frame:.1f} levels below the wall in the frame, {belt[0]:.1f} after the plain cove")
-    if belt[60] > 8.0 or belt[100] > 5.0:
+    if belt[60] > 10.5 or belt[100] > 6.5:
         bad.append(f"with depth the belt must take the tone around it: {belt[0]:.1f} levels below the wall at 0, {belt[60]:.1f} at 60, {belt[100]:.1f} at 100")
+
+    # ...over its whole length: from the foot of the wall to the lit floor the tone rises and does not fall back.
+    # (Below the line the zone is wider where it lifts - CORNER_DEPTH_FLOOR. With the zone of the plain cove there
+    # the far end of a belt as long as this one stays as it was: a dip between the lifted part and the lit floor.
+    # The rows of the vinyl seam of this frame are left out, as below.)
+    def fall(p):
+        seg = np.concatenate([at(p, 0.63, 0.785), at(p, 0.815, 0.86)])
+        return float((np.maximum.accumulate(seg) - seg).max())
+
+    falls = {d: fall(prof[d]) for d in res}
+    if falls[60] > 1.5 or falls[100] > 1.5:
+        bad.append(f"with depth the tone must rise from the foot of the wall to the lit floor without falling back: "
+                   f"it falls by {falls[60]:.1f} levels at 60 and by {falls[100]:.1f} at 100 ({falls[0]:.1f} after the plain cove)")
     for d in (60, 100):
         near = float(np.abs(at(prof[d], 0.84, 0.99) - at(prof[0], 0.84, 0.99)).max())
         if near > 1.0:
@@ -998,7 +1024,8 @@ def check_depth():
         bad.append(f"the reduced copy of the window must show the slope of the real frame: up to {off:.1f} levels apart")
     report("depth", not bad,
            f"a dark belt of far floor ({belt_frame:.0f} levels below the wall; the plain cove leaves {belt[0]:.0f}) takes the tone around it: {belt[60]:.1f} at depth 60, "
-           f"{belt[100]:.1f} at 100; the floor next to the camera, the far wall and the person stay; a dark wall takes the tone of a lit floor ({up:+.0f} levels an eighth "
+           f"{belt[100]:.1f} at 100, and the tone rises to the lit floor without falling back ({falls[60]:.1f} / {falls[100]:.1f} levels; {falls[0]:.1f} after the plain cove); "
+           f"the floor next to the camera, the far wall and the person stay; a dark wall takes the tone of a lit floor ({up:+.0f} levels an eighth "
            f"of the frame above the line) and the lit floor is not dimmed ({dimmed:.1f}; with the wider zone for everything {dim_all:.0f}); nothing without a corner or "
            f"without the corner tool; the reduced copy within {off:.1f} levels" if not bad else "wrong:\n  " + "\n  ".join(bad))
 
@@ -4724,12 +4751,16 @@ def check_bigfill():
     if band_iso > 0.2 or abs(q_iso[1]) < 6.0:
         bad.append(f"the frame of this check must tell a fill that is carried along the rows from one that is not: without it the band keeps {band_iso * 100:.0f}% "
                    f"and the place is {q_iso[1]:+.1f} levels off")
-    # grain: as much as the wall beside the place has; none when the slider says none
+    # grain: as much as the wall beside the place has, times the grain slider (90 in these runs); none at 0
     gr_on = grain(g_on, inner) / max(grain(g_on, ring), 1e-6)
-    g_nog = run(grain=0)[0]
+    g_nog, g_low = run(grain=0)[0], run(grain=30)[0]
     gr_nog = grain(g_nog, inner) / max(grain(g_nog, ring), 1e-6)
+    gr_low = grain(g_low, inner) / max(grain(g_low, ring), 1e-6)
     if not 0.6 < gr_on < 1.5 or gr_nog > 0.3:
         bad.append(f"the new wall must have the grain of the wall beside it: {gr_on * 100:.0f}% of it (grain slider at 0: {gr_nog * 100:.0f}%)")
+    if not 0.2 * gr_on < gr_low < 0.55 * gr_on:
+        bad.append(f"the grain slider is the user's word for the new wall too: at 30 it must have about a third of what it has at 90, "
+                   f"it has {gr_low * 100:.0f}% against {gr_on * 100:.0f}% of the grain of the wall beside it")
     # nothing too large: nothing is said, nothing changes
     for label, over in (("without 'remove the stands'", dict(removeStands=False)),):
         g_a, st_a, _, out_a = run(**over)
@@ -4763,7 +4794,8 @@ def check_bigfill():
            f"a black curtain at the border, wider at the top than the strip it is looked for in, is marked whole (the former way: {was['top'] * 100:.0f}% of the top); "
            f"its place gets the wall beside it, continued: {q_on[1]:+.1f} levels against that wall where the stand-in network alone paints {q_off[1]:+.1f}, "
            f"the dark top {top_on:.0f} beside {top_ref:.0f} (the network: {top_off:.0f}), a shadow band goes on to the border ({band_on * 100:.0f}% of its depth), "
-           f"grain {gr_on * 100:.0f}% of the wall's; {calls_on} tiles instead of {calls_off}; a thin strip stays the network's; the reduced copy decides alike"
+           f"grain {gr_on * 100:.0f}% of the wall's ({gr_low * 100:.0f}% with the grain slider at 30 instead of 90); {calls_on} tiles instead of {calls_off}; "
+           f"a thin strip stays the network's; the reduced copy decides alike"
            if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
