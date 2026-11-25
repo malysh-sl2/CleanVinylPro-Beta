@@ -206,6 +206,27 @@ written here and in the repository.
   message (none is known), whether he wrote anything about merging. The PR was left open.
   4.14.0 answers this message (reply #22).
 
+- **2026-11-25, on 4.14.0** (one message, written down before any work on it - see section 4, traps). His
+  words, all of them: «ще паркет треба приберати». Three files came with it:
+  - `0Q5A3610 копия2.jpg` - THE FRAME as shot (3840 x 5760, saved by Photoshop 28.0 at 11:24:32 his
+    time): low-key, a pregnant woman in a sheer tulle skirt, full length, on a white paper backdrop
+    under a dark wall. At the left border, top to bottom: the lit silver side of a softbox, its black
+    body, a light grey triangle, an orange wire chair, a black stand with its legs; in the lower left
+    corner the paper ends and PARQUET shows (a strip of wood about 7 % of the width, 6 % of the height);
+  - `0Q5A3610 копия1.jpg` - HIS RESULT of 4.14.0 (saved 11:24:10) with two ellipses drawn by him in pink:
+    a tall one around the left strip of the frame (about 15 % of the width, the whole height) and a
+    small one at the bottom, under the hem of the skirt, around a row of white dashes;
+  - `Знімок екрана 2026-11-25 112107.png` - the big window of 4.14.0 in Photoshop, the settings open.
+  What the screenshot says: 4.14.0 IS INSTALLED AND RUNS (the row «Глибина (стіна здається далі)» is
+  there, «Вимк.» in this preset); THE ROWS OF THE SETTINGS ARE APART (the cure of 4.13.0 worked) and
+  the list scrolls; the top bar fits with the pills «Мікс» and «Стійки», both ticked, dress and smoke
+  unticked; preset «Темний дальній план»; «Пил» 80, «Волоски» off, «Сліди» 55, «Розмиття» 0,
+  «Мікс-пензель» on 50, «Циклорама» 65, «Глибина» 0, «М'якість» 65, «Шов» on 90, «Захист моделі» 78,
+  «Захист диму» off, «Збереження текстури» 95, «Сила рівняння одягу» off; the eraser is the tool in
+  hand, brush 67, zoom 100 %; the view «ПІСЛЯ · чисте фото».
+  He said nothing about the keys, about «Глибина» or about the questions of reply #22, and did not
+  write «зливай».
+
 ## 2. What is in the repository
 
 | Path | What it is | Rule |
