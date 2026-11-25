@@ -1022,7 +1022,9 @@ second plugin next to the installed one and lose his presets.
     125; depth 60: 65 65 65 66 65 65 71 85 125. `2.jpg`: 5 13 23 26 30 30 39 71 108, at 60: 5 13 23 26
     30 36 50 73 108. So at 60 the belt of `1.jpg` is gone altogether - MORE than in his retouch.
     Defaults: 60 in «Студія (Стандарт)», «Середній план», «Дальній план», «Без стійок (AI)»; 0 in the
-    dark presets and the close-ups (a wide cove drags the pool of light up a black wall).
+    other six: the three dark presets with the corner tool (a wide cove drags the pool of light up a
+    black wall) and the three where the corner tool is off anyway («Ближній план», «Темний ближній
+    план», «Делікатний (точки)» - there the row is greyed).
   - **Panel.** (a) «Глибина»: the slider `gSlDepth` with the badge `gValDepth`, the row right under
     «Циклорама»; in the slider tables, `readCurrentConfig`, `normalizedPresetConfig` (`?? 0`: a preset
     of his own saved before 4.14.0 stays at 0), `applyConfig`, `previewSettingsSignature` (0 without
@@ -1154,9 +1156,10 @@ the evening of 2026-11-24)._
   - «Глибина» is a SLIDER, and it only widens the slope between floor and wall. He asked for "an
     illusion of depth"; the reading that the dark belt of far floor is what tells the eye where the
     floor ends is the agent's (section 2, «4.14.0»). 60 in the four light presets with a floor - on a PC
-    that has its presets stored the one-time move `depth60` puts it there - and 0 in the dark presets
-    and the close-ups; presets of his own stay at 0. At 60 the belt of his `1.jpg` is gone altogether,
-    MORE than in his own retouch of that frame (he was told so and asked whether it is too much);
+    that has its presets stored the one-time move `depth60` puts it there - and 0 in the other six
+    (the dark ones, and those without the corner tool); presets of his own stay at 0. At 60 the belt
+    of his `1.jpg` is gone altogether, MORE than in his own retouch of that frame (he was told so and
+    asked whether it is too much);
   - depth never dims the floor next to the camera (below the line the wider zone only lifts);
   - nothing was done to the two other things that make a wall look far: the texture of the wall stays
     as sharp as it was and the shadow of the person on it keeps its depth;
