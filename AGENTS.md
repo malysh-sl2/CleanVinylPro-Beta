@@ -282,6 +282,28 @@ written here and in the repository.
     his real silhouette, which could not be tried here;
   - the mixer brush is in it: the grain of the wall is 0.31-0.38 of the frame's, as in his result of
     4.14.0; 50.7 % of the pixels are exactly the frame (51.6 % then).
+  Seen in that result by the agent and NOT complained of (measured the same way; section 2, «4.16.0»):
+  - a dark stair-stepped smear right beside the hem, x 2806-2899, y 4583-4623 (93 x 39 px): the frame is
+    116 there, his results of 4.14.0 AND 4.15.0 are 102 where they are darker by more than 8 (976 px;
+    979 in 4.14.0), deepest -23. It lies where the line of the paper that runs to the right ends at
+    the tulle. 4.16.0 is the cure;
+  - a smaller one in the corner between two layers of the tulle that lie on the floor, x 2739-2762,
+    y 5277-5291 (frame 115, both results 104 on the same 244 px, deepest -16): not reproduced here, no
+    mark of the searches lies there with the stand-in silhouette;
+  - a remnant at the right end of the former dashes: +2..+5 over the frame at x 1600-1750, y 5550-5582
+    (up to +8; 4.14.0 had up to +18 there) and blocky +5..+10 at x 1800-1850, y 5570-5578 (4.14.0: up
+    to +20);
+  - a darker, slightly greener patch on the left wall where the black body stood (columns 2-10 % of
+    the width: 9.2-12.2 at 40-60 % of the height against 13.3-13.9 above it; R - G is 1 there, 4 above);
+  - «Глибина» 10 shows on the right wall: column band x 80-95 %, medians frame / 4.14.0 / 4.15.0 at 58 %
+    of the height 12 / 14 / 15, at 66 % 16 / 20 / 23, at 74 % 41 / 43 / 44, equal from 76 % down.
+  No option card was shown. 4.16.0 answers these messages (reply #24).
+
+- **2026-11-26, later the same day** (before 4.16.0 was released): «продовж». Nothing else, no new
+  files. The turn before had ended in the middle of the work on 4.16.0 - the change of the window was
+  pushed, the change of the engine lay uncommitted in the working tree - and this time the sandbox
+  was still there, with its `/tmp`. The work went on from where it stood, and 4.16.0 was released
+  (reply #24).
 
 ## 2. What is in the repository
 
@@ -1256,13 +1278,103 @@ second plugin next to the installed one and lose his presets.
     `0Q5A3610`; `_foot_frame`: the right border of his `0Q5A3411`); `tests/try_defects.py` holds the 63
     defects of 4.15.0.
 
+- **4.16.0** — a new result leaves «До», and what the fill is shown in place of the person; after his
+  message of 2026-11-26 (section 1: 4.15.0 is right on `0Q5A3610`, Photoshop is 28.0 now, and «коли
+  полоска доходе показує фото після бо зари до не зручно»). No new control.
+  - **A new result leaves «До»** (`showNewResult()` in `main.js`: when the view is the original, go to
+    the cleaned photo). Called when a result ARRIVES: at the end of a run with the progress card (the
+    ticks, both «↻ Перерахувати»; `recomputeInteractiveSession`), when a light refresh is back (a
+    slider, a preset, a fraction button - the same function, `quick`), when the clothing tick or its
+    slider is answered (`sendDressPreviewUpdate`), when a background run brings the picture for
+    CHANGED values (`runExactPreview` without `refine`: with 2 passes there is no light refresh), and
+    when the first scan ends («До / Після» pressed while the first bar ran;
+    `openInteractiveWorkspace`). NOT called: in the view «Маска» (it stays, also when pressed during
+    the first scan); for a run that was cancelled, failed or gave way to a newer one (also the
+    dropped answer of a server before 4.12.0); for the exact version of a picture that is already on
+    screen («Детальний перегляд»: `refine`); for mask edits (inversion, fill, clear, Ctrl + Z - a
+    stroke leaves «ДО» when it begins, as since 4.7.0); for Blend; for a slider put back to its value
+    (nothing is asked then). He named the bar only; the rest is the agent's reading (section 3). The
+    hint of the button «До / Після» (`index.html`) says that the window comes back by itself.
+  - **What the fill is shown in place of the person** (`_backdrop_under_person`; `HEAL_SRC_WIDE` 12,
+    `HEAL_SRC_STEPS` (6, 2.5), `HEAL_SRC_SEEN` 0.12; the hidden parameter `srcNear`, off in the legacy
+    regime, in `k_heal` and in `_clean_signature`). He did not ask for it; it was found in his results
+    (section 1) by looking for what he had NOT circled: connected pieces of |result - frame| > 10.
+    The cause. Before the fill looks, the person with the protected band is painted over with
+    backdrop, so that nothing of the person bleeds into a repair. The paint was ONE average of the
+    backdrop over sigma 12 px of a copy 640 px long (108 px of his frame). Where the tone of the
+    backdrop changes near the person that is not the tone beside the band: at the smear the band was
+    painted 16 levels darker than the floor right beside it (the dark wall is in the average), and
+    the joint search marks the line of the paper right up to the band. The fill then sees a flat dark
+    shape with the stepped edge of the band and draws it on into the repair. The stand-in fill shows
+    it too, milder (in the box of the smear, min / mean / px darker than the frame by more than 8: his
+    result -23 / -5.4 / 976, the stand-in -14 / -3.3 / 356). By setting: without «Шов» it is gone,
+    without «Стійки» it stays.
+    The rule. The wide average is replaced, step by step, by a narrower one (sigma 6, then 2.5 px of
+    the copy) wherever backdrop lies within its reach: a step is taken in full where 12 % of its
+    window is backdrop that stays, in part where less is. Nothing of the person or of a marked place
+    enters at any step. At the edge of the band the paint is the backdrop beside it; deep inside it
+    is the wide average as before. The second pass of the cleaning paints by the same rule, and
+    there what that pass marked is no backdrop either (it used to be: a speck was lost in the wide
+    average; right beside the band it would not be).
+    On `0Q5A3610` (his settings, the silhouette read from his result, the stand-in fill; the band as
+    the fill saw it - section 4): the paint at the edge of the band was more than 6 levels off the
+    backdrop beside it on 14.9 % of the edge, at most 34; now on 0.8 %, at most 10. At the smear:
+    -15.7 -> -2.2 (median). In its box the result has 4 px darker than the frame by more than 8 (356
+    the former way; -10 / -2.1 / 4 against -14 / -3.3 / 356). The two results differ on 9,107 px
+    (0.041 % of the frame), by 7 levels at most; further than 20 px from the band by one level at
+    most. UNDER THE HEM, where his result of 4.14.0 had the light dashes, the former paint was 23
+    levels LIGHTER than the shaded floor (now +1): most likely the same thing with the sign turned -
+    the 4.15.0 notes already blamed the wide average there - but the stand-in never drew those
+    dashes, so that is not proven.
+    On his nine older frames (stand-in silhouettes: `tools/owner_frames.py silhouette` inside a box,
+    a drawn outline for `0Q5A3534`; «Стійки» and «Мікс» 50; the share of the edge where the paint is
+    more than 6 off, former -> new): `0Q5A2507` 8.4 -> 0.7 %, `1.jpg` 5.3 -> 2.3, `2.jpg` 5.0 -> 2.3,
+    `3.jpg` 14.9 -> 1.9, `0Q5A3417` 13.5 -> 1.3, `0Q5A3384` 10.0 -> 1.4, `0Q5A3411` 5.2 -> 0.5,
+    `0Q5A3413` 5.1 -> 2.0, `0Q5A3534` 10.5 -> 1.9. The results: nowhere more than 2 levels apart
+    further than 30 px from the band. Nearer, five frames not either and four in places: `3.jpg`
+    2,996 px by up to 22 (where the stand-in silhouette leaves a part of the person out and the
+    place is repainted whole; beside the band the new result is the darker one, like the floor
+    there), `0Q5A3413` 463 px by up to 7, `0Q5A3384` 75 px by up to 5, `2.jpg` 60 px by up to 3 (a
+    line of the paper that ends at the band on an even floor: gone both ways). The place of the
+    largest difference of each of the four was looked at, former beside new: none is worse.
+    The constants. `HEAL_SRC_SEEN` began at 0.25 (what the hair tool uses for its own step); beside
+    a mark that touches the band - the very place this is for - half of a window is band and a part
+    of the rest is the mark, so little backdrop is left: at the smear the worst tenth of the edge was
+    5.9 off with 0.25 and 2.9 with 0.12 (2.8 with 0.05; less trust means fewer pixels decide). One
+    step alone is not enough either way: with sigma 6 only, the paint is off beside a steep change
+    of tone (the drawn frame: up to 12..14, more than 6 on 24 % of the edge in the shade); with 2.5
+    only, the window is blind beside a mark as tall as it is wide and the wide average shows (the
+    drawn copy: -11.5 against -2.9 beside a mark 10 px tall).
+    Limits (section 3, «Known limits»): beside a mark TALLER than about 16 px of the copy (150 px
+    of his frame: a stand or a softbox that touches the band) the paint is the wide average still
+    (the drawn copy, a mark of 10 / 16 / 24 px: -2.9 / -9.0 / -16.3; the wide average -12.9 / -15.3
+    / -18.2); what is unmarked right beside the band colours the paint (a light spot of +80 that the
+    dust search does not take: +11.5 under the band beside it - the fill sees that spot itself too).
+  - **Photoshop 28.0**: nothing was changed. Every JPEG he saved from Photoshop and sent since
+    2026-11-19 names «Adobe Photoshop 28.0 (Windows)» as its software (27.2, 27.4 and 27.6 in the
+    spring); among them are his results of 4.11.0, 4.12.0, 4.14.0 and 4.15.0. So those versions ran
+    in 28.0 already - read from the files; he did not say when he updated. Adobe's changelog for
+    plugins (`AdobeDocs/uxp-photoshop`, `src/pages/ps-reference/changelog/index.md`) ends at 27.4
+    (February 2026: UXP 9.2.0), there is no entry for 28.0; `host.minVersion` stays 24.0.0. He was
+    asked whether anything looks different.
+  - NOT built: the smaller smear in the corner of the tulle (not reproduced); the remnant at the end
+    of the former dashes; the greener patch on the left wall; a preset with «Глибина» above 0 for
+    dark frames (he set 10 on this one and asked for nothing); the same paint for the dust search's
+    own idea of the backdrop beside a person (its median takes the person in - see the traps of
+    section 4: a false strip along a skirt on a steep slope of tone).
+  - Checks: `plugin_preview.test.js` has six scenarios «a new result leaves 'До': …» (125 in all); the
+    group `edge` has a second result with a drawn copy for the rule itself and the drawn frame
+    `_hem_frame` (the hem of his `0Q5A3610`: kinds "dark" and "shade", with marks for the second
+    pass); `tests/try_defects.py` holds the 26 defects of 4.16.0 (12 «paint: …» in the engine, 14
+    «view: …» in the panel).
+
 ## 3. Current state — update this at the end of every session
 
-_Last updated: by the agent of the first session, after releasing 4.15.0 (the answer to his message of
-2026-11-25, «ще паркет треба приберати»)._
+_Last updated: by the agent of the first session, after releasing 4.16.0 (the answer to his message of
+2026-11-26 on 4.15.0)._
 
-- **Released:** 4.15.0, tag `cvp2-v4.15.0`, as a pre-release. Direct download:
-  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.15.0/CleanVinylPro2.zip`
+- **Released:** 4.16.0, tag `cvp2-v4.16.0`, as a pre-release. Direct download:
+  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.16.0/CleanVinylPro2.zip`
 - **Owner's progress:** 4.2.0 to 4.12.0 have been installed and work on his PC (program in
   `D:\Plugin Photoshop\CleanVinylPro2`, models in `D:\model AI fotoshop`, LaMa on `CUDAExecutionProvider`,
   Python 3.12.10). So the `.bat` files, the installer, the GPU, the real models and the panel HAVE run on
@@ -1295,60 +1407,55 @@ _Last updated: by the agent of the first session, after releasing 4.15.0 (the an
   треба приберати»; his result shows a glow where a softbox stood, a dark line, the parquet and white
   dashes under the hem. 4.15.0 answers that message (reply #23). He said nothing about the keys, about
   «Глибина» (off in that preset) or about the ring of the brush. On 2026-11-26 he wrote «продовжи».
-  **He has not reported on 4.15.0 yet.**
+  On 4.15.0 (2026-11-26, section 1): it runs, in Photoshop 28.0; his result of `0Q5A3610` has no
+  softbox, no glow, no dark line, no parquet and no dashes under the hem but for a faint remnant at
+  their right end (the dashes were never reproduced here; the rule «along the person» was aimed at
+  them, and with his real silhouette they are gone); `[` and `]` work; he set «Глибина» to 10 on
+  that dark frame, which too was shot about five metres from the wall; «Мікс» is ticked. One wish:
+  when the bar reaches its end, show the photo «після». 4.16.0 answers that message (reply #24).
+  **He has not reported on 4.16.0 yet.**
   The path to the plugin list of Creative Cloud (Stock & Marketplace → Plugins → Manage plugins → the three
   dots → Uninstall; the same list opens from Photoshop with Plugins → Manage Plugins) is in section 6 of
   the manual since 4.8.0. Whether his Creative Cloud shows these names in English or in Ukrainian is not
   known.
-- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (49 results in
-  2263 s; 119 scenarios of the panel test and 74 cases of the settings test among them) on
+- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (50 results in
+  2388 s; 125 scenarios of the panel test and 74 cases of the settings test among them) on
   2026-11-26 (the clock of the sandbox), with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4, with
-  nothing running next to it. After it only one comment of `engine.py` was reworded (the syntax tree
-  of the file is identical, and every defect was asked again whether its text still fits) and four
-  lines of the manual; the package was rebuilt and the groups `plugin` and `bat` passed again.
-  Deliberate defects for what is new in 4.15.0 (`tests/try_defects.py`), put in one by one: 63, all in
-  the engine, group `border` (8 for "to the border", 4 for black on a dark wall - one of them asked of
-  `bigfill` too -, 7 for the black end of a thin thing, 11 for light gear beside a taken thing, 11 for
-  the floor beyond the sheet, 2 for the wall continued from backdrop only, 12 for what lies along the
-  person, 8 for "the thing is joined to the person"). All are caught by the checks as they are now,
-  each by the check of the rule it breaks.
-  They ran in a copy of the tree after the last change of the engine and the checks: 63 in one run of
-  2165 s.
-  Holes found while 4.15.0 was built, all closed:
-  - the full run FAILED in `hair` after the groups tried by hand had passed: the dust drawn beside the
-    legs there (24 specks 3..8 px from the band) all stayed - "along the person", judged by the mask
-    alone. The rule asks the frame now; `check_border` has a speck beside a leg in its frame (repaired,
-    and shown in the green preview) and seven drawn cases of `_along_person` with a frame;
-  - "a long line of the joint search along the person is repainted" was NOT caught: nothing in the
-    drawn frame is found by the joint search along the person (nor, with the stand-ins, on his `0Q5A3610`;
-    it is on his `0Q5A3417`). `check_border` asks `_found_beside_person` on drawn masks of both searches now;
-  - "the fill is not told which gear stays" could not be caught by the frame: since the lit side of
-    the softbox goes, nothing that stays stands right beside a large place. The check listens to every
-    call of `_big_pieces` in its runs instead (`named`), and asks the function itself on a drawn map;
-  - "a wooden backdrop counts as floor (no limit of the area)" and "the share is not asked" (along the
-    person) were caught only by a line "the frame of this check must be ...": each took away the very
-    comparison the check used to switch that rule off for "the former way". Every rule has a first
-    line of its own as its switch now (section 2, «4.15.0»);
-  - "a faintly warm patch counts as wood" (chroma over 1 instead of 9) was caught, but not for what
-    its name said: then the warm floor itself is wood, the parquet runs together with it, is over the
-    limit of the area and STAYS. It is two defects now: half the limit (caught by the drawn patch) and
-    1.0 under the name of what it does;
-  - "the black of the person counts as the end of a taken thing" was NOT caught, and rightly: the
-    conditions it removed were a second line of defence (the result is cut by the person's band
-    anyway). They left the code; what the band is for inside the growth - the person's black joins
-    nothing to the thing - got a drawn case and the defect its true name;
-  - the first shape of the check wanted the light panel beside the flag to STAY whole. The engine could
-    not do that (the other new rules eat a part of it), and it is not what «Стійки» is for: the check
-    asks that it goes whole, and that it stays when it stands 10 px off, is no lighter, reaches into
-    the frame or runs along the person (drawn maps);
-  - two defects stopped fitting when `_black_end_at_border` got the same first lines as
-    `_whole_to_border` (the runner says "out of date" and touches nothing; `--list` does not ask).
-  Not in the list, because no check here can tell (the closing comment of the list says why): the rim
-  of "to the border" when no gear is named (the program always names it); "the distance is measured
-  from the band, not from the nearest point of the piece" (the same pieces on the drawn frames).
-  Holes found while earlier versions were built are told in the history of this file (4.14.0: at
-  `2fd2d21`; 4.13.0: at `155e1ce`; 4.12.0: at `8b620e2`; 4.11.0: at `07e8995`; 4.10.0: at `64700aa`;
-  4.9.0: at `78a08b8`; 4.8.0: at `0f4cb46`).
+  nothing running next to it.
+  Deliberate defects for what is new in 4.16.0 (`tests/try_defects.py`), put in one by one: 26 - 12 in
+  the engine («paint: …»: 11 asked of the group `edge`, one of `process`) and 14 in the panel («view:
+  …», asked of the scenarios «a new result leaves 'До'»; the last one is the hint of the button, in
+  `index.html`). All are caught by the checks as they are now, each by the line of the rule it
+  breaks. They ran in a copy of the tree after the last change of the engine, the panel and the
+  checks: 26 in one run of 1342 s.
+  Holes found while 4.16.0 was built, all closed:
+  - a scenario of the panel test failed for a mistake of its own: it put a slider "back" to 90 after a
+    preset click that had left it elsewhere, so the "unchanged" value was a change. It reads the
+    slider first now. The six new scenarios all FAIL on the `main.js` of 4.15.0, as they must;
+  - the first drawn frame for the paint was too mild: the dark wall ended 90 px above the line, and
+    where the line met the skirt the former paint was 4 levels off, not 25 - the smear did not show.
+    The line must END AT THE BAND where the paint is wrong (kind "dark": the light begins right
+    there; kind "shade": the skirt shades the floor beside it);
+  - "a marked place counts as backdrop" made every number of that frame BETTER: the mark of the line
+    is 15 px tall around a line of 3, so leaving it out hides true backdrop right where the repair
+    needs it. The rule is right all the same - a marked THING beside the band must not colour the
+    paint - and is asked where that shows: a light spot of +45 right beside the skirt (the paint
+    beside it -0.8 levels off the floor; with the defect +3.6), and by listening to both calls of
+    the paint (no marked pixel of the copy may count as backdrop, in either pass);
+  - a DARK mark beside the skirt was never marked - it reads as the shadow of the person, a trap
+    already paid for - and a light one of +80 was not marked either (the dust search does not take
+    it): the spot is +45;
+  - "only the narrowest step" was caught by ONE line and by 0.005 of a level, once `HEAL_SRC_SEEN`
+    had gone from 0.25 to 0.12: nothing in the frame was wide enough to blind the narrow window. The
+    rule is asked on a drawn copy now (`painted` in `_check_edge_source`: marks 4 and 10 px tall
+    beside the band), and that defect fails by 11.5 against a limit of 5;
+  - a message of the new check printed `('left', 'right')[i]` literally (braces inside an f-string).
+  Not in the list, because the checks cannot tell: "a run that the SERVER stopped for a request of
+  another window leaves «До»" (the scripted server of the panel test stops a run only for a newer
+  request of the same window).
+  Holes found while earlier versions were built are told in the history of this file (4.15.0: at
+  `f60cf37`; 4.14.0: at `2fd2d21`; 4.13.0: at `155e1ce`; 4.12.0: at `8b620e2`; 4.11.0: at `07e8995`;
+  4.10.0: at `64700aa`; 4.9.0: at `78a08b8`; 4.8.0: at `0f4cb46`).
   Their lessons stay rules: read the reason after "<-" of every caught defect - when it names another rule
   than the one the defect breaks, the check that should have noticed is too weak (the runner shows only
   the FIRST failed rule: put the defect in by hand and read the whole list when in doubt); read the
@@ -1366,11 +1473,38 @@ _Last updated: by the agent of the first session, after releasing 4.15.0 (the an
   the drawn frame exercises gets drawn masks of its own; what the program is TOLD (an argument) is
   asked by listening to the call when no frame can show it. And run `try_defects.py` with no word
   (not `--list`) after every change of the engine: only then does it say that a defect no longer fits.
-  The runners of earlier versions are gone or replaced (4.14.0: 42 defects, in the history at `2fd2d21`;
-  4.13.0: 43, at `155e1ce`;
+  From 4.16.0: a defect that makes the numbers BETTER says something about the rule or about the
+  frame - find out which before touching either; a defect caught by a hair is not caught - give
+  the rule a case where it decides; after a constant was tuned, every defect is run again.
+  The runners of earlier versions are gone or replaced (4.15.0: 63 defects, in the history at `f60cf37`;
+  4.14.0: 42, at `2fd2d21`; 4.13.0: 43, at `155e1ce`;
   4.12.0: 45, at `8b620e2`; 4.11.0: 30, at `07e8995`; 4.10.0: 54, at `64700aa`; 4.9.0: 35, at `78a08b8`;
   4.8.0: 71, at `0f4cb46`; 4.7.0: 29, at `c3be3ed`; 4.6.0: 34, at `50bae15`; 4.5.0: 71 and 4.4.0: 41, never
   committed); their checks are still in `tests/run_checks.py`.
+- **Decided by the agent alone for 4.16.0** (no option card; change it if he says otherwise):
+  - «До» gives way to the result not only when the bar ends (his words) but whenever a new result
+    arrives: after a slider, a preset, a fraction button (the light refresh), the clothing tick and
+    slider, a background run for changed values, and the first scan;
+  - «Маска» never gives way (he named «до» only);
+  - nothing changes the view when no new result came: «Скасувати», an error, a run that gave way, the
+    exact version of a picture already shown, mask edits, Blend;
+  - no switch for it (if he wants «До» to stay, it becomes a tick in the settings);
+  - the paint under the person (he did not ask: the smear was found in his results). No switch in
+    the panel; a request with `srcNear` false gives the former way;
+  - nothing was done about «Глибина» in the dark presets (he set 10 by hand and asked for nothing),
+    nor for Photoshop 28.0.
+- **Not run in Photoshop yet (4.16.0):** all of it. In particular:
+  - what the REAL network paints beside the hem of `0Q5A3610` now. Here the stand-in fill shows the
+    smear nearly gone (356 px -> 4); the real one drew it stronger (976 px), and it reads the whole
+    tile, not 31 px around: the paint changes what it sees of the band everywhere a mark lies near
+    a person;
+  - the same on his other frames: wherever a repair ends at the protected band (dust beside shoes,
+    a seam that runs into the legs, hairs) the fill now sees another tone under the band. With the
+    stand-in, his nine older frames changed within 30 px of the band only, and where they did the
+    result is no worse (section 2, «4.16.0»); the real fill may answer otherwise;
+  - the smaller smear in the corner of the tulle (not reproduced here);
+  - whether «До» giving way after a SLIDER is what he wants - he may compare by dragging a slider
+    with the original on screen (he never said so).
 - **Decided by the agent alone for 4.15.0** (no option card; change it if he says otherwise):
   - the parquet goes only with «Стійки» ticked, like everything that is taken away (he had it ticked);
   - what a parquet is: the colour of wood, at a border of the frame, a sharp edge, not touching the
@@ -1385,14 +1519,9 @@ _Last updated: by the agent of the first session, after releasing 4.15.0 (the an
     what is joined to the person. The price - a crumb that touches a shoe stays - was told to him in
     the manual and in reply #23; so was that his dashes could not be reproduced here;
   - no switch and no slider for any of it.
-- **Not run in Photoshop yet (4.15.0):** all of it. In particular:
-  - whether the dashes under the hem of `0Q5A3610` are gone. They were not reproduced here (section
-    2, «4.15.0»); he was asked to look, and to send a screenshot of that place in the view «Маска» if
-    they stay - it shows which search marks them;
-  - what the REAL network paints on the small things around the place of the softbox and of the
-    parquet (seen with the stand-in only; the large places are the program's own wall);
-  - his real silhouette: here it was read from his result (the untouched blob, a little fat), so the
-    hem was judged with a band that is not exactly his;
+- **4.15.0 in Photoshop** (his result of `0Q5A3610`, 2026-11-26; section 1): it runs. With his real
+  silhouette and the real network the softbox with its glow, the dark line, the parquet and the
+  dashes under the hem are gone (a faint remnant at the right end of the dashes). Still not seen:
   - a parquet in shade, darker, or larger than on `0Q5A3610`;
   - a prop of his that is light, stands at the border and touches a flag or a curtain: it would go.
 - **Decided by the agent alone for 4.14.0** (no option card; change it if he says otherwise):
@@ -1729,29 +1858,33 @@ _Last updated: by the agent of the first session, after releasing 4.15.0 (the an
   - of 4.5.0, still unconfirmed: opening the backup folder from the panel, the look of the new buttons,
     the one-time preset moves. (Ctrl+Z works in Photoshop: he confirmed it.)
 - **Merging:** pull request #1 (`arena/33f1ced8-cleanvinylpro-beta` into `main`) is open and deliberately not
-  merged yet: fixes that follow his report on 4.15.0 should come from the session that knows the code. He
+  merged yet: fixes that follow his report on 4.16.0 should come from the session that knows the code. He
   asked what merging into `main` means and was told: the version is already published and can be downloaded;
   merging only marks it on GitHub as the main one and changes nothing on his PC; he should write «зливай»
   when he wants it. Merge it when he writes that or when the session ends (section 6). If `main` already
   contains this file, that has happened. Merging also removes the folder `CleanVinylPro/` from `main`.
 
-### Open questions (ask when he reports on 4.15.0)
+### Open questions (ask when he reports on 4.16.0)
 
-- New with 4.15.0 (asked in reply #23): is the left side of `0Q5A3610` right now - no glow, no line, no
-  parquet - also where the continued wall meets what the network painted? Is anything left under the
-  hem? Did anything he wanted to keep disappear at a border?
-- From 4.14.0 (asked in reply #22 and again in #23), not answered - his message of 2026-11-25 says
-  nothing of them: which frame did he mean by "five metres from the wall", and is «Глибина» 60 % what
-  he wants there - or too much (it takes more of the dark belt than his own retouch of `1.jpg`), or not
-  enough of an illusion (then the next things are the texture of the wall and the shadow of the
-  person, section 2)? Do `[` and `]` work every time now? (On `0Q5A3610` he had «Глибина» off: the
-  preset «Темний дальній план» has it at 0.) Answered by his result of that frame: the place of a
-  removed thing is NOT right where the thing has a lit side at the border (4.15.0).
+- New with 4.16.0 (asked in reply #24): is the dark smear beside the hem of `0Q5A3610` gone on his PC
+  (x 2806-2899, y 4583-4623 - told to him as "right of the dress, where the line of the paper meets
+  the hem")? Is it right that «До» gives way after a slider and a preset too? Does anything look
+  different in Photoshop 28.0?
+- From 4.15.0 (asked in reply #23). Answered by his result of 2026-11-26: the left side of `0Q5A3610`
+  is right, and the dashes under the hem are gone but for a faint remnant at their right end. Not
+  answered: did anything he wanted to keep disappear at a border?
+- From 4.14.0. Answered on 2026-11-26: `[` and `]` work; the frame "five metres from the wall" is
+  still not named, but `0Q5A3610` is another such frame, and there he set «Глибина» to 10 himself (the
+  dark presets ship 0). Not answered: is 60 % right in the light presets - or too much (it takes
+  more of the dark belt than his own retouch of `1.jpg`), or not enough of an illusion (then the
+  next things are the texture of the wall and the shadow of the person, section 2)? Should the dark
+  presets ship «Глибина» above 0 (asked in reply #24)?
 - From 4.13.0 (asked in reply #21). Answered in the evening of 2026-11-24: the lighter column in place
   of the curtain does bother him (4.14.0). Answered by the screenshot of 2026-11-25: the rows are apart.
   Not answered: was «Мікс» ticked when he applied `0Q5A3534` (its result shows no mixer brush at all,
   the wall is pixel for pixel the frame)? Why was the smoke preset bad - only said as "bad"? (Both
-  asked again in reply #22; the first once more in #23.)
+  asked again in reply #22; the first once more in #23. On 2026-11-26 he wrote that «Мікс» is ticked
+  "on this photo", `0Q5A3610`, whose result does show the brush; it was not asked again in #24.)
 - From 4.12.0, answered by his files of 2026-11-24: thick smoke is kept and the curtain removed; `[` and
   `]` work; the captions have their size. Not answered: is the mixer brush what he does by hand - is
   50 % right, should it go over the shadows or closer to the person? Does a change during the bar
@@ -1831,6 +1964,16 @@ _Last updated: by the agent of the first session, after releasing 4.15.0 (the an
 
 ### Known limits of the image processing
 
+- Beside the person (4.16.0): what the fill is shown in place of the person is the backdrop right
+  beside the protected band. Beside a marked thing taller than about 150 px of his frame that touches
+  the band (a stand, a softbox) it is still the wide average of 4.15.0 - a repair that ends at the
+  band there can take another tone where the backdrop changes fast. What is NOT marked and lies
+  right beside the band (a lit prop, the haze of a sheer skirt beyond the band) colours the paint.
+  And the dust search has its own idea of the backdrop beside a person (a median that takes the
+  person in): on a steep slope of tone beside a dark skirt it marks a strip of plain backdrop along
+  the skirt, and when that strip hangs together with a real mark, «along the person» does not drop
+  it (seen on the drawn frame only: the strip comes out 2.9 levels darker than the frame, 4.1 with
+  the former paint and in 4.15.0).
 - At the border (4.15.0, only with «Прибирати стійки»). A parquet is known by its colour: one in shade
   (L under 20 of 255), a grey or painted floor, or one over more than 15 % of the frame stays. A
   wooden PROP that stands at a border and does not touch the person is taken for floor and removed.
@@ -2079,9 +2222,9 @@ npm install --prefix tests jsdom@24      # for the panel test; the folder is git
 /tmp/cvenv/bin/python tests/run_checks.py install bat    # only the groups named
 /tmp/cvenv/bin/python tests/run_checks.py --full         # more random cases
 
-# the deliberate defects of the latest version: about 30 minutes for 4.11.0 (29 for the 23 of the engine - each
-# runs the group smoke, 75 s - and 1 for the 7 of the panel); it patches engine.py in place - run those in a
-# copy of the tree (below)
+# the deliberate defects of the latest version: 22 minutes for 4.16.0 (17 for the 12 of the engine - eleven
+# run the group edge, about 90 s each, one runs process - and 5 for the 14 of the panel, 23 s each); it
+# patches engine.py in place - run those in a copy of the tree (below)
 /tmp/cvenv/bin/python tests/try_defects.py               # ends with "N of N defects caught"
 /tmp/cvenv/bin/python tests/try_defects.py "called a line" "the slider"   # only the defects whose name or group has these words
 /tmp/cvenv/bin/python tests/try_defects.py panel:        # only the defects of the panel (they go into a copy
@@ -2210,6 +2353,27 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   softbox in the air on `0Q5A3413`, the foot of a stand on `0Q5A3411` - showed only in the cleaned
   pictures, side by side with the same stand-in under the former rules. The former rules in one dict:
   `_BORDER_OFF` of `tests/run_checks.py` plus `PERSON_EDGE_REACH=0.0`.
+- **Look for what he did NOT circle** (4.16.0). His result against his frame, the pixels that differ
+  by more than 10 levels, as connected pieces, largest first: the pieces that are neither a removed
+  thing nor a tone stage are the program's own marks. The smear beside the hem of `0Q5A3610` was in
+  two of his results before anyone looked there.
+- **What the fill was shown can be read** (4.16.0). Listen to `_run_lama_tiles` (in the fast fill:
+  `_run_fast_inpaint`): the first argument is the picture with the person painted over, the second
+  what is to be repaired. `band = (picture != frame).any(axis=2) & ~marked`, closed with 3 x 3, is
+  the protected band exactly as the fill saw it. A smear at the band with the stepped edge of the
+  band: compare the paint 2..10 px inside the band with the frame 4..16 px outside it. (A band
+  taken from the matte instead - `fg > 22` - gives other shares: 23.5 % where this one says 14.9.
+  Name the measure with the number.) `H.quiet` swallows what a spy prints: collect, print after
+  the call.
+- **The stand-in fill of the checks** (`FakeLama`) makes every marked pixel the average of the
+  picture it is shown over 31 x 31 px - the marked thing itself included. So it leaves a smudge of
+  every repair (the second pass finds those), it takes the tone of the paint under the band only
+  within 15 px of the band, and it draws nothing on: a fault that the real network draws over 976
+  px shows here on 356, as a tone a few levels off. Compare with the former way through the same
+  stand-in, and measure where the mark meets the band.
+- **The worst place of a comparison is often the stand-in silhouette's own fault** (4.16.0). On
+  `3.jpg` the two paints differ most (22 levels) where the box silhouette leaves a part of the
+  person out and the program repaints it whole. Look before reading such a number as the rule's.
 - Brush strokes on his frames are made by script, the way `check_brush` in `tests/run_checks.py` does it:
   `r = eng.start_session(image, 8, params)`, then
   `eng.edit_session_mask(r["session_id"], "stroke", [{"x": 0.5, "y": 0.5, "norm": 1}, ...], radius, erase,
@@ -2521,6 +2685,31 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   The first `border` check wanted a light panel beside a taken flag to stay whole; the new rules ate a
   part of it. Before bending the engine to a drawn expectation, ask what the owner would want there
   (all of it gone) and look at his frames for the real case (`0Q5A3413`).
+- **A scenario that puts a slider "back" must read its value first** (4.16.0). After a click on a
+  preset «spots» is not what the scenario began with: dragging to 91 and "back" to 90 was a real
+  change, and four expectations failed for the test's own mistake. `getSliderVal("gSlSpots")`, then
+  drag away and back to THAT.
+- **A drawn frame for something at the band: `spots=0` unless dust is the question** (4.16.0). On a
+  steep slope of tone beside a dark skirt the dust search marks a strip of plain backdrop along the
+  skirt (its 31-px median takes the person in), joined to the mark of the line - and the measure at
+  the end of the line then holds that strip too. A dark mark beside a person reads as its shadow
+  and is not marked at all; a light one of +80 is not taken by the dust search either: +45 is.
+- **A new default of the engine needs a hidden parameter that the legacy regime switches off**
+  (4.16.0). The new paint changed 10 of the 14 cases that `process` compares with v3.2.1. The
+  parameter (`srcNear`) belongs in the key of its stage (`k_heal`) and in `_clean_signature`, and
+  each of the three gets a defect of its own.
+- **Numbers written down before a constant was tuned are not the numbers of the release** (4.16.0).
+  The manual and this file were drafted while `HEAL_SRC_SEEN` was 0.25. Every number of them was
+  measured again with the engine as it is released: the comparison of the two results had moved
+  (8,404 px by up to 6 levels became 9,107 by up to 7), and the box of his own result read 976 px
+  and -22.67 where the notes said 974 and -22. Keep the probe scripts until the documents are
+  written, and run them last.
+- **His words in quotation marks are his words, letter for letter** (4.16.0). The first draft of
+  the manual had «коли доходить до кінця смужка завантаження…» after «Ви написали:» - a tidy
+  paraphrase. A paraphrase goes without the marks; a quotation is copied from section 1.
+- **`pkill -f "tests/run_checks.py"` inside a `bash` call kills that call too** (its own command line
+  matches). Stop a background run with the process tool; a background run that writes to a file
+  shows an empty log there - read the file.
 
 ## 5. What the owner can send you
 

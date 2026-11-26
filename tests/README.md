@@ -282,7 +282,7 @@ node tests/plugin_preview.test.js "the fast window" "after Apply"   # лише �
 наприклад через брак пам’яті), скрипт пише «CRASHED»: це не спійманий дефект, його треба запустити ще раз.
 
 ```
-python tests/try_defects.py           # усі дефекти зі списку (близько 20 хвилин)
+python tests/try_defects.py           # усі дефекти зі списку (близько 22 хвилин)
 python tests/try_defects.py paint     # лише ті, у назві чи групі яких є це слово (12 дефектів, 15 хвилин)
 python tests/try_defects.py --list    # показати список, нічого не змінюючи
 ```
