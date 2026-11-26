@@ -108,9 +108,10 @@ Part 2 - what this program does differently from v3.2.1, each with its own measu
             its place gets the wall beside it, continued - tone, a shadow that ran into it, grain - where a
             network that paints too light is no longer asked; what is thin stays the network's
   border    what stands at the border goes whole (since 4.15.0): the lit side of a softbox between its black
-            body and the border, black on a dark wall, the parquet beyond the sheet - not a pool of warm light,
-            not a bench the person leans on, not the wall behind a free pole; the wall is continued from
-            backdrop only; a strip along the person is the person's, a stain and a crumb beside it are not
+            body and the border, black on a dark wall, a light panel right beside a taken flag, the black foot
+            of a stand on a dark floor, the parquet beyond the sheet - not a pool of warm light, not a bench the
+            person leans on, not the wall behind a free pole; the wall is continued from backdrop only; a strip
+            along the person is the person's, a stain and a crumb beside it are not
 
 Part 3 - the program around the engine:
   server    settings migration, binary packets, one version everywhere; the name a person reads has no 2 (since
@@ -4661,8 +4662,9 @@ def check_bigfill():
                 "stand": float(up[parts["stand"] > 0.5].mean()), "band": float(up[off_band].mean())}
 
     said = lambda d: ", ".join(f"{k} {v * 100:.0f}%" for k, v in d.items())  # noqa: E731
-    # (the former way: the rules of 4.14.0 and of 4.15.0 for what is black off - see _BORDER_OFF)
-    was, now, near = marked(GEAR_BLACK_L=-1.0, **_BORDER_OFF), marked(), marked(GEAR_BLACK_REACH=0.002)
+    # (the former way: the rules of 4.14.0 and of 4.15.0 for what is black off - see _BORDER_OFF; `near`: the rule by
+    #  itself - near the border what is black outright is followed by another one as well, see GEAR_HULL_MAX)
+    was, now, near = marked(GEAR_BLACK_L=-1.0, **_BORDER_OFF), marked(), marked(GEAR_BLACK_REACH=0.002, GEAR_HULL_MAX=0.0)
     if was["top"] > 0.2 or was["curtain"] < 0.5:
         bad.append(f"the frame of this check must be one where the former way leaves the wide top of the curtain unmarked: {said(was)}")
     if min(now["curtain"], now["top"], now["strip"], now["stand"]) < 0.97 or now["band"] > 0.02:
@@ -4906,6 +4908,27 @@ def _border_frame(w=1500, h=2000):
     return np.clip(f, 0, 255).astype(np.uint8), sil, parts
 
 
+def _foot_frame(w=1500, h=2000):
+    """
+    The foot of a stand on a dark floor (4.15.0) - the right border of the owner's 0Q5A3411 drawn: a backdrop of
+    grey 11, light falling in over the right border and fading, and a thin black leg that comes in over that border
+    and ends in the dark, 9.5% of the width from it. Where the light is, the leg is "thin and dark" against the
+    backdrop; at its end it is not (`tip`). Returns (frame, silhouette 1024, parts: bool maps).
+    """
+    img, sil = H.make_studio_image(w, h, n_dust=0, n_hair=0, seed=47)
+    person = cv2.resize(sil, (w, h), interpolation=cv2.INTER_LINEAR) > 0.5
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    lit = np.exp(-(((xx - w) / (0.16 * w)) ** 2 + ((yy - 0.60 * h) / (0.075 * h)) ** 2))
+    f = np.repeat((11.0 + 10.0 * lit)[..., None], 3, axis=2) + np.random.default_rng(48).normal(0.0, 1.1, (h, w, 1)).astype(np.float32)
+    leg = np.zeros((h, w), np.float32)
+    cv2.line(leg, (w - 1, int(0.60 * h)), (int(0.905 * w), int(0.735 * h)), 1.0, 12, cv2.LINE_AA)
+    leg = cv2.GaussianBlur(leg, (0, 0), 1.5)
+    f *= (1.0 - 0.97 * leg)[..., None]
+    f[person] = img[person]
+    parts = dict(leg=(leg > 0.5) & (yy < 0.645 * h), tip=(leg > 0.5) & (yy > 0.70 * h))
+    return np.clip(f, 0, 255).astype(np.uint8), sil, parts
+
+
 def check_border():
     """
     At the border the whole of a thing goes, the floor beyond the sheet goes, and what lies along the person is
@@ -4913,6 +4936,8 @@ def check_border():
     owner's 0Q5A3610 in 4.14.0: the lit side of a softbox stayed and shone into the wall that was continued into
     the place of its body, the far edge of its black base stayed as a dark line on a dark wall, the parquet
     stayed, and the dark rim of a sheer skirt, outside the silhouette, was repainted with the tone of the floor.
+    Found on his older frames while that was cured: the end of a lit strip softbox stayed in the air when the
+    black flag it crosses went (0Q5A3413), and the black foot of a stand stayed on a dark floor (0Q5A3411).
     """
     bad = []
     w, h = 1500, 2000
@@ -5034,6 +5059,64 @@ def check_border():
         bad.append("light gear goes with a taken thing at the border when it hangs together with it, has something lighter than the "
                    "backdrop by GEAR_LIGHT_OVER (at least GEAR_LIGHT_MIN of the frame), ends within GEAR_LIGHT_REACH of the border and "
                    f"may be taken - then whole, with its black end and a rim, otherwise not at all: {said(lights)}")
+
+    # the black end of a thin thing: the foot of a stand on a floor too dark for "thin and dark" (the owner's 0Q5A3411)
+    foot, foot_sil, foot_parts = _foot_frame()
+
+    def foot_marked(**consts):
+        eng = H.make_engine(E, foot_sil)
+        for name_c, value_c in consts.items():
+            setattr(eng, name_c, value_c)
+        fh, fw = foot.shape[:2]
+        fg, core = eng._clean_fg_mask(np.clip(foot_sil * 255, 0, 255).astype(np.uint8), fw, fh, 70.0)
+        _, rem, _, _ = eng._compute_protection_maps_small(foot, fg, core, 80.0, False, True, smoke_auto=True, gear_body=True,
+                                                          smoke_faint=True, lines_out={})
+        up = cv2.resize(rem, (fw, fh), interpolation=cv2.INTER_LINEAR) > 100
+        return {k: float(up[v].mean()) for k, v in foot_parts.items()}
+
+    foot_was, foot_now, foot_grey = foot_marked(**_BORDER_OFF), foot_marked(), foot_marked(GEAR_BLACK_DEEP=-1.0, GEAR_BLACK_PURE=-1.0)
+    if foot_was["leg"] < 0.97 or foot_was["tip"] > 0.05:
+        bad.append("the frame with the foot of a stand must be one where the former way takes the leg and leaves its end on the dark "
+                   f"floor: {said(foot_was)}")
+    if min(foot_now.values()) < 0.97:
+        bad.append(f"the black end of a thin thing at the border must go with it (the foot of a stand on a dark floor): {said(foot_now)}")
+    if foot_grey["tip"] > 0.05:
+        bad.append("the end of the leg must be what the rule for black takes (GEAR_BLACK_PURE): without that rule "
+                   f"{foot_grey['tip'] * 100:.0f}% of it is marked")
+
+    def end_of(x_end=50, l_end=1.0, x0=0, mirror=False, ask="end", person=None, wall=8.0):
+        """
+        A black leg (L 1) from `x0` to `x0` + 30 on a wall of 8 (`wall`), taken with its rim, and its end, of L
+        `l_end`, on to `x_end`: how much of that end _black_end_at_border takes (ask: of a "rim" of 3 px above it;
+        of what lies "beyond" 72 px from the border; of what lies "after" the person). person: the columns of the
+        end, counted from where it begins, that belong to the person (with the band).
+        """
+        L = np.full((300, 400), wall, np.float32)
+        L[140:146, x0:x0 + 30] = 1.0
+        L[140:146, x0 + 30:x_end] = l_end
+        take = np.zeros((300, 400), bool)
+        take[135:151, x0:x0 + 30] = True
+        who = np.zeros((300, 400), bool)
+        if person:
+            who[130:156, x0 + 30 + person[0]:x0 + 30 + person[1]] = True
+        if mirror:
+            L, take, who = L[:, ::-1], take[:, ::-1], who[:, ::-1]
+        got = eng0._black_end_at_border(np.ascontiguousarray(take), np.ascontiguousarray(L), np.ascontiguousarray(who))
+        got = got[:, ::-1] if mirror else got
+        where = {"end": got[140:146, x0 + 32:min(x_end, x0 + 60)], "rim": got[137:140, x0 + 36:x_end - 2], "beyond": got[140:146, 72:x_end],
+                 "after": got[140:146, x0 + 30 + (person[1] if person else 0) + 6:x_end]}
+        return float(where[ask].mean())
+
+    ends = {"the black end of a taken leg": end_of(), "the same at the right border": end_of(mirror=True), "a rim of 3 px along it": end_of(ask="rim"),
+            "a dark-grey end (L 5)": end_of(l_end=5.0), "the end where it is the person's": end_of(person=(2, 26)),
+            "black that hangs together with the thing through the person only": end_of(x_end=60, person=(0, 12), ask="after"),
+            "a black end beyond GEAR_HULL_MAX of the width": end_of(x_end=120, ask="beyond"),
+            "the end of a thing that stands in the middle of the frame": end_of(x_end=200, x0=150),
+            "the end on a backdrop that is black itself": end_of(wall=1.0)}
+    if min(list(ends.values())[:3]) < 0.99 or max(list(ends.values())[3:]) > 0.01:
+        bad.append("the black end of a taken thing goes with it within GEAR_HULL_MAX of the left or right border, with a rim - and nothing "
+                   "that is not black, not the person or what only the person joins to the thing, nothing further in and no black "
+                   f"backdrop (GEAR_BLACK_MAX): {said(ends)}")
 
     def black_rest(thing_l, wall_l):
         """A dark thing 80 px wide at the border of a wall, marked up to 24 px: how much of the rest is taken with it."""
@@ -5230,7 +5313,8 @@ def check_border():
            f"wall (the former way marked {was['face'] * 100:.0f}% and {was['far'] * 100:.0f}% of them) - and its place is the wall beside it "
            f"({m_now['softbox']:+.1f} levels); a flag goes, and the light panel that stands right beside it goes with it, whole (without that rule: "
            f"{no_light['panel'] * 100:.0f}% of it): {m_now['flag']:+.1f} and {m_now['panel']:+.1f} levels against the wall beyond them, "
-           f"{m_was['panel']:+.0f} the former way; the wall is continued from backdrop only (on a drawn map: {tone['yes']:.0f} next to gear "
+           f"{m_was['panel']:+.0f} the former way; the black foot of a stand on a dark floor goes with its leg (the former way: "
+           f"{foot_was['tip'] * 100:.0f}% of it); the wall is continued from backdrop only (on a drawn map: {tone['yes']:.0f} next to gear "
            f"that stays, {tone['no']:.0f} when the gear counts as wall); the parquet goes with its edge ({m_now['parquet']:+.1f} levels against the sheet beside it, no warmer), a pool of warm light, a bench "
            f"the person leans on and the wall behind a free pole stay; a dark strip along a leg is the person's (the former way repainted it by "
            f"{m_was['strap']:+.0f} levels), a stain, a crumb and the joint between the legs are repaired as before; the green preview, the "

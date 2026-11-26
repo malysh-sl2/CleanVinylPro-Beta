@@ -1067,6 +1067,10 @@ class CleanVinylEngine:
     #      the lower half of the flag at the border (L 0..1 beside a wall of 5..7) stayed when its upper half went.
     #      Along the left and the right border (twice the strip) such a thing is followed as far as it goes, not
     #      only GEAR_BLACK_REACH from what was marked.
+    #      The end of a THIN thing, where it is black outright (GEAR_BLACK_PURE), is followed too, within
+    #      GEAR_HULL_MAX of the left or right border: a leg or a pole is taken where it is thin AND dark against
+    #      what is around it (GEAR_TAKE_DEPTH), and on a floor as dark as L 8 nothing is that much darker - on
+    #      0Q5A3411 the foot of a stand at the right border stayed as a black dot on the floor when its leg went.
     #   2. What a taken thing at the left or right border cuts off from the frame goes with it: row by row everything
     #      between the border and the far side of the thing, and GEAR_HULL_RIM (of the width) further - up to gear
     #      that stays, not into it; rows left out between two such rows are closed (GEAR_HULL_GAP of the height).
@@ -1128,6 +1132,35 @@ class CleanVinylEngine:
         held[0] = False
         held &= st[:, cv2.CC_STAT_AREA] <= self.GEAR_BLACK_MAX * L.size
         return np.maximum(marked, held[lbl].view(np.uint8))
+
+    def _black_end_at_border(self, take: np.ndarray, L: np.ndarray, person: np.ndarray) -> np.ndarray:
+        """
+        `take` (bool, the 1024 copy) with what is black outright (GEAR_BLACK_PURE) and hangs together with what it
+        holds near the left or right border (within GEAR_HULL_MAX of the width), and a rim: the black end of a thin
+        thing (see GEAR_HULL_MAX). L in 0..255; `person`: the person with the band around it - its black is no
+        part of a thing, and carries no thing further.
+        """
+        sh, sw = take.shape
+        if self.GEAR_HULL_MAX <= 0.0:
+            return take
+        cap = max(4, int(round(self.GEAR_HULL_MAX * sw)))
+        zone = np.zeros((sh, sw), dtype=bool)
+        zone[:, :cap] = True
+        zone[:, sw - cap:] = True
+        held = take & zone
+        black = (L < self.GEAR_BLACK_PURE) & zone & (~person) & (~take)
+        if not (bool(held.any()) and bool(black.any())):
+            return take
+        n, lbl, st, _ = cv2.connectedComponentsWithStats((black | held).view(np.uint8), connectivity=8)
+        of_thing = np.zeros(n, dtype=bool)
+        of_thing[np.unique(lbl[held])] = True
+        of_thing[0] = False
+        of_thing &= st[:, cv2.CC_STAT_AREA] <= self.GEAR_BLACK_MAX * L.size      # (a black backdrop is no thing)
+        more = of_thing[lbl] & black
+        if not bool(more.any()):
+            return take
+        more = cv2.dilate(more.view(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))) > 0
+        return take | (more & ~person)
 
     def _whole_to_border(self, take: np.ndarray, gear: np.ndarray | None = None) -> np.ndarray:
         """
@@ -1501,7 +1534,8 @@ class CleanVinylEngine:
                 light = self._light_gear_of_thing(stand_remove > 0.5, labels, stats, take_lut, L, fg_border_excl,
                                                   row_mid_l, fg_s, core_s)
                 stand_remove = np.maximum(stand_remove, light.astype(np.float32))
-            stand_remove = self._whole_to_border(stand_remove > 0.5, gear=(stand_mask > 0.5) & (stand_remove <= 0.5)).astype(np.float32)
+            taken = self._black_end_at_border(stand_remove > 0.5, L, fg_border_excl)
+            stand_remove = self._whole_to_border(taken, gear=(stand_mask > 0.5) & ~taken).astype(np.float32)
         stand_remove[core_s > 0.35] = 0.0
         if lines_out is not None and gear_body:
             # the gear that stays when the stands are taken away (see GEAR_KEPT_MAX), shaped like `stand_protect`
