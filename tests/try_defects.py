@@ -56,14 +56,14 @@ DEFECTS = [
     # ---- at the border the whole of a thing goes (4.15.0: the owner's 0Q5A3610 - the lit side of a softbox shone
     #      into the wall that replaced its body, the far edge of its black base stayed as a dark line)
     ("border: nothing goes with a thing at the border (the rule 'to the border' is off)", "border", ENGINE,
-     "        if self.GEAR_HULL_MAX <= 0.0:\n            return take\n",
-     "        if True:\n            return take\n"),
+     "        wide = min(sw, cap + rim)\n        out = take.copy()\n",
+     "        wide = min(sw, cap + rim)\n        return take\n        out = take.copy()\n"),
     ("border: a pole that stands free takes the wall behind it too", "border", ENGINE,
      "            thing = np.isin(lbl, at_border)\n",
      "            thing = lbl > 0\n"),
     ("border: a thing takes everything up to itself however far into the frame it reaches (no GEAR_HULL_MAX)", "border", ENGINE,
-     "        cap = max(4, int(round(self.GEAR_HULL_MAX * sw)))\n",
-     "        cap = sw\n"),
+     "        cap = max(4, int(round(self.GEAR_HULL_MAX * sw)))\n        rim = max(1, int(round(self.GEAR_HULL_RIM * sw)))\n",
+     "        cap = sw\n        rim = max(1, int(round(self.GEAR_HULL_RIM * sw)))\n"),
     ("border: no rim beyond the far side of a thing", "border", ENGINE,
      "                for _ in range(rim):      # one pixel further at a time, and not into the gear\n",
      "                for _ in range(0):        # one pixel further at a time, and not into the gear\n"),
@@ -92,6 +92,8 @@ DEFECTS = [
     ("border: along the border a black thing is followed no further than anywhere else", "border bigfill", ENGINE,
      "        near[:, :2 * reach] = True\n        near[:, -2 * reach:] = True\n",
      "        pass\n"),
+    # ---- the black end of a thin thing (0Q5A3411: the foot of a stand stayed as a black dot on a dark floor when its
+    #      leg went)
     ("border: the black end of a thin thing at the border is not followed (the foot of a stand stays on a dark floor)", "border", ENGINE,
      "            taken = self._black_end_at_border(stand_remove > 0.5, L, fg_border_excl)\n",
      "            taken = stand_remove > 0.5\n"),
@@ -191,11 +193,12 @@ DEFECTS = [
      "            pass\n"),
     # ---- what lies along the person is the person's (the dashes under the hem of 0Q5A3610)
     ("border: the cleaning repaints what lies along the person", "border", ENGINE,
-     "                                heal_mask, gone_j, gone_s = self._found_beside_person(seam_mask, spot_mask, eff_fg_for_spots)\n"
+     "                                heal_mask, gone_j, gone_s = self._found_beside_person(seam_mask, spot_mask, eff_fg_for_spots,\n"
+     "                                                                                      img_rgb_u8)\n"
      "                                edge_gone = (gone_j, gone_s)\n",
      "                                heal_mask = np.maximum(seam_mask, spot_mask)\n"),
     ("border: the green preview shows what lies along the person as if it were cleaned", "border", ENGINE,
-     "                    action_bin = self._found_beside_person(seam_mask, spot_mask, eff_fg_for_spots)[0]   # as process() does\n",
+     "                    action_bin = self._found_beside_person(seam_mask, spot_mask, eff_fg_for_spots, img_rgb_u8)[0]   # as process() does\n",
      "                    action_bin = np.maximum(seam_mask, spot_mask)   # as process() does\n"),
     ("border: the second pass of the cleaning finds the strip along the person again", "border", ENGINE,
      "                    if gone_2 is not None:\n                        spot2_mask[gone_2] = 0\n",
@@ -219,7 +222,7 @@ DEFECTS = [
      "        gone_j = self._along_person(seam_mask, fg_u8, long_only=True)\n",
      "        gone_j = None\n"),
     ("border: a strip of the dust search along the person is repainted (only the joints are looked at)", "border", ENGINE,
-     "        gone_s = self._along_person(spot_mask, fg_u8)\n",
+     "        gone_s = self._along_person(spot_mask, fg_u8, rgb=rgb)\n",
      "        gone_s = None\n"),
     ("border: what was dropped along the person is still counted as found", "border", ENGINE,
      "                        seam_px, spot_px = int(seam_mask.sum()) - edge_gone[0], int(spot_mask.sum()) - edge_gone[1]\n",
@@ -227,7 +230,35 @@ DEFECTS = [
     ("border: the mask of the dust search is changed in place (the stage cache gets it without the strip)", "border", ENGINE,
      "        keep_s = spot_mask if gone_s is None else np.where(gone_s, np.uint8(0), spot_mask)\n",
      "        keep_s = spot_mask\n        if gone_s is not None:\n            spot_mask[gone_s] = 0\n"),
+    # ---- ...but only when the THING in the piece is joined to the person: dust beside a shoe is dust (the frame is asked)
+    ("border: the cleaning does not ask the frame - a speck of dust right beside a leg stays in the photo", "border", ENGINE,
+     "                                heal_mask, gone_j, gone_s = self._found_beside_person(seam_mask, spot_mask, eff_fg_for_spots,\n"
+     "                                                                                      img_rgb_u8)\n",
+     "                                heal_mask, gone_j, gone_s = self._found_beside_person(seam_mask, spot_mask, eff_fg_for_spots)\n"),
+    ("border: the green preview does not ask the frame - the speck beside the leg is not shown, though it is cleaned", "border", ENGINE,
+     "                    action_bin = self._found_beside_person(seam_mask, spot_mask, eff_fg_for_spots, img_rgb_u8)[0]   # as process() does\n",
+     "                    action_bin = self._found_beside_person(seam_mask, spot_mask, eff_fg_for_spots)[0]   # as process() does\n"),
+    ("border: the frame is never asked - the mask alone decides what is the person's", "border", ENGINE,
+     "        if rgb is not None and self.PERSON_EDGE_TOUCH >= 0.0:\n",
+     "        if False:\n"),
+    ("border: once the frame is asked nothing is the person's (the rim of a skirt is repainted as dust)", "border", ENGINE,
+     "        return bool(at_band[parts[thing & piece]].any())\n",
+     "        return False\n"),
+    ("border: anything that stands out at the band counts, joined to the thing or not (a speck beside the end of a lace stays)", "border", ENGINE,
+     "        return bool(at_band[parts[thing & piece]].any())\n",
+     "        return bool(at_band.any())\n"),
+    ("border: 'right beside the band' reaches four pixels (a speck 3 px from a leg counts as joined to it)", "border", ENGINE,
+     "        at_band[parts[thing & (far <= self.PERSON_EDGE_GUARD)]] = True\n",
+     "        at_band[parts[thing & (far <= self.PERSON_EDGE_GUARD + 3.0)]] = True\n"),
+    ("border: the faintest shade counts as the thing (a speck in the shade of a leg is joined to it by that shade)", "border", ENGINE,
+     "        thing = np.ascontiguousarray((off >= max(self.PERSON_EDGE_SEEN, self.PERSON_EDGE_TOUCH * peak)) & (far > 0.0))\n",
+     "        thing = np.ascontiguousarray((off >= self.PERSON_EDGE_SEEN) & (far > 0.0))\n"),
+    ("border: a mark with nothing to see in it, right beside the person, is repaired", "border", ENGINE,
+     "        if peak < self.PERSON_EDGE_SEEN:\n            return True                                  # nothing in it stands out\n",
+     "        if peak < self.PERSON_EDGE_SEEN:\n            return False                                 # nothing in it stands out\n"),
     # (Not in the list, because the checks cannot tell:
+    #   - the second pass of the cleaning is not given the frame: it only sees what the first pass left;
+    #   - "no backdrop beside the piece to compare with" (fewer than 12 pixels of it): no drawn frame has such a piece;
     #   - the rim of the rule 'to the border' when no gear is named (`gear is None`): the program always names it;
     #   - "the distance is measured from the band, not from the nearest point of the piece": on the drawn frames
     #     both give the same pieces - the difference is a guard of one to three pixels the searches keep.)

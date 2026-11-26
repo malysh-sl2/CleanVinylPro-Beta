@@ -2551,11 +2551,15 @@ class CleanVinylEngine:
         return heal, grain_sigma
 
     # What lies along the outline of the person is the person's (4.15.0). The owner's 0Q5A3610: a sheer tulle skirt
-    # lies on the floor, and the network's silhouette ends a little inside its lower rim. The dark rim that was left
-    # outside - 10 to 27 px thick, 780 px long, right along the protected band - is a thin dark line on a light
-    # floor to the searches for dust and for joints: it was repainted with the tone of the floor, a row of white
-    # dashes under the hem (circled by the owner). On his other frames, with stand-in silhouettes, what the dust
-    # search marks right at the outline is the same kind of thing: the ends of hair, a finger, the edge of a foot.
+    # lies on the floor, and in his result a row of light dashes stands under its hem (circled by him): 780 px
+    # long, 3 to 12 px thick, 30 levels lighter than the frame, with the stair-stepped upper edge of a mask cut by
+    # the person. The hem of a skirt on the floor is a long, thin, nearly level line - a joint of the floor to the
+    # JOINT search, which may repair into the protected band (up to the core of the person), where the source of
+    # the repair is painted over with a wide average of the backdrop. Seen here on his 0Q5A3417 with a stand-in
+    # silhouette: 1,073 px of the hem of a black dress taken for a joint, a light strip of 362 x 19 px painted
+    # under it. (On 0Q5A3610 itself the stand-ins do not give the dashes: the search drops those lines here.)
+    # And what the DUST search marks right at the outline, on all ten of his frames, is mostly the same kind of
+    # thing: the ends of hair, a finger, the edge of a foot, the rim of a sheer skirt.
     # So a piece the searches found is dropped when it
     #   - comes right up to the protected band of the person (within half of PERSON_EDGE_REACH), and
     #   - lies along it: at least PERSON_EDGE_SHARE of the piece no more than PERSON_EDGE_REACH (of the long side)
@@ -2563,21 +2567,68 @@ class CleanVinylEngine:
     # The searches mark a thing with a rim around it, and that rim is a number of PIXELS (a dilation by 13, at any
     # size of the frame): PERSON_EDGE_RIM is added to the reach, so that the reduced copy of the window, where the
     # rim is most of the piece, decides as the frame does.
-    # A stain that touches a shoe reaches further out than that and is still repaired; so is a crumb that lies a
-    # few pixels off the band. Of the JOINTS of the floor only a strip longer than PERSON_EDGE_JOINT times the
-    # reach is dropped: a joint ends at the person, it does not run along it, and the short piece of it that shows
-    # in a narrow gap between two legs must go with the rest of the line. The single hairs of the hairdo have a
-    # search of their own (4b) and are not asked. (PERSON_EDGE_REACH 0 switches the rule off.)
+    # A stain that touches a shoe reaches further out than that and is still repaired. Of the JOINTS of the floor
+    # only a strip longer than PERSON_EDGE_JOINT times the reach is dropped: a joint ends at the person, it does
+    # not run along it, and the short piece of it that shows in a narrow gap between two legs must go with the
+    # rest of the line. The single hairs of the hairdo have a search of their own (4b) and are not asked.
+    # (PERSON_EDGE_REACH 0 switches the rule off.)
+    #   - ...and, for the dust search, the THING in the piece is joined to the person. A speck of dust that lies
+    #     three pixels from a shoe is dust, and the search marks it with the same rim as the rim of a skirt: the
+    #     mask alone cannot tell the two apart (all the dust beside the legs stayed in the photo). So the frame is
+    #     asked. What in the piece stands out from the backdrop around it (by PERSON_EDGE_SEEN levels, and by
+    #     PERSON_EDGE_TOUCH of the most that anything in the piece does) is followed through the strip the searches
+    #     never mark: the rim of a skirt, the end of a lock, a finger go on into the protected band without a gap
+    #     (PERSON_EDGE_GUARD: to the pixels right beside the band); around a speck there is backdrop on every
+    #     side, and it is repaired as before. Where nothing stands out, or no backdrop is left beside the piece
+    #     to compare with, the piece is left alone as well. The price: a crumb that TOUCHES a shoe stays.
+    #     (PERSON_EDGE_TOUCH below 0: the frame is not asked.)
     PERSON_EDGE_REACH = 0.0045
     PERSON_EDGE_RIM = 7.0
     PERSON_EDGE_SHARE = 0.5
     PERSON_EDGE_JOINT = 4.0
+    PERSON_EDGE_GUARD = 1.5
+    PERSON_EDGE_TOUCH = 0.4
+    PERSON_EDGE_SEEN = 4.0
 
-    def _along_person(self, found: np.ndarray, fg_u8: np.ndarray, long_only: bool = False) -> np.ndarray | None:
+    def _thing_reaches_person(self, i: int, lbl: np.ndarray, st: np.ndarray, away: np.ndarray, marked: np.ndarray,
+                              rgb: np.ndarray, wide: float) -> bool:
+        """
+        Is the thing inside piece `i` joined to the person (see PERSON_EDGE_TOUCH)? `lbl`, `st`: the pieces of a
+        search; `away`: the distance of every pixel from the protected band; `marked`: everything the search
+        found; `rgb`: the frame, cut like the other maps; `wide`: further than this from the band the backdrop
+        beside the piece is plain backdrop (pixels).
+        """
+        x, y, bw, bh = (int(v) for v in st[i, :4])
+        m = int(wide) + 3
+        ya, yb, xa, xb = max(0, y - m), min(lbl.shape[0], y + bh + m), max(0, x - m), min(lbl.shape[1], x + bw + m)
+        piece = lbl[ya:yb, xa:xb] == i
+        far = away[ya:yb, xa:xb]
+        grey = cv2.blur(rgb[ya:yb, xa:xb, :3].astype(np.float32).mean(axis=2), (3, 3))
+        ring = ((cv2.dilate(piece.view(np.uint8), np.ones((2 * m + 1, 2 * m + 1), np.uint8)) > 0)
+                & (marked[ya:yb, xa:xb] == 0) & (far > wide))
+        if int(ring.sum()) < 12:
+            return True                                  # no backdrop beside it to compare with
+        off = np.abs(grey - float(np.median(grey[ring])))
+        inside = off[piece]
+        k = min(inside.size, max(3, inside.size // 50))
+        peak = float(np.partition(inside, inside.size - k)[inside.size - k])
+        if peak < self.PERSON_EDGE_SEEN:
+            return True                                  # nothing in it stands out
+        # everything that stands out, outside the band: is a part of it that lies in the piece joined to the band?
+        thing = np.ascontiguousarray((off >= max(self.PERSON_EDGE_SEEN, self.PERSON_EDGE_TOUCH * peak)) & (far > 0.0))
+        _, parts = cv2.connectedComponents(thing.view(np.uint8), connectivity=8)
+        at_band = np.zeros(int(parts.max()) + 1, dtype=bool)
+        at_band[parts[thing & (far <= self.PERSON_EDGE_GUARD)]] = True
+        return bool(at_band[parts[thing & piece]].any())
+
+    def _along_person(self, found: np.ndarray, fg_u8: np.ndarray, long_only: bool = False,
+                      rgb: np.ndarray | None = None) -> np.ndarray | None:
         """
         Which of the pieces of `found` (uint8, >0: what a search marked) lie along the outline of the person (see
         PERSON_EDGE_REACH): bool, the size of the frame - or None when there is none. `fg_u8`: the person with the
         protected band. long_only: only strips longer than PERSON_EDGE_JOINT times the reach (the joints).
+        `rgb` (uint8, the frame the search looked at): with it, only the pieces whose thing is joined to the
+        person (see PERSON_EDGE_TOUCH); without it, every piece that lies along the person.
         """
         h, w = found.shape[:2]
         if self.PERSON_EDGE_REACH <= 0.0:
@@ -2609,20 +2660,26 @@ class CleanVinylEngine:
         if long_only:
             gone &= np.maximum(st[:, cv2.CC_STAT_WIDTH], st[:, cv2.CC_STAT_HEIGHT]) >= self.PERSON_EDGE_JOINT * reach
         gone[0] = False
+        if rgb is not None and self.PERSON_EDGE_TOUCH >= 0.0:
+            view = rgb[y0:y1, x0:x1]
+            for i in np.flatnonzero(gone):
+                gone[i] = self._thing_reaches_person(int(i), lbl, st, away, marked, view, 0.5 * (reach + rim))
         if not bool(gone.any()):
             return None
         out = np.zeros((h, w), dtype=bool)
         out[y0:y1, x0:x1] = gone[lbl]
         return out
 
-    def _found_beside_person(self, seam_mask: np.ndarray, spot_mask: np.ndarray, fg_u8: np.ndarray):
+    def _found_beside_person(self, seam_mask: np.ndarray, spot_mask: np.ndarray, fg_u8: np.ndarray,
+                             rgb: np.ndarray | None = None):
         """
         What the two searches found, joined, without what lies along the person (see PERSON_EDGE_REACH). Returns
         (the joined mask, pixels dropped from the joints, pixels dropped from the spots). The two masks themselves
-        stay as they were found: the stage cache holds them.
+        stay as they were found: the stage cache holds them. `rgb`: the frame the searches looked at (see
+        _along_person; the dust search is asked with it, the joints without).
         """
         gone_j = self._along_person(seam_mask, fg_u8, long_only=True)
-        gone_s = self._along_person(spot_mask, fg_u8)
+        gone_s = self._along_person(spot_mask, fg_u8, rgb=rgb)
         if gone_j is None and gone_s is None:
             return np.maximum(seam_mask, spot_mask), 0, 0
         keep_j = seam_mask if gone_j is None else np.where(gone_j, np.uint8(0), seam_mask)
@@ -5006,7 +5063,7 @@ class CleanVinylEngine:
                 )
 
                 if gear_body:
-                    action_bin = self._found_beside_person(seam_mask, spot_mask, eff_fg_for_spots)[0]   # as process() does
+                    action_bin = self._found_beside_person(seam_mask, spot_mask, eff_fg_for_spots, img_rgb_u8)[0]   # as process() does
                 else:
                     action_bin = np.maximum(seam_mask, spot_mask)
                 if remove_stands:
@@ -5603,7 +5660,8 @@ class CleanVinylEngine:
 
                             if gear_body:
                                 # what lies along the person is the person's (see PERSON_EDGE_REACH)
-                                heal_mask, gone_j, gone_s = self._found_beside_person(seam_mask, spot_mask, eff_fg_for_spots)
+                                heal_mask, gone_j, gone_s = self._found_beside_person(seam_mask, spot_mask, eff_fg_for_spots,
+                                                                                      img_rgb_u8)
                                 edge_gone = (gone_j, gone_s)
                             else:
                                 heal_mask = np.maximum(seam_mask, spot_mask)
@@ -6007,7 +6065,7 @@ class CleanVinylEngine:
                 )
                 spot2_mask[heal_mask > 0] = 0
                 if gear_body:
-                    gone_2 = self._along_person(spot2_mask, eff_fg_for_spots)   # (see PERSON_EDGE_REACH)
+                    gone_2 = self._along_person(spot2_mask, eff_fg_for_spots, rgb=pass2_u8)   # (see PERSON_EDGE_REACH)
                     if gone_2 is not None:
                         spot2_mask[gone_2] = 0
                     del gone_2

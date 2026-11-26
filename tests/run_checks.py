@@ -4834,6 +4834,8 @@ def _border_frame(w=1500, h=2000):
       strap    a dark strip along the outer side of a leg of the person, half under the protected band;
       stain    a light streak that touches the band of the other leg and reaches out from it, and
       crumb    a dark crumb a little way off that leg;
+      grit     a dark speck right beside that leg, 4..6 px from its protected band: dust, though the search marks
+               it with the same rim as the strap;
       joint    the joint of the floor, which the drawn frame has anyway: the piece of it between the two legs.
     Returns (frame, silhouette 1024, parts: bool maps).
     """
@@ -4890,12 +4892,16 @@ def _border_frame(w=1500, h=2000):
     stain[int(0.765 * h) - 5:int(0.765 * h) + 5, x_leg_l - 62:x_leg_l - 7] = 1.0
     crumb = np.zeros((h, w), np.float32)
     cv2.circle(crumb, (x_leg_l - 40, int(0.845 * h)), 5, 1.0, -1, cv2.LINE_AA)
-    for m in (strap, crumb):
+    y_grit = int(0.82 * h)                              # (between the joint of the floor and the crumb)
+    x_edge = int(np.flatnonzero(person[y_grit, x_leg_l - 40:x_leg_l + 40])[0]) + x_leg_l - 40
+    grit = np.zeros((h, w), np.float32)
+    cv2.circle(grit, (x_edge - 15, y_grit), 3, 1.0, -1, cv2.LINE_AA)   # (its near side 12 px from the leg, the band reaches 6..8)
+    for m in (strap, crumb, grit):
         f *= (1.0 - 0.55 * hard(m))[..., None]
     f *= (1.0 + 0.30 * hard(stain))[..., None]         # (a light stain: a dark one next to a leg reads as its shadow)
     f[person] = img[person]
     parts = {k: v > 0.5 for k, v in maps.items()}
-    parts.update(person=person, strap=(strap > 0.5) & ~person & (xx > x_leg_r + 8), stain=stain > 0.5, crumb=crumb > 0.5, pool=glow > 0.5)
+    parts.update(person=person, strap=(strap > 0.5) & ~person & (xx > x_leg_r + 8), stain=stain > 0.5, crumb=crumb > 0.5, grit=grit > 0.5, pool=glow > 0.5)
     parts["far"] = parts["base"] & (xx > 0.118 * w)
     parts["behind"] = (xx > 0.95 * w) & (yy > 0.51 * h) & (yy < 0.59 * h)
     parts["edge"] = (np.abs(yy - 0.76 * h) <= 8) & (xx > 0.01 * w) & (xx < 0.10 * w)   # the upper edge of the parquet
@@ -5186,6 +5192,60 @@ def check_border():
     if not (np.array_equal(seam_d, seam_0) and np.array_equal(spot_d, spot_0)):
         bad.append("along the person: the two masks of the searches must stay as they were found (the stage cache holds them)")
 
+    def beside(kind, **consts):
+        """
+        A dark leg on a plain backdrop (its protected band ends 4 px beyond it, at column 159), one thing right of it,
+        marked as the dust search marks: with a rim of 6 px, never nearer than 3 px to the band. Is the piece left
+        alone (True) or repaired? `kind`: what is drawn; `consts`: constants of the engine for this case.
+        """
+        pic = np.full((240, 320), 150.0, np.float32)
+        band = np.zeros((240, 320), np.uint8)
+        band[:, 100:160] = 255
+        thing, extra = np.zeros((240, 320), np.uint8), np.zeros((240, 320), np.uint8)
+        if kind in ("speck", "lace", "shade"):
+            cv2.circle(thing, (164, 120), 2, 1, -1)                 # a speck: its near side 3 px from the band
+        elif kind == "rim":
+            thing[80:160, 150:168] = 1                              # the rim of a skirt: out of the person, 8 px beyond the band
+        elif kind == "crumb":
+            cv2.circle(thing, (161, 120), 3, 1, -1)                 # a crumb that lies against the band
+        if kind == "lace":
+            extra[108:112, 150:163] = 1                             # the end of a lace beside the speck: it stops inside the guard strip
+        pic[(thing > 0) | (extra > 0)] = 70.0
+        if kind == "shade":
+            pic[60:180, 160:169] -= 12.0                            # the faint shade of the leg, over the speck and up to the band
+        pic[:, 104:156] = 40.0
+        pic += np.random.default_rng(46).normal(0.0, 1.0, pic.shape).astype(np.float32)
+        seen = thing.copy() if kind != "none" else np.zeros_like(thing)
+        if kind == "none":
+            seen[118:122, 165:169] = 1                              # the search marked a place where nothing is to be seen
+        guard = cv2.dilate((band > 22).astype(np.uint8), np.ones((7, 7), np.uint8)) > 0
+        seen[guard] = 0
+        mark = cv2.dilate(seen, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13)))
+        mark[guard] = 0
+        eng_b = H.make_engine(E, sil)
+        for name_c, value_c in consts.items():
+            setattr(eng_b, name_c, value_c)
+        rgb_b = np.repeat(np.clip(pic, 0, 255).astype(np.uint8)[..., None], 3, axis=2)
+        gone_b = eng_b._along_person(mark, band, rgb=rgb_b)
+        by_mask = eng_b._along_person(mark, band)
+        if by_mask is None or not bool(by_mask[mark > 0].all()):
+            return None                                             # (the case must be one the mask alone leaves to the person)
+        return gone_b is not None and bool(gone_b[mark > 0].all())
+
+    joined_to = {"a speck 3 px from a leg": beside("speck"), "the rim of a skirt": beside("rim"),
+                 "a crumb that lies against the leg": beside("crumb"), "a mark with nothing to see in it": beside("none"),
+                 "a speck beside the end of a lace": beside("lace"), "a speck in the faint shade of the leg": beside("shade"),
+                 "a speck, the frame not asked": beside("speck", PERSON_EDGE_TOUCH=-1.0)}
+    want_b = {"a speck 3 px from a leg": False, "the rim of a skirt": True, "a crumb that lies against the leg": True,
+              "a mark with nothing to see in it": True, "a speck beside the end of a lace": False,
+              "a speck in the faint shade of the leg": False, "a speck, the frame not asked": True}
+    if joined_to != want_b:
+        told = ", ".join(f"{k}: {'?' if v is None else ('left alone' if v else 'repaired')}" for k, v in joined_to.items())
+        bad.append("along the person, the frame asked: a piece of the dust search is the person's only when the THING in it goes on into "
+                   "the protected band without a gap (PERSON_EDGE_TOUCH, PERSON_EDGE_GUARD) - the rim of a skirt, a crumb that lies "
+                   "against the leg; a speck with backdrop around it is dust, also beside the end of a lace and in the faint shade of "
+                   f"the leg; a mark with nothing to see in it is left alone (PERSON_EDGE_SEEN): {told}")
+
     # the wall is continued from backdrop only: gear that stays is no wall
     rng = np.random.default_rng(45)
     src = np.clip(100.0 + rng.normal(0.0, 1.5, (300, 400, 3)), 0, 255).astype(np.uint8)
@@ -5239,6 +5299,7 @@ def check_border():
             edge=float(np.percentile(warm(c)[parts["edge"]], 90) - np.median(warm(c)[parts["paper"]])),
             strap=float(np.median((g - g0)[parts["strap"]])), strap_max=float(np.abs(g - g0)[parts["strap"]].max()),
             stain=float(np.median((g - g0)[parts["stain"]])), crumb=float(np.median((g - g0)[parts["crumb"]])),
+            grit=float(np.median((g - g0)[parts["grit"]])),
             joint=float(np.median((g - g0)[parts["joint"]])),
             pool=float(np.median(warm(c)[parts["pool"]]) - np.median(warm(frame)[parts["pool"]])),
             bench=float(np.abs(g - g0)[parts["bench"]].max()), behind=float(np.abs(g - g0)[parts["behind"]].max()),
@@ -5269,6 +5330,9 @@ def check_border():
         bad.append("a stain that reaches out from the person, a crumb a little way off and the joint between the legs must still be "
                    f"repaired: {num({k: m_now[k] for k in ('stain', 'crumb', 'joint')})} levels "
                    f"(the former way: {num({k: m_was[k] for k in ('stain', 'crumb', 'joint')})})")
+    if m_now["grit"] < 0.6 * m_was["grit"] or m_was["grit"] < 15.0:
+        bad.append("a speck of dust right beside a leg is dust, not the person's: it must be repaired as before - "
+                   f"{m_now['grit']:+.1f} levels, the former way {m_was['grit']:+.1f}")
     if abs(m_now["pool"]) > 2.0 or m_now["bench"] > 1.0 or m_now["behind"] > 1.0 or m_now["person"] > 0.0:
         bad.append(f"the pool of light, the bench, the wall behind the free pole and the person must stay: {num({k: m_now[k] for k in ('pool', 'bench', 'behind', 'person')})}")
     big = st_now.get("big_fill") or {}
@@ -5294,9 +5358,10 @@ def check_border():
         bad.append(f"two passes: the second search must leave the strap as well: moved by up to {m_two['strap_max']:.1f} levels")
     # the green preview shows what the cleaning does
     green, _ = _quiet(H.make_engine(E, sil).preview_action_mask, frame, 8, dict(base))
-    shown = {k: float((green > 32)[parts[k]].mean()) for k in ("strap", "parquet", "face", "crumb")}
-    if shown["strap"] > 0.02 or min(shown["parquet"], shown["face"], shown["crumb"]) < 0.95:
-        bad.append(f"the green preview must show what will be cleaned - the parquet, the lit side, the crumb - and not the strap: {said(shown)}")
+    shown = {k: float((green > 32)[parts[k]].mean()) for k in ("strap", "parquet", "face", "crumb", "grit")}
+    if shown["strap"] > 0.02 or min(shown["parquet"], shown["face"], shown["crumb"], shown["grit"]) < 0.95:
+        bad.append("the green preview must show what will be cleaned - the parquet, the lit side, the crumb, the speck beside the leg - "
+                   f"and not the strap: {said(shown)}")
     # the reduced copy of the window decides as the frame does
     k = 0.5
     small = cv2.resize(frame, (int(w * k), int(h * k)), interpolation=cv2.INTER_AREA)
@@ -5317,7 +5382,7 @@ def check_border():
            f"{foot_was['tip'] * 100:.0f}% of it); the wall is continued from backdrop only (on a drawn map: {tone['yes']:.0f} next to gear "
            f"that stays, {tone['no']:.0f} when the gear counts as wall); the parquet goes with its edge ({m_now['parquet']:+.1f} levels against the sheet beside it, no warmer), a pool of warm light, a bench "
            f"the person leans on and the wall behind a free pole stay; a dark strip along a leg is the person's (the former way repainted it by "
-           f"{m_was['strap']:+.0f} levels), a stain, a crumb and the joint between the legs are repaired as before; the green preview, the "
+           f"{m_was['strap']:+.0f} levels), a stain, a crumb, the joint between the legs and a speck of dust right beside a leg are repaired as before; the green preview, the "
            f"second pass and the reduced copy decide alike; without the tick nothing is taken away"
            if not bad else "wrong:\n  " + "\n  ".join(bad))
 
