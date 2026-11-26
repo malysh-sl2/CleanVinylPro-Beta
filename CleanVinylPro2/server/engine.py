@@ -2573,8 +2573,8 @@ class CleanVinylEngine:
     # rest of the line. The single hairs of the hairdo have a search of their own (4b) and are not asked.
     # (PERSON_EDGE_REACH 0 switches the rule off.)
     #   - ...and, for the dust search, the THING in the piece is joined to the person. A speck of dust that lies
-    #     three pixels from a shoe is dust, and the search marks it with the same rim as the rim of a skirt: the
-    #     mask alone cannot tell the two apart (all the dust beside the legs stayed in the photo). So the frame is
+    #     three pixels from the protected band of a shoe is dust, and the search marks it with the same rim as the
+    #     rim of a skirt: the mask alone cannot tell the two apart (all the dust beside the legs stayed). So the frame is
     #     asked. What in the piece stands out from the backdrop around it (by PERSON_EDGE_SEEN levels, and by
     #     PERSON_EDGE_TOUCH of the most that anything in the piece does) is followed through the strip the searches
     #     never mark: the rim of a skirt, the end of a lock, a finger go on into the protected band without a gap
