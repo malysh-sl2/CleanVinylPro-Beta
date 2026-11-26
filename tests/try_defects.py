@@ -53,6 +53,44 @@ def panel(*texts):
 
 # (name, check groups - or panel(<text>, ...), file, exact text, replacement)
 DEFECTS = [
+    # ---- what the fill is shown in place of the person (4.16.0; the dark stepped smear where the line of the paper
+    #      met the hem on the owner's 0Q5A3610): the backdrop that lies right beside the protected band.
+    ("paint: the person is painted over with the wide average alone, as up to 4.15.0 (the narrow steps are never taken)", "edge", ENGINE,
+     "        for sigma in (self.HEAL_SRC_STEPS if near else ()):\n",
+     "        for sigma in ():\n"),
+    ("paint: the first pass of the cleaning paints the former way whatever is asked", "edge", ENGINE,
+     "                            fill_s = self._backdrop_under_person(src_s, w_bg, near=src_near)\n",
+     "                            fill_s = self._backdrop_under_person(src_s, w_bg, near=False)\n"),
+    ("paint: only the wider of the two narrow steps - the backdrop 6 px around, not what lies right beside the band", "edge", ENGINE,
+     "    HEAL_SRC_STEPS = (6.0, 2.5)   # ...and the narrower ones that replace it where backdrop lies that near\n",
+     "    HEAL_SRC_STEPS = (6.0,)\n"),
+    ("paint: only the narrowest step - beside a marked place as tall as that window is wide it is blind, and the wide average shows", "edge", ENGINE,
+     "    HEAL_SRC_STEPS = (6.0, 2.5)   # ...and the narrower ones that replace it where backdrop lies that near\n",
+     "    HEAL_SRC_STEPS = (2.5,)\n"),
+    ("paint: a narrow step is taken in full only where its whole window is backdrop - never at the band", "edge", ENGINE,
+     "    HEAL_SRC_SEEN = 0.12          # of a window is backdrop: that step is taken in full\n",
+     "    HEAL_SRC_SEEN = 1.0\n"),
+    ("paint: the narrow steps average the frame as it is - the person comes into the paint", "edge", ENGINE,
+     "            beside = cv2.GaussianBlur(src_s * w_bg[:, :, None], (0, 0), sigmaX=sigma, sigmaY=sigma) / (den[:, :, None] + 1e-4)\n",
+     "            beside = cv2.GaussianBlur(src_s, (0, 0), sigmaX=sigma, sigmaY=sigma)\n"),
+    ("paint: a marked place counts as backdrop that stays (the first pass)", "edge", ENGINE,
+     "                        bg_valid = (~fg_bad_s) & (~hm_s)\n",
+     "                        bg_valid = (~fg_bad_s)\n"),
+    ("paint: the second pass of the cleaning still paints the person over with the wide average", "edge", ENGINE,
+     "                        f2 = cv2.resize(np.clip(self._backdrop_under_person(s2_img, w2, near=src_near), 0, 255).astype(np.uint8),\n",
+     "                        f2 = cv2.resize(np.clip(self._backdrop_under_person(s2_img, w2, near=False), 0, 255).astype(np.uint8),\n"),
+    ("paint: what the second pass marked counts as backdrop for its paint", "edge", ENGINE,
+     "                            w2[cv2.resize(spot2_mask, (sw2, sh2), interpolation=cv2.INTER_NEAREST) > 0] = 0.0\n",
+     "                            pass\n"),
+    ("paint: the stage cache does not tell the two ways apart (a repair made the other way is taken ready)", "edge", ENGINE,
+     "            k_heal = (k_detect, fast_mode, grain_keep, tone_edge, big_fill, src_near)\n",
+     "            k_heal = (k_detect, fast_mode, grain_keep, tone_edge, big_fill)\n"),
+    ("paint: Apply does not notice that the way was switched", "edge", ENGINE,
+     "            bool(p.get(\"bigFill\", True)), bool(p.get(\"srcNear\", True)),\n",
+     "            bool(p.get(\"bigFill\", True)),\n"),
+    ("paint: the switch is not read - the new way also where the pixels of v3.2.1 are asked for", "process", ENGINE,
+     "            src_near = bool(params.get(\"srcNear\", True))\n",
+     "            src_near = True\n"),
     # ---- a new result leaves "До" (4.16.0; the owner: "when the bar reaches its end, show the photo after - now it
     #      is before, inconvenient"). All of it is the panel: the scenarios named "a new result leaves 'До'".
     ("view: the bar ends and 'До' stays on screen, as up to 4.15.0 (a recompute never shows its result)", panel("a new result leaves"), MAINJS,
@@ -94,6 +132,9 @@ DEFECTS = [
     ("view: a step on the mask (inversion, Ctrl + Z) leaves 'До' - it says in words what it did, the view is the user's", panel("a new result leaves"), MAINJS,
      "      if (typeof d.mask_share === \"number\") sessState.maskShare = d.mask_share;\n      if (d.history) setEditHistory(d.history);\n",
      "      if (typeof d.mask_share === \"number\") sessState.maskShare = d.mask_share;\n      if (d.history) setEditHistory(d.history);\n      showNewResult();\n"),
+    ("view: the hint of 'До / Після' does not say that a new result brings the cleaned photo back by itself", panel("a new result leaves"), PLUGIN + "/index.html",
+     " Коли готовий новий результат (після галочки, повзунка чи «↻ Перерахувати»), вікно само повертається до чистого фото.",
+     ""),
     # (Not in the list, because the checks cannot tell:
     #   - "a run that the SERVER stopped for a request of another window leaves 'До'" (the branch `d.superseded` of
     #     the newest call): the scripted server of the test stops a run only for a newer request of the same window,

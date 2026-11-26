@@ -67,7 +67,11 @@ Part 2 - what this program does differently from v3.2.1, each with its own measu
             working size, by which the window places everything, is unchanged
   edge      the corner and the stains change the tone of the backdrop right up to the person: no strip of the old
             tone is left around it (the rim along a hem and around the shoes); the person is not touched; the
-            repair away from the person is what it was
+            repair away from the person is what it was;
+            what the fill is shown in place of the person (4.16.0): the backdrop that lies right beside the
+            protected band, not a wide average - a repair that ends at the band no longer takes another tone
+            there (a dark wall near a lit floor, a shade beside a skirt); a marked place is no backdrop; the
+            second pass of the cleaning follows the same rule
   line      a joint of the vinyl that the corner tool takes for the corner: its thin dark line goes with the step,
             with the seam tool on and off - also when the line runs beside the middle of the step (one line, one
             tool: the seam tool marks nothing of it); a joint or a corner without such a line: nothing is taken out
@@ -185,7 +189,7 @@ def _legacy(p: dict) -> dict:
     """The parameters under which the engine must still give the pixels of v3.2.1 (see the header)."""
     return dict(p, speedMode="quality", smokeOn=False, cycCurve=0, dressSmooth=False, scuffs=0, seamJoin=False,
                 grainLocal=False, previewQuality=90, gearBody=False, shadowSpots=False, brushSoft=False, previewLong=1080,
-                toneEdge=False, cornerHair=False, strayHair=0, mixOn=False, bigFill=False)
+                toneEdge=False, cornerHair=False, strayHair=0, mixOn=False, bigFill=False, srcNear=False)
 
 
 def _legacy_window(p: dict) -> dict:
@@ -6575,6 +6579,56 @@ def _person_core(matte):
     return matte > 0.9
 
 
+def _hem_frame(w=1500, h=2000, kind="dark", line=True, marks=False, person=(52, 40, 44), seed=31):
+    """
+    What lies right beside the person (4.16.0) - the hem of the owner's 0Q5A3610 drawn: a wall as dark as his over
+    a pool of light on the floor, a person in a wide skirt whose hem lies in the light, and a line of the paper
+    that runs into the skirt on both sides. The tone of the backdrop changes fast near the skirt:
+      kind "dark"   the line lies where the light begins: beside the skirt the floor is lit, the dark wall is near;
+      kind "shade"  the line lies in the light and the skirt casts a shade to its right: beside the skirt the floor
+                    is dark, the lit floor is near.
+    line=False: the same frame without the line (what a repair should give).
+    marks: big dark marks on the floor, away from the line and from the person (the stand-in repair leaves a smudge
+    of them for the second pass of the cleaning), and a light one right beside the skirt (`spot`: its centre; a
+    dark one there reads as the shadow of the person).
+    Returns (frame, silhouette 1024, {"y": the row of the line, "spot": (x, y)}).
+    """
+    rng = np.random.default_rng(seed)
+    yy = np.linspace(0, 1, h, dtype=np.float32)[:, None]
+    xx = np.linspace(0, 1, w, dtype=np.float32)[None, :]
+    ramp = np.clip((yy - (0.61 if kind == "dark" else 0.56)) / 0.06, 0.0, 1.0)
+    lum = 12.0 + 104.0 * (ramp * ramp * (3.0 - 2.0 * ramp)) * (1.0 - 0.18 * ((xx - 0.5) * 2) ** 2)
+    sil = np.zeros((h, w), np.uint8)
+    cx = w // 2
+    cv2.ellipse(sil, (cx, int(h * 0.20)), (int(w * 0.04), int(h * 0.05)), 0, 0, 360, 255, -1)
+    cv2.fillPoly(sil, [np.array([[cx - int(w * 0.05), int(h * 0.24)], [cx + int(w * 0.05), int(h * 0.24)],
+                                 [cx + int(w * 0.07), int(h * 0.50)], [cx - int(w * 0.07), int(h * 0.50)]], np.int32)], 255)
+    cv2.fillPoly(sil, [np.array([[cx - int(w * 0.07), int(h * 0.50)], [cx + int(w * 0.07), int(h * 0.50)],
+                                 [cx + int(w * 0.30), int(h * 0.80)], [cx + int(w * 0.24), int(h * 0.86)],
+                                 [cx - int(w * 0.22), int(h * 0.86)], [cx - int(w * 0.27), int(h * 0.78)]], np.int32)], 255)
+    if kind == "shade":
+        shade = np.clip(1.0 - cv2.distanceTransform((sil == 0).astype(np.uint8), cv2.DIST_L2, 5) / 70.0, 0.0, 1.0)
+        shade = shade * shade * (3.0 - 2.0 * shade)
+        shade[:, :cx] = 0.0
+        shade[:int(h * 0.60)] = 0.0
+        lum = lum * (1.0 - 0.40 * cv2.GaussianBlur(shade, (0, 0), 4.0))
+    y = int(h * 0.665)
+    if line:
+        lum[y - 8:y + 9] -= 2.5
+        lum[y - 1:y + 2] -= 13.0
+    img = np.clip(lum[..., None] * np.float32([1.02, 1.0, 0.97]), 0, 255)
+    spot = (int(np.flatnonzero(sil[int(h * 0.74)])[0]) - 30, int(h * 0.74))
+    if marks:
+        for i, mx in enumerate((0.05, 0.10, 0.15, 0.84, 0.90, 0.94)):
+            px, py = int(mx * w), int((0.74 + 0.03 * (i % 3)) * h)
+            cv2.circle(img, (px, py), 12, tuple(float(max(0.0, v - 70.0)) for v in img[py, px]), -1, lineType=cv2.LINE_AA)
+        cv2.circle(img, spot, 12, tuple(float(min(255.0, v + 45.0)) for v in img[spot[1], spot[0]]), -1, lineType=cv2.LINE_AA)
+    soft = cv2.GaussianBlur(sil.astype(np.float32) / 255.0, (0, 0), 1.2)[..., None]
+    img = img * (1.0 - soft) + np.float32(person)[None, None, :] * soft
+    img = np.clip(img + rng.standard_normal((h, w, 3)).astype(np.float32) * 1.2, 0, 255).astype(np.uint8)
+    return img, cv2.resize(sil, (1024, 1024), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0, {"y": y, "spot": spot}
+
+
 def check_edge():
     """
     "toneEdge". The corner and the stains change the tone of the backdrop - and stopped at the margin of the
@@ -6675,6 +6729,191 @@ def check_edge():
                          f"{100 * abs(kept[True][1]):.0f}% from 14 px on)")
     report("edge", not bad, "the tone stages reach the person: " + "; ".join(notes) + "; the person is not touched; the repair away from the person is as before"
            if not bad else "wrong:\n  " + "\n  ".join(bad))
+    _check_edge_source()
+
+
+def _check_edge_source():
+    """
+    4.16.0, "srcNear": what the fill is shown in place of the person. The person with the protected band is painted
+    over before the fill looks, so that nothing of the person bleeds into a repair. The paint used to be one wide
+    average of the backdrop around. Where the tone of the backdrop changes near the person, the band then stood in
+    that picture as a shape of another tone with a stepped edge, and a repair that ended at the band took that
+    tone: the dark stepped smear where the line of the paper met the hem on the owner's 0Q5A3610. The paint is now
+    the backdrop that lies right beside the band.
+    """
+    bad, notes = [], []
+    gray = lambda a: a[..., :3].astype(np.float32).mean(axis=2)  # noqa: E731
+    base = dict(H.STD, spots=0, scuffs=0, blur=0, cycCurve=0, smokeOn=False, seamOn=True, seam=90)
+
+    def run(img, sil, params, out_cache=None):
+        """(what Photoshop shows, [(picture, marked)] of every fill, [(backdrop that stays, near)] of every paint)"""
+        eng = H.make_engine(E, sil)
+        fills, paints = [], []
+        for name in ("_run_lama_tiles", "_run_fast_inpaint"):
+            def heard(src, mask, *a, _fn=getattr(eng, name), **k):
+                fills.append((src.copy(), mask > 0))
+                return _fn(src, mask, *a, **k)
+            setattr(eng, name, heard)
+        paint = eng._backdrop_under_person
+
+        def paint_heard(src_s, w_bg, near=True):
+            paints.append((w_bg.copy(), near))
+            return paint(src_s, w_bg, near=near)
+        eng._backdrop_under_person = paint_heard
+        out = _quiet(eng.process, img, 8, params, out_cache=out_cache)[0]
+        return _comp(img, out), fills, paints
+
+    def band_of(img, src, marked):
+        """
+        The protected band as the fill saw it: everything that was painted over (single pixels where the paint is
+        the frame are closed). Returns (how far every pixel is from the band, how deep inside it).
+        """
+        band = cv2.morphologyEx(((src != img).any(axis=2) & ~marked).astype(np.uint8), cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8)) > 0
+        return (cv2.distanceTransform((~band).astype(np.uint8), cv2.DIST_L2, 5), cv2.distanceTransform(band.astype(np.uint8), cv2.DIST_L2, 5))
+
+    def tone_beside(pic, far, marked):
+        """The tone of the backdrop 2..8 px outside the band, carried to the pixels around (and where there is any)."""
+        beside = ((far >= 2) & (far <= 8) & ~marked).astype(np.float32)
+        den = cv2.blur(beside, (25, 25))
+        return cv2.blur(pic * beside, (25, 25)) / np.maximum(den, 1e-4), den > 0.05
+
+    # The rule itself, on a drawn copy of 240 x 240 px: a dark wall over a lit floor (20 -> 120 within 20 px), the
+    # band right of column 150 (the person, 250: never to show) and a marked place right beside the band on the lit
+    # floor (black: never to show either). Beside a mark as tall as the narrowest window is wide, that window is
+    # blind - the next wider one must still find the floor.
+    def painted(tall):
+        """{near: (the paint beside the middle of the mark minus the floor, its least, its most, beside the wall, beside the floor)}"""
+        n = 240
+        ramp = np.clip((np.arange(n, dtype=np.float32)[:, None] - 120.0) / 20.0, 0.0, 1.0)
+        src = np.repeat(np.broadcast_to(20.0 + 100.0 * ramp * ramp * (3.0 - 2.0 * ramp), (n, n))[:, :, None], 3, axis=2).astype(np.float32)
+        stays = np.ones((n, n), np.float32)
+        stays[:, 150:], src[:, 150:] = 0.0, 250.0
+        r0 = 147 - tall // 2
+        stays[r0:r0 + tall, 138:150], src[r0:r0 + tall, 138:150] = 0.0, 0.0
+        eng = H.make_engine(E, np.zeros((1024, 1024), np.float32))
+        got = {}
+        for near in (True, False):
+            v = eng._backdrop_under_person(src, stays, near=near)[:, 150:153, 0]     # the first 3 px of the band
+            got[near] = (float(v[r0 + tall // 2 - 1:r0 + tall // 2 + 1].mean()) - 120.0, float(v.min()), float(v.max()),
+                         float(v[20:60].mean()), float(v[200:230].mean()))
+        return got
+
+    unit = {tall: painted(tall) for tall in (4, 10)}
+    for tall, limit in ((4, 2.0), (10, 5.0)):
+        off, least, most, wall, floor = unit[tall][True]
+        if abs(off) > limit:
+            bad.append(f"the rule on a drawn copy: beside a marked place {tall} px tall the paint under the band is {off:+.1f} levels off the floor "
+                       f"(the wide average: {unit[tall][False][0]:+.1f})")
+        if least < 19.0 or most > 121.0:
+            bad.append(f"the rule on a drawn copy (a mark of {tall} px): the paint under the band runs from {least:.0f} to {most:.0f} - "
+                       f"the backdrop is 20..120, the person 250, the marked place 0")
+        if abs(wall - 20.0) > 1.0 or abs(floor - 120.0) > 1.0:
+            bad.append(f"the rule on a drawn copy: beside a plain wall of 20 the paint is {wall:.1f}, beside a plain floor of 120 it is {floor:.1f}")
+        if abs(unit[tall][False][0]) < limit + 4.0:
+            bad.append(f"the drawn copy does not show what the wide average does beside a mark of {tall} px ({unit[tall][False][0]:+.1f})")
+    notes.append(f"beside a marked place 10 px tall in the reduced copy the paint under the band is {unit[10][True][0]:+.1f} levels off the floor "
+                 f"(the wide average: {unit[10][False][0]:+.1f})")
+
+    for kind in ("dark", "shade"):
+        img, sil, g = _hem_frame(kind=kind)
+        clean = gray(_hem_frame(kind=kind, line=False)[0])
+        y, (h, w) = g["y"], img.shape[:2]
+        core = _person_core(cv2.resize(sil, (w, h)))
+        for mode in ("quality", "fast"):
+            tag = f"{kind} beside the skirt, {mode}"
+            res, off_edge, smear = {}, {}, {}
+            for near in (True, False):
+                res[near], fills, _ = run(img, sil, dict(base, speedMode=mode, srcNear=near))
+                if not fills or not fills[0][1][y - 3:y + 4].any():
+                    bad.append(f"{tag}, srcNear {near}: the line was not found in the frame of this check")
+                    break
+                src, marked = fills[0]
+                far, deep = band_of(img, src, marked)
+                # 1. the paint at the edge of the band against the backdrop right beside it
+                tone, known = tone_beside(gray(img), far, marked)
+                d = np.abs(gray(src) - tone)[(deep >= 1) & (deep <= 5) & known]
+                off_edge[near] = (float((d > 6.0).mean()), float(d.max()))
+                # 2. the repair where the line ends at the band, against the frame drawn without the line: what is
+                #    left 4..12 px from the band beyond what is left in the open (the stand-in fill leaves some)
+                diff = gray(res[near]) - clean
+                smear[near] = []
+                for cols in (slice(0, w // 2), slice(w // 2, None)):
+                    part, away = diff[y - 10:y + 11, cols], far[y - 10:y + 11, cols]
+                    smear[near].append(float(part[(away >= 4) & (away < 12)].mean() - part[(away >= 60) & (away < 140)].mean()))
+                if float(np.abs(res[near] - img.astype(np.float32))[core].max()) > 0.0:
+                    bad.append(f"{tag}, srcNear {near}: the person was changed")
+            else:
+                if off_edge[True][0] > 0.02 or off_edge[True][1] > 12.0:
+                    bad.append(f"{tag}: the paint under the band is up to {off_edge[True][1]:.1f} levels off the backdrop beside it, "
+                               f"more than 6 on {100 * off_edge[True][0]:.1f}% of the edge")
+                if off_edge[False][0] < 0.04 or off_edge[False][1] < 18.0:
+                    bad.append(f"{tag}: the frame of this check does not show what the former way does ({off_edge[False]})")
+                # (every end of the line where the former way leaves a smear: the left one only in the dark kind)
+                ends = [i for i in (0, 1) if abs(smear[False][i]) >= 2.5]
+                if not ends:
+                    bad.append(f"{tag}: the former way leaves no smear at the band in the frame of this check ({smear[False]})")
+                for i in ends:
+                    if abs(smear[True][i]) > 0.65 * abs(smear[False][i]) or abs(smear[True][i]) > 4.5:
+                        bad.append(f"{tag}: where the line ends at the band ({('left', 'right')[i]}) the repair is {smear[True][i]:+.2f} levels off "
+                                   f"(the former way: {smear[False][i]:+.2f})")
+                apart = far > 60
+                if float(np.abs(res[True] - res[False])[apart].max()) > 0.0:
+                    bad.append(f"{tag}: away from the person the result differs from the former way by {np.abs(res[True] - res[False])[apart].max():.2f} levels")
+                if mode == "quality" and ends:
+                    i = ends[-1]
+                    notes.append(f"{'a dark wall' if kind == 'dark' else 'a shade'} beside the skirt: the paint under the protected band is within "
+                                 f"{off_edge[True][1]:.0f} levels of the backdrop beside it (the former way: up to {off_edge[False][1]:.0f}, more than 6 on "
+                                 f"{100 * off_edge[False][0]:.0f}% of the edge), a line repaired up to the band leaves {smear[True][i]:+.1f} levels there "
+                                 f"(the former way: {smear[False][i]:+.1f})")
+
+    # A marked place is no backdrop to carry in (a light mark right beside the skirt), and the second pass of the
+    # cleaning paints the person over by the same rule - what that pass marked is no backdrop either.
+    img, sil, g = _hem_frame(kind="dark", marks=True)
+    plain = gray(_hem_frame(kind="dark")[0])
+    for near in (True, False):
+        oc = {}
+        _, fills, paints = run(img, sil, dict(base, spots=75, cleanPasses=2, srcNear=near), out_cache=oc)
+        second = oc.get("heal_mask_pass2")
+        if len(fills) != 2 or second is None or int((second > 0).sum()) < 100:
+            bad.append(f"two passes, srcNear {near}: the test frame gave the second pass nothing to repair ({len(fills)} fills)")
+            continue
+        if [p[1] for p in paints] != [near, near]:
+            bad.append(f"two passes, srcNear {near}: the person was painted over {[p[1] for p in paints]} (near the band or not, pass by pass)")
+            continue
+        if not near:
+            continue
+        src, marked = fills[0]
+        far, deep = band_of(img, src, marked)
+        yy_, xx_ = np.mgrid[0:img.shape[0], 0:img.shape[1]]
+        beside_mark = np.hypot(xx_ - g["spot"][0], yy_ - g["spot"][1]) < 30.0
+        if int((marked & beside_mark).sum()) < 300:
+            bad.append("the light mark beside the skirt was not marked in the frame of this check")
+        tone, known = tone_beside(plain, far, marked & False)
+        lift = float((gray(src) - tone)[(deep >= 1) & (deep <= 5) & known & beside_mark].mean())
+        if abs(lift) > 2.0:
+            bad.append(f"beside a marked light spot the paint under the band is {lift:+.1f} levels off the floor: the spot was taken for backdrop")
+        still = [int((w_bg[cv2.resize(m.astype(np.uint8), (w_bg.shape[1], w_bg.shape[0]), interpolation=cv2.INTER_NEAREST) > 0] > 0).sum())
+                 for (w_bg, _), m in zip(paints, (marked, second > 0))]
+        if still != [0, 0]:
+            bad.append(f"what was marked counted as backdrop for the paint: {still} px of the reduced copy (first pass, second pass)")
+        notes.append(f"beside a marked spot the paint is the floor ({lift:+.1f} levels), in the second pass of the cleaning too")
+
+    # the stage cache keeps the two ways apart, and Apply notices the switch
+    img, sil, g = _hem_frame(kind="dark")
+    cache: dict = {}
+    fg_raw = np.clip(sil * 255.0, 0, 255).astype(np.uint8)
+    eng_c = H.make_engine(E, sil)
+    for step, near in enumerate((True, False, True, True)):
+        a, sa = _quiet(eng_c.process, img, 8, dict(base, srcNear=near), cached_fg_raw_1024=fg_raw, stage_cache=cache)
+        b, _ = _quiet(eng_c.process, img, 8, dict(base, srcNear=near), cached_fg_raw_1024=fg_raw)
+        ready = "heal" in sa.get("reused_stages", [])
+        if not np.array_equal(a, b) or ready != (step == 3):
+            bad.append(f"the stage cache, call {step + 1} (srcNear {near}): same as a fresh computation {np.array_equal(a, b)}, repair taken ready {ready}")
+    sig = E.CleanVinylEngine._clean_signature
+    if sig(dict(base, srcNear=False)) == sig(base) or sig(dict(base, srcNear=True)) != sig(base):
+        bad.append("Apply would not notice a change of 'srcNear' (or takes the default for a change)")
+    report("edge", not bad, "the fill is shown the backdrop that lies beside the person: " + "; ".join(notes)
+           + "; the person is not touched, away from the person nothing changed" if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
 def _hairline_frame(w=1500, h=2000, at=0.77, slope=0.012, depth=2.2, lit=30.0, level=24.0, seed=21, noise=1.1, line=True, off=0.0):

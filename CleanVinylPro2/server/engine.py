@@ -2735,6 +2735,53 @@ class CleanVinylEngine:
     HAIR_STEPS = (0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875)   # the slider positions that are always searched too
     HAIR_SRC_NEAR = 16.0         # px of the 1024 matte: this close to a marked hair the repair is shown the photo itself
 
+    # ------------------------------------------------------------------
+    # What the AI fill is shown in place of the person
+    # ------------------------------------------------------------------
+    # The fill must not see the person: warm skin, a shoe, a flower would bleed into a repair beside them. So in the
+    # picture it is given, the person with the protected band is painted over with backdrop. Up to 4.15.0 that was
+    # one wide average of the backdrop around (HEAL_SRC_WIDE). Where the tone of the backdrop changes near the
+    # person - a dark wall over a lit floor, the shade of a skirt - that average is not the tone of the backdrop
+    # right beside the band, and the band stood in the picture as a flat shape of another tone with a sharp,
+    # stepped edge. Whatever was repaired up to the band took that tone, and the real network drew the shape on
+    # into the repair. The owner's 0Q5A3610 (his results of 4.14.0 and 4.15.0 alike): the line of the paper ends
+    # at the hem of the dress; the band was painted 16 levels darker than the floor beside it there, and where
+    # the line had been a dark stepped smear of 93 x 39 px stayed, up to 23 levels darker than the frame. Under the
+    # same hem the band was painted 23 levels LIGHTER than the shaded floor: that is where his result of 4.14.0
+    # had the light dashes (most likely the same thing with the sign turned; the stand-in fill of the checks
+    # never drew them, so that is not proven).
+    # Since 4.16.0 the backdrop is carried in under the band from what lies right beside it: the wide average is
+    # replaced, step by step, by a narrower one (HEAL_SRC_STEPS) wherever backdrop lies within its reach
+    # (HEAL_SRC_SEEN: with this share of the window being backdrop the step is taken in full, with less in part).
+    # At the edge of the band the paint is the backdrop beside it; deep inside, where no narrow window reaches
+    # any backdrop, it is the wide average as before; in between the one runs into the other without an edge.
+    # Nothing of the person or of a marked place enters at any step (`w_bg`): beside a mark that touches the band
+    # - the very place this is for - little backdrop is left in a window, hence the small share. On that frame the
+    # paint at the edge of the band was more than 6 levels off the backdrop beside it on 15% of the edge; it is on
+    # 0.8% now, nowhere by more than 10 (it was up to 34).
+    # Around a marked hair the hair tool has had a step of its own since 4.9.0 (see process).
+    # (The parameter "srcNear" off, or HEAL_SRC_STEPS empty: the former way.)
+    HEAL_SRC_WIDE = 12.0          # px of the copy 640 px long: the wide average
+    HEAL_SRC_STEPS = (6.0, 2.5)   # ...and the narrower ones that replace it where backdrop lies that near
+    HEAL_SRC_SEEN = 0.12          # of a window is backdrop: that step is taken in full
+
+    def _backdrop_under_person(self, src_s: np.ndarray, w_bg: np.ndarray, near: bool = True) -> np.ndarray:
+        """
+        The backdrop carried in under the person, for the picture the fill is shown (see HEAL_SRC_STEPS).
+        `src_s`: the frame, float32, a reduced copy; `w_bg`: float32, 1.0 where that copy shows backdrop that
+        stays - not the person with the band, not a marked place. near=False: the wide average alone (the way up
+        to 4.15.0). Returns float32, the size of `src_s`; only what lies under the person is used of it.
+        """
+        wide = float(self.HEAL_SRC_WIDE)
+        den_bg = cv2.GaussianBlur(w_bg, (0, 0), sigmaX=wide, sigmaY=wide) + 1e-4
+        fill = cv2.GaussianBlur(src_s * w_bg[:, :, None], (0, 0), sigmaX=wide, sigmaY=wide) / den_bg[:, :, None]
+        for sigma in (self.HEAL_SRC_STEPS if near else ()):
+            den = cv2.GaussianBlur(w_bg, (0, 0), sigmaX=sigma, sigmaY=sigma)
+            beside = cv2.GaussianBlur(src_s * w_bg[:, :, None], (0, 0), sigmaX=sigma, sigmaY=sigma) / (den[:, :, None] + 1e-4)
+            trust = np.clip(den / self.HEAL_SRC_SEEN, 0.0, 1.0)[:, :, None]
+            fill = beside * trust + fill * (1.0 - trust)
+        return fill
+
     def _person_solid(self, tight_1024: np.ndarray, w: int, h: int) -> np.ndarray:
         """The person as the network drew it, with the guard strip of the hair search: bool, the size of the frame."""
         guard = 2 * max(1, int(round(self.HAIR_GUARD * max(h, w) / 1024.0))) + 1
@@ -5339,6 +5386,9 @@ class CleanVinylEngine:
             corner_hair = bool(params.get("cornerHair", True))
             # "bigFill": what is too large for the network gets the wall beside it, continued (see BIG_FILL_THICK)
             big_fill = bool(params.get("bigFill", True))
+            # "srcNear": in the picture the fill is shown, the person is painted over with the backdrop that lies
+            # right beside it (see HEAL_SRC_STEPS). Off = the former way: one wide average of the backdrop around.
+            src_near = bool(params.get("srcNear", True))
             # "strayHair": single hairs that stick out next to the person (_detect_stray_hairs); 0 = not looked for
             hair_eff = float(np.clip(float(params.get("strayHair", 0)), 0.0, 100.0))
 
@@ -5421,7 +5471,7 @@ class CleanVinylEngine:
             k_hair = (k_maps, remove_stands, hair_eff)
             k_tight = (remove_stands,)       # the person without the margin (_tight_person_1024)
             k_tgate = (k_fg, remove_stands)  # the outline of the person for the tone stages (_tone_gate)
-            k_heal = (k_detect, fast_mode, grain_keep, tone_edge, big_fill)
+            k_heal = (k_detect, fast_mode, grain_keep, tone_edge, big_fill, src_near)
             # Order of the tone stages: corner -> stains -> blur. The corner goes first: once the wall-floor step is a
             # smooth slope, the stain stage sees no edge there and evens the backdrop across it.
             k_cyc = (k_heal, cyc_str, cyc_depth)
@@ -5734,12 +5784,10 @@ class CleanVinylEngine:
                         sw_s, sh_s_dim = max(16, int(round(w * s_sc))), max(16, int(round(h * s_sc)))
                         src_s = cv2.resize(img_rgb_u8, (sw_s, sh_s_dim), interpolation=cv2.INTER_AREA).astype(np.float32)
                         # The mark of a single hair begins INSIDE the protected band, at the guard strip of the
-                        # person. The band painted over with a wide average of the backdrop is good enough to keep
-                        # the colours of the person out of a repair that ends before the band, and far too rough
-                        # to repair next to: the tone of that average is not the tone of the wall right behind the
-                        # head. Around a marked hair (HAIR_SRC_NEAR) only the person as the network drew it is
-                        # painted over, and next to the outline with what lies right there. Everywhere else the
-                        # band is painted over as always: the tool changes nothing about the other repairs.
+                        # person. Around a marked hair (HAIR_SRC_NEAR) only the person as the network drew it is
+                        # painted over - not the band -, and next to the outline with what lies right there.
+                        # Everywhere else the person is painted over WITH the band; with what, see
+                        # _backdrop_under_person (since 4.16.0 the backdrop right beside the band there too).
                         solid_full = hair_solid
                         fg_bad_s = cv2.resize(eff_fg_for_spots, (sw_s, sh_s_dim), interpolation=cv2.INTER_AREA) > 22
                         hair_zone = hair_zone_s = None
@@ -5756,8 +5804,7 @@ class CleanVinylEngine:
                         bg_valid = (~fg_bad_s) & (~hm_s)
                         if np.any(bg_valid) and np.any(fg_bad_s):
                             w_bg = bg_valid.astype(np.float32)
-                            den_bg = cv2.GaussianBlur(w_bg, (0, 0), sigmaX=12.0, sigmaY=12.0) + 1e-4
-                            fill_s = cv2.GaussianBlur(src_s * w_bg[:, :, None], (0, 0), sigmaX=12.0, sigmaY=12.0) / den_bg[:, :, None]
+                            fill_s = self._backdrop_under_person(src_s, w_bg, near=src_near)
                             if hair_zone_s is not None:
                                 den_l = cv2.GaussianBlur(w_bg, (0, 0), sigmaX=2.5, sigmaY=2.5)
                                 fill_l = cv2.GaussianBlur(src_s * w_bg[:, :, None], (0, 0), sigmaX=2.5, sigmaY=2.5) / (den_l[:, :, None] + 1e-4)
@@ -6079,8 +6126,12 @@ class CleanVinylEngine:
                         s2_img = cv2.resize(pass2_u8, (sw2, sh2), interpolation=cv2.INTER_AREA).astype(np.float32)
                         fg2_b = cv2.resize(eff_fg_for_spots, (sw2, sh2), interpolation=cv2.INTER_AREA) > 22
                         w2 = (~fg2_b).astype(np.float32)
-                        den2 = cv2.GaussianBlur(w2, (0, 0), sigmaX=12.0, sigmaY=12.0) + 1e-4
-                        f2 = cv2.resize(np.clip(cv2.GaussianBlur(s2_img * w2[:, :, None], (0, 0), sigmaX=12.0, sigmaY=12.0) / den2[:, :, None], 0, 255).astype(np.uint8), (w, h), interpolation=cv2.INTER_LINEAR)
+                        if src_near:
+                            # (what this pass marked is no backdrop to carry in under the person either: with
+                            # the wide average a speck was lost in it, right beside the band it is not)
+                            w2[cv2.resize(spot2_mask, (sw2, sh2), interpolation=cv2.INTER_NEAREST) > 0] = 0.0
+                        f2 = cv2.resize(np.clip(self._backdrop_under_person(s2_img, w2, near=src_near), 0, 255).astype(np.uint8),
+                                        (w, h), interpolation=cv2.INTER_LINEAR)
                         fg2_m = eff_fg_for_spots > 22
                         p2_src[fg2_m] = f2[fg2_m]
                     lama2_f32, _, _ = self._run_fast_inpaint(p2_src, spot2_mask, progress_cb=None)
@@ -7370,7 +7421,7 @@ class CleanVinylEngine:
             bool(p.get("seamJoin", True)), bool(p.get("grainLocal", True)),
             bool(p.get("gearBody", True)), bool(p.get("shadowSpots", True)),
             bool(p.get("toneEdge", True)), bool(p.get("cornerHair", True)),
-            bool(p.get("bigFill", True)),
+            bool(p.get("bigFill", True)), bool(p.get("srcNear", True)),
             float(np.clip(fl("strayHair", 0), 0.0, 100.0)),
             bool(p.get("shadow", True)), bool(p.get("removeStands", False)),
             max(100.0, fl("master", 100)),

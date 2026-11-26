@@ -6,7 +6,7 @@ const uxpShell = uxp.shell;
 const CANDIDATE_URLS = ["http://127.0.0.1:18746", "http://localhost:18746"];
 // The same number as in manifest.json and server.py. A server of another version still answers (for example the
 // previous one that was left running after an update) - the panel then says how to restart it.
-const PLUGIN_VERSION = "4.15.0";
+const PLUGIN_VERSION = "4.16.0";
 let SERVER_URL = CANDIDATE_URLS[0];
 
 const DEFAULT_PRESETS = [
@@ -1898,7 +1898,7 @@ function setView(view) {
 
 // A new result that the user asked for has come: the first scan, a tick, a slider, a preset, "↻ Перерахувати".
 // On "До" nothing of it can be seen, so the window goes to the cleaned photo by itself (the owner, 2026-11-26:
-// "when the bar reaches its end, show the photo after - now it is before, inconvenient"). "Маска" stays: the new
+// «коли полоска доходе показує фото після бо зари до не зручно»). "Маска" stays: the new
 // zones are seen on it. Not called for what comes by itself (the exact version of a quick preview), for a run
 // that was cancelled, failed or gave way, nor for a mask edit (a stroke leaves "До" when it begins).
 function showNewResult() {

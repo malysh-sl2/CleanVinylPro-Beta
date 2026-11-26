@@ -3487,7 +3487,8 @@ async function main() {
     });
 
   // ---------------------------------------------------------------- a new result leaves "До" (4.16.0)
-  // The owner, 2026-11-26: "when the bar reaches its end, show the photo after - now it is before, inconvenient".
+  // The owner, 2026-11-26: «ще коли полоска доходе показує фото після бо зари до не зручно» - when the bar reaches
+  // its end, show the photo "after"; now "before" stays on screen, which is inconvenient.
   const beforeLit = (env) => env.el("dlgBtnBeforeAfter").classList.contains("active");
   const barGone = (env) => env.waitFor(() => !env.progressCardVisible() && env.state("sessState.recomputing") === false, 4000);
 
@@ -3498,6 +3499,8 @@ async function main() {
       const full = () => env.recomputes().filter((r) => r.body.quick === undefined);
       env.click("dlgBtnBeforeAfter");
       expect(env.view() === "original" && beforeLit(env), "'До / Після' shows the original, got " + env.view());
+      expect((env.el("dlgBtnBeforeAfter").getAttribute("data-tip") || "").includes("само повертається до чистого фото"),
+        "the hint of 'До / Після' says that a new result brings the cleaned photo back by itself");
       env.check("dlgChkSmoke", true);                          // a tick: the exact frame, with the bar
       await sleep(150);
       expect(env.progressCardVisible() && full().length === 1, "the tick asks for the exact frame, with the bar");
