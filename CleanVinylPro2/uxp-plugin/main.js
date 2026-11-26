@@ -1889,10 +1889,20 @@ function clampBounds(b, maxW, maxH) {
 // One of three views at any moment: "До / Після" switches original <-> cleaned photo (never the red/green one),
 // "Маска" switches mask <-> cleaned photo. The window never switches to the mask by itself: the brush and the
 // eraser are used on whatever is on screen - on the cleaned photo their result is seen at once (since 4.8.0; up
-// to 4.7.0 every stroke switched the mask on, and the result stayed hidden under the green).
+// to 4.7.0 every stroke switched the mask on, and the result stayed hidden under the green). It never switches
+// to the original by itself either, and leaves it by itself when a new result comes (showNewResult, 4.16.0).
 function setView(view) {
   sessState.view = view === "original" || view === "mask" ? view : "result";
   updateStageVisibility();
+}
+
+// A new result that the user asked for has come: the first scan, a tick, a slider, a preset, "↻ Перерахувати".
+// On "До" nothing of it can be seen, so the window goes to the cleaned photo by itself (the owner, 2026-11-26:
+// "when the bar reaches its end, show the photo after - now it is before, inconvenient"). "Маска" stays: the new
+// zones are seen on it. Not called for what comes by itself (the exact version of a quick preview), for a run
+// that was cancelled, failed or gave way, nor for a mask edit (a stroke leaves "До" when it begins).
+function showNewResult() {
+  if (sessState.view === "original") setView("result");
 }
 
 function updateStageVisibility() {
@@ -2447,7 +2457,7 @@ async function sendDressPreviewUpdate() {
     });
     if (r.ok) {
       const d = await r.json();
-      takeSessionPictures(d);
+      if (takeSessionPictures(d)) showNewResult();
     }
   } catch (_) {}
 }
@@ -2681,6 +2691,9 @@ async function runExactPreview() {
   } else {
     if (typeof d.exact !== "boolean") sessState.bgUnsupported = true;  // an older server: it made everything wait
     takeRecomputeAnswer(d, sigAtSend, params, refine);
+    // (new values and no light way - 2 passes: this is the picture the change asked for. The exact version of
+    //  a picture that is on screen already came by itself: whoever looks at "До" meanwhile goes on looking)
+    if (!refine) showNewResult();
     done = true;
   }
   updateStageVisibility();
@@ -2972,6 +2985,7 @@ async function recomputeInteractiveSession(preserveEdits = true, quick = false) 
       if (!quick && d.stats) sayInWindow(recomputeSummary(d.stats));
       takeRecomputeAnswer(d, sigAtSend, params, false);
       done = true;
+      showNewResult();  // the bar reached its end (or the light refresh is back): "До" gives way to the result
       updateStageVisibility();
     }
   } catch (err) {
@@ -3253,6 +3267,7 @@ async function openInteractiveWorkspace() {
       if (el("dlgOverlayImg")) el("dlgOverlayImg").src = "data:image/jpeg;base64," + (res.overlay_jpg_b64 || res.comp_jpg_b64);
 
       resetZoomFit();
+      showNewResult();  // ("До / Після" pressed while the first bar was running: the bar ends on the result too)
       updateStageVisibility();
       setBtnDisabled(el("dlgBtnApply"), false);
       keepKeysInWindow();

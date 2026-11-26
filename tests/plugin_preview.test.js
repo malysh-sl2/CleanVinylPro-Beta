@@ -32,7 +32,11 @@
 //   - the brush and the eraser are used on the cleaned photo: the mask never switches on by itself;
 //   - Ctrl + "+" / Ctrl + "-" / Ctrl + 0 zoom as in Photoshop; the right mouse button drags the photo;
 //   - the name without the 2 (4.8.0): what Photoshop is told - the window, the history step, the layer; layers
-//     made by an older version are still found by the "До / Після" button of the panel.
+//     made by an older version are still found by the "До / Після" button of the panel;
+//   - a new result leaves "До" (4.16.0): when the bar of a recompute reaches its end - or the light refresh of a
+//     slider or a preset is back, or the clothing tick is answered - a window that shows the original goes to the
+//     cleaned photo by itself; "Маска" stays; a run that was cancelled, failed or gave way switches nothing, nor
+//     does the exact picture that comes by itself.
 //
 //   node tests/plugin_preview.test.js
 //   node tests/plugin_preview.test.js "preset click" remembered     (only the scenarios whose name has one of the texts)
@@ -3482,6 +3486,238 @@ async function main() {
       expect(a.length === 1 && a[0].body.params.cycDepth === 35 && a[0].body.params.cycCurve === 50, "Apply carries depth: " + (a[0] && a[0].body.params.cycDepth));
     });
 
+  // ---------------------------------------------------------------- a new result leaves "До" (4.16.0)
+  // The owner, 2026-11-26: "when the bar reaches its end, show the photo after - now it is before, inconvenient".
+  const beforeLit = (env) => env.el("dlgBtnBeforeAfter").classList.contains("active");
+  const barGone = (env) => env.waitFor(() => !env.progressCardVisible() && env.state("sessState.recomputing") === false, 4000);
+
+  await scenario("a new result leaves 'До': a tick or '↻ Перерахувати' pressed while the original is shown - the bar ends on the cleaned photo; 'Маска' stays", { recomputeDelay: 400, detail: false },
+    async (env, expect) => {
+      env.check("dlgChkAutoPreset", false);
+      await env.open();
+      const full = () => env.recomputes().filter((r) => r.body.quick === undefined);
+      env.click("dlgBtnBeforeAfter");
+      expect(env.view() === "original" && beforeLit(env), "'До / Після' shows the original, got " + env.view());
+      env.check("dlgChkSmoke", true);                          // a tick: the exact frame, with the bar
+      await sleep(150);
+      expect(env.progressCardVisible() && full().length === 1, "the tick asks for the exact frame, with the bar");
+      expect(env.view() === "original" && beforeLit(env) && env.modeBadge() === "ДО · оригінал", "while the bar is running nothing new is there to show: 'До' stays, got " + env.view());
+      await barGone(env);
+      expect(env.view() === "result", "the bar reached its end: the cleaned photo must be on screen, got " + env.view());
+      expect(!beforeLit(env) && env.modeBadge() === "ПІСЛЯ · чисте фото", `...the button is not lit, the corner label says so: '${env.modeBadge()}'`);
+      expect(env.pictureName() === full()[0].picture, "...and it is the picture of that run: " + env.pictureName());
+
+      env.click("dlgBtnBeforeAfter");                          // the button of the bottom bar
+      env.click("dlgBtnRecompute");
+      await sleep(150);
+      expect(env.view() === "original" && env.progressCardVisible(), "'↻ Перерахувати' on 'До': the bar runs over the original");
+      await barGone(env);
+      expect(env.view() === "result" && full().length === 2 && env.pictureName() === full()[1].picture, "'↻ Перерахувати': the bar ends on the cleaned photo, got " + env.view());
+
+      env.click("dlgBtnRecompute");                            // "До / Після" pressed WHILE the bar is running
+      await sleep(150);
+      env.click("dlgBtnBeforeAfter");
+      expect(env.view() === "original" && env.progressCardVisible(), "the button works while the bar is running");
+      await barGone(env);
+      expect(env.view() === "result" && !beforeLit(env), "...and the bar still ends on the cleaned photo, got " + env.view());
+
+      env.click("dlgBtnBeforeAfter");                          // the button of the settings
+      env.click("dlgBtnGear");
+      env.click("gBtnRecompute");
+      await sleep(100);
+      await barGone(env);
+      expect(env.view() === "result" && full().length === 4, "'↻ Перерахувати зараз' of the settings: the same, got " + env.view());
+
+      env.click("dlgBtnMask");                                 // the mask shows the new zones: it stays
+      env.check("dlgChkSmoke", false);
+      await sleep(150);
+      expect(env.view() === "mask" && env.progressCardVisible(), "the mask is on, the bar is running");
+      await barGone(env);
+      expect(env.view() === "mask" && env.el("dlgBtnMask").classList.contains("active") && env.modeBadge().includes("МАСКА"), "'Маска' must stay after the bar, got " + env.view());
+      expect(env.pictureName() === full()[4].picture, "(the new picture is under it: " + env.pictureName() + ")");
+      env.click("dlgBtnMask");
+      expect(env.view() === "result", "'Маска' again: the cleaned photo");
+      env.click("dlgBtnRecompute");                            // on the cleaned photo there is nothing to switch
+      await sleep(100);
+      await barGone(env);
+      expect(env.view() === "result" && full().length === 6 && env.recomputes().length === 6, `six runs with the bar, nothing else was asked: ${full().length} / ${env.recomputes().length}`);
+    });
+
+  await scenario("a new result leaves 'До': not when the run was cancelled, failed or gave way - then nothing new is there", { recomputeDelay: 600, detail: false },
+    async (env, expect) => {
+      env.check("dlgChkAutoPreset", false);
+      await env.open();
+      env.click("dlgBtnBeforeAfter");
+      env.click("dlgBtnRecompute");
+      await sleep(200);
+      env.click("dlgBtnCancelScan");                           // "Скасувати" on the progress card
+      await env.settle(900);
+      expect(!env.progressCardVisible() && env.state("sessState.recomputing") === false, "the run was stopped");
+      expect(env.view() === "original" && beforeLit(env), "a cancelled run brought nothing: 'До' must stay, got " + env.view());
+      expect(env.pictureName() === "start-1", "(the first picture is still the one behind it: " + env.pictureName() + ")");
+
+      env.server.failRecompute = 1;                            // the server answers with an error
+      env.click("dlgBtnRecompute");
+      await sleep(100);
+      await barGone(env);
+      expect(env.hint().includes("Помилка перерахунку"), "the error is said: " + env.hint());
+      expect(env.view() === "original" && beforeLit(env), "a failed run brought nothing: 'До' must stay, got " + env.view());
+
+      env.server.failRecompute = 1;                            // a light refresh that fails
+      await env.drag("gSlSpots", 95);
+      await env.settle(1500);
+      expect(env.recomputes().length === 3 && env.recomputes()[2].body.quick === true && env.recomputes()[2].done, "the slider asked for its light refresh");
+      expect(env.view() === "original", "a failed light refresh: 'До' must stay, got " + env.view());
+
+      env.click("dlgBtnRecompute");                            // a run that gives way to a newer one
+      await sleep(200);
+      env.check("dlgChkSmoke", true);                          // ...the tick starts the run over
+      await sleep(250);
+      const rc = env.recomputes();
+      expect(rc.length === 5 && rc[3].done && rc[3].outcome === "superseded" && !rc[4].done, "the older run gave way, the newer one is on its way: " + rc.map((r) => r.outcome).join(", "));
+      expect(env.view() === "original" && env.progressCardVisible(), "the run that gave way shows nothing: the bar is still running, 'До' stays; got " + env.view());
+      await barGone(env);
+      expect(env.view() === "result" && env.pictureName() === rc[4].picture, `the newer run ends on the cleaned photo, with its picture: ${env.view()} / ${env.pictureName()}`);
+    });
+
+  await scenario("a new result leaves 'До': a server before 4.12.0 - the picture of the older run is dropped, the view waits for the newer one", { recomputeDelay: 700, newestWins: false, detail: false },
+    async (env, expect) => {
+      env.check("dlgChkAutoPreset", false);
+      await env.open();
+      env.click("dlgBtnBeforeAfter");
+      env.click("dlgBtnRecompute");
+      await sleep(300);
+      env.click("dlgFracFine");
+      await sleep(650);                                        // the first run has answered in full by now
+      const rc = env.recomputes();
+      expect(rc.length === 2 && rc[0].done && rc[0].outcome === "done" && !rc[1].done, "the old server finished the first run and is on the second");
+      expect(env.view() === "original" && env.progressCardVisible(), "the answer of the older run is dropped: the bar is still running and 'До' stays, got " + env.view());
+      await barGone(env);
+      expect(env.view() === "result" && env.pictureName() === rc[1].picture, `the second run ends on the cleaned photo: ${env.view()} / ${env.pictureName()}`);
+    });
+
+  await scenario("a new result leaves 'До': a slider, a preset, a fraction button and the clothing tick - when their picture comes; Blend and a mask step bring none", { detail: false },
+    async (env, expect) => {
+      env.check("dlgChkAutoPreset", false);
+      await env.open();
+      env.click("dlgBtnGear");
+      env.click("dlgBtnPresets");
+      env.click("dlgBtnBeforeAfter");
+      await env.drag("gSlSpots", 90);
+      await sleep(250);
+      expect(env.recomputes().length === 0 && env.view() === "original", "the refresh has not been asked for yet: 'До' stays, got " + env.view());
+      await lightDone(env, 1);
+      await sleep(30);
+      expect(env.view() === "result" && !beforeLit(env), "the light refresh of a slider is back: the cleaned photo, got " + env.view());
+      expect(env.pictureName() === env.recomputes()[0].picture && env.modeBadge() === "ПІСЛЯ · швидкий перегляд", `...its picture, named as a quick one: ${env.pictureName()} / '${env.modeBadge()}'`);
+
+      env.click("dlgBtnBeforeAfter");
+      env.clickPreset("Дальній план");
+      await lightDone(env, 2);
+      await sleep(30);
+      expect(env.view() === "result" && env.pictureName() === env.recomputes()[1].picture, "a preset click on 'До': the cleaned photo when its refresh is back, got " + env.view());
+
+      env.click("dlgBtnBeforeAfter");
+      env.click("dlgFracFine");
+      await lightDone(env, 3);
+      await sleep(30);
+      expect(env.view() === "result" && env.pictureName() === env.recomputes()[2].picture, "a fraction button on 'До': the same, got " + env.view());
+
+      env.click("dlgBtnBeforeAfter");                          // the clothing tick: no recompute, a picture of its own
+      env.check("dlgChkDress", !env.el("dlgChkDress").checked);
+      await env.waitFor(() => env.pictureName().startsWith("dress-"), 1500);
+      await sleep(30);
+      expect(env.of("/session/dress-preview").length === 1 && env.pictureName().startsWith("dress-"), "the clothing tick brought its picture: " + env.pictureName());
+      expect(env.view() === "result" && !beforeLit(env), "the clothing tick on 'До': the cleaned photo, got " + env.view());
+
+      // what brings no new result leaves "До" alone
+      env.click("dlgBtnBeforeAfter");
+      env.press("dlgSlBlend", 200);                            // Blend only mixes the two pictures
+      env.move(120);
+      expect(env.view() === "original", "Blend held on 'До': the original stays, got " + env.view());
+      env.release();
+      await env.settle(700);
+      expect(env.view() === "original" && env.recomputes().length === 3, "Blend asks for nothing and switches nothing, got " + env.view());
+      const spots = env.state('getSliderVal("gSlSpots")');     // a slider moved and put back: nothing to ask for
+      await env.drag("gSlSpots", spots - 5);
+      await sleep(100);
+      await env.drag("gSlSpots", spots);
+      await env.settle(900);
+      expect(env.view() === "original" && env.recomputes().length === 3, `a slider put back to its value asks for nothing: 'До' stays (${env.view()}, ${env.recomputes().length} refreshes)`);
+      env.click("dlgToolInvert");                              // a step on the whole mask says in words what it did
+      await env.waitFor(() => env.picture() === "edit-1", 1500);
+      await sleep(30);
+      expect(env.view() === "original" && env.hint().includes("інвертовано"), "an inversion on 'До' is said in words, the view stays; got " + env.view());
+      env.key("KeyZ", "z", { ctrlKey: true });                 // ...and so does the step back
+      await env.waitFor(() => env.picture() === "edit-2", 1500);
+      await sleep(30);
+      expect(env.view() === "original" && env.hint().includes("скасовано"), "Ctrl + Z on 'До': the same, got " + env.view());
+
+      env.click("dlgBtnBeforeAfter");                          // with the mask on, a slider leaves the mask on
+      env.click("dlgBtnMask");
+      await env.drag("gSlSpots", spots - 10);
+      await lightDone(env, 4);
+      await sleep(30);
+      expect(env.recomputes().length === 4 && env.pictureName() === env.recomputes()[3].picture, "(the slider brought its picture: " + env.pictureName() + ")");
+      expect(env.view() === "mask" && env.el("dlgBtnMask").classList.contains("active"), "a slider with the mask on: the mask stays, got " + env.view());
+    });
+
+  await scenario("a new result leaves 'До': the exact picture that comes by itself does not; with 2 passes the background picture of a change does", { bgDelay: 500 },
+    async (env, expect) => {
+      env.check("dlgChkAutoPreset", false);
+      await env.open();
+      env.click("dlgBtnGear");
+      await env.drag("gSlSpots", 90);
+      await lightDone(env, 1);
+      await sleep(30);
+      expect(env.view() === "result" && env.pictureName().startsWith("light-"), "the quick picture of the slider is on screen: " + env.pictureName());
+      env.click("dlgBtnBeforeAfter");                          // a look at the original while the exact picture is on its way
+      await exactDone(env, 1);
+      await sleep(60);
+      expect(env.exacts()[0].outcome === "done" && env.pictureName().startsWith("exact-"), "the exact picture came by itself: " + env.pictureName());
+      expect(env.view() === "original" && beforeLit(env), "...nobody asked for it just now: whoever looks at 'До' goes on looking; got " + env.view());
+      env.click("dlgBtnBeforeAfter");
+      expect(env.view() === "result" && env.modeBadge() === "ПІСЛЯ · чисте фото", "'До / Після' shows it: " + env.modeBadge());
+
+      env.click("dlgBtnBeforeAfter");                          // 2 passes: no light way, the picture of a change comes
+      env.click("gPass2");                                     // in the background - and it IS what was asked for
+      await exactDone(env, 2);
+      await sleep(60);
+      expect(env.exacts()[1].outcome === "done" && env.recomputes().length === 1, "2 passes: one background recompute, no light one");
+      expect(env.view() === "result" && !beforeLit(env) && env.pictureName() === env.exacts()[1].picture, `the picture of the change is shown: ${env.view()} / ${env.pictureName()}`);
+      env.click("dlgBtnBeforeAfter");
+      await env.drag("gSlSpots", 95);                          // a slider with 2 passes: the same
+      await exactDone(env, 3);
+      await sleep(60);
+      expect(env.view() === "result" && env.pictureName() === env.exacts()[2].picture, "a slider with 2 passes on 'До': the cleaned photo when its picture comes, got " + env.view());
+      env.click("dlgBtnMask");
+      await env.drag("gSlSpots", 85);
+      await exactDone(env, 4);
+      await sleep(60);
+      expect(env.view() === "mask" && env.pictureName() === env.exacts()[3].picture, "...and with the mask on the mask stays, got " + env.view());
+    });
+
+  await scenario("a new result leaves 'До': 'До / Після' pressed while the first bar is running - the window still opens on the cleaned photo; 'Маска' pressed there stays", { startDelay: 500, detail: false },
+    async (env, expect) => {
+      env.click("btnRun");
+      await sleep(150);
+      expect(env.state("sessState.open") === true && !env.state("sessState.id"), "the first scan is running");
+      env.click("dlgBtnBeforeAfter");
+      expect(env.state("sessState.view") === "original", "(the button is taken while the scan runs)");
+      await env.waitFor(() => !!env.state("sessState.id"), 3000);
+      await sleep(60);
+      expect(env.view() === "result" && !beforeLit(env) && env.modeBadge() === "ПІСЛЯ · чисте фото", `the first bar ends on the cleaned photo: ${env.view()} / '${env.modeBadge()}'`);
+      env.click("dlgBtnCancel");
+      await env.waitFor(() => env.state("isBusy") === false, 3000);
+      await sleep(100);
+      env.click("btnRun");                                     // the next photo: "Маска" pressed during its scan
+      await sleep(150);
+      env.click("dlgBtnMask");
+      await env.waitFor(() => env.of("/session/start").length === 2 && !!env.state("sessState.id"), 3000);
+      await sleep(60);
+      expect(env.view() === "mask" && env.modeBadge().includes("МАСКА"), "the mask that was asked for during the scan is shown, got " + env.view());
+    });
+
   const failed = results.filter((r) => r.problems.length);
   if (!results.length) {
     console.log("plugin preview: no scenario has that text in its name");
@@ -3489,7 +3725,7 @@ async function main() {
   }
   console.log(failed.length
     ? `plugin preview: ${failed.length} of ${results.length} scenarios FAILED`
-    : `plugin preview: ${results.length} scenarios pass (the fast window; drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes, steps back and forward, preset reset, backup, one mode, soft and hard brush edge, the exact picture by itself, strokes on the cleaned photo, zoom keys, right-button drag, the hair slider, the keyboard of the window, depth)`);
+    : `plugin preview: ${results.length} scenarios pass (the fast window; drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes, steps back and forward, preset reset, backup, one mode, soft and hard brush edge, the exact picture by itself, strokes on the cleaned photo, zoom keys, right-button drag, the hair slider, the keyboard of the window, depth, a new result leaves 'До')`);
   process.exit(failed.length ? 1 : 0);
 }
 
