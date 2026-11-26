@@ -252,6 +252,37 @@ written here and in the repository.
   went on from the pushed commits and the saved working tree (section 4), and 4.15.0 was released
   (reply #23).
 
+- **2026-11-26, on 4.15.0** (two messages; he stopped the first reply and added the second. Written down
+  before any work on them). His words, all of them:
+  «][ працюють.на цім фото добвив глибину 10. цей кадер десь має 5 метрів тоже.мікс стоїть зари  цій
+  фото. ще коли полоска доходе показує фото після бо зари до не зручно» and then «доречі обновив фотошоп
+  до 28.0». (The first two characters arrived as `\]\[`: the chat escapes brackets.)
+  One file came with them: `0Q5A3610 копия.jpg` - HIS RESULT OF 4.15.0 on the frame of 2026-11-25
+  (3840 x 5760, saved by Photoshop 28.0 on 2026-11-26 at 12:42:51 his time; nothing is drawn on it).
+  Read as - they are his answers to the three questions of reply #23 and one new wish:
+  (1) `[` and `]` work (he does not say "every time", but this is the second report without a
+  complaint);
+  (2) on this photo he added «Глибина» 10 (the preset «Темний дальній план» has it at 0), and this frame
+  too was shot about five metres from the wall - the frame he meant in the evening of 2026-11-24 is
+  still not named;
+  (3) «Мікс» is ticked on this photo now (what it was when he applied `0Q5A3534` he does not say);
+  (4) THE WISH: when the progress bar has run to its end the window should show the photo «після»; now
+  it shows «до», and that is inconvenient. The window never goes to «ДО» by itself: he presses
+  «До / Після» to compare, then ticks something or presses «Перерахувати», and the view stays where it
+  was. That reading is the agent's; he gave no more words;
+  (5) Photoshop was updated to 28.0. By the EXIF of his files every JPEG he sent since 2026-11-19 was
+  already saved by "Adobe Photoshop 28.0 (Windows)" (27.2 to 27.6 before that, in the spring).
+  He did not write «зливай» and said nothing about the result itself.
+  What the result shows, measured against the frame and against his result of 4.14.0 (grey 0..255):
+  - the left strip is even: 12.7-14.0 from the border to the wall where 4.14.0 left 21-46 (the lit side
+    of the softbox and the glow); the softbox, the triangle, the chair and the stand are gone, the dark
+    line of the base too;
+  - the parquet is gone: 89.9 where the frame has 71.5 (the paper beside it 86-89);
+  - THE DASHES UNDER THE HEM ARE GONE (x 815-1600, y 5515-5545: frame 42.1, 4.14.0 49.7, now 43.0) - with
+    his real silhouette, which could not be tried here;
+  - the mixer brush is in it: the grain of the wall is 0.31-0.38 of the frame's, as in his result of
+    4.14.0; 50.7 % of the pixels are exactly the frame (51.6 % then).
+
 ## 2. What is in the repository
 
 | Path | What it is | Rule |
