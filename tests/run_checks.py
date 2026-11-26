@@ -107,6 +107,10 @@ Part 2 - what this program does differently from v3.2.1, each with its own measu
   bigfill   what is too large for the network (since 4.14.0): a black curtain at the border is marked whole and
             its place gets the wall beside it, continued - tone, a shadow that ran into it, grain - where a
             network that paints too light is no longer asked; what is thin stays the network's
+  border    what stands at the border goes whole (since 4.15.0): the lit side of a softbox between its black
+            body and the border, black on a dark wall, the parquet beyond the sheet - not a pool of warm light,
+            not a bench the person leans on, not the wall behind a free pole; the wall is continued from
+            backdrop only; a strip along the person is the person's, a stain and a crumb beside it are not
 
 Part 3 - the program around the engine:
   server    settings migration, binary packets, one version everywhere; the name a person reads has no 2 (since
@@ -4583,7 +4587,7 @@ def check_stands():
 
 
 # The rules of 4.15.0 for what stands at the border, switched off (constants of the engine): the former way.
-_BORDER_OFF = dict(GEAR_BLACK_DEEP=-1.0, GEAR_BLACK_PURE=-1.0, GEAR_HULL_MAX=0.0, GEAR_FLOOR_MAX=0.0)
+_BORDER_OFF = dict(GEAR_BLACK_DEEP=-1.0, GEAR_BLACK_PURE=-1.0, GEAR_HULL_MAX=0.0, GEAR_FLOOR_MAX=0.0, GEAR_LIGHT_OVER=0.0)
 
 
 def _curtain_frame(w=1500, h=2000):
@@ -4820,6 +4824,9 @@ def _border_frame(w=1500, h=2000):
                the sheet beside it);
       pool     a pool of warm light at the right border: the same colour, but it fades;
       bench    a wooden bench the person leans on: it reaches the right border AND the person;
+      flag     a black flag at the right border, with a light
+      panel    right beside it, on the side of the frame - not between the flag and the border: light gear that
+               hangs together with a taken thing;
       pole     a thin dark pole that stands free, 6% of the width from the right border (`behind`: the wall
                between it and the border);
       strap    a dark strip along the outer side of a leg of the person, half under the protected band;
@@ -4855,11 +4862,14 @@ def _border_frame(w=1500, h=2000):
         leg=hard(line((0.03, 0.60), (0.14, 0.685), 10)),
         parquet=hard(poly([(0.0, 0.76), (0.11, 0.76), (0.11, 0.90), (0.0, 0.97)])),
         bench=hard(poly([(0.545, 0.685), (1.0, 0.685), (1.0, 0.72), (0.545, 0.72)])),
-        pole=hard(line((0.93, 0.10), (0.93, 0.58), 10)),
+        flag=hard(poly([(0.89, 0.10), (1.0, 0.10), (1.0, 0.44), (0.89, 0.44)])),
+        panel=hard(poly([(0.85, 0.14), (0.89, 0.14), (0.89, 0.40), (0.85, 0.40)])),
+        pole=hard(line((0.93, 0.50), (0.93, 0.60), 10)),
     )
-    # the lit side of the softbox, then the black things over it
-    f = f * (1.0 - maps["face"])[..., None] + np.float32([66.0, 64.0, 62.0]) * maps["face"][..., None]
-    for name in ("body", "base", "leg", "pole"):
+    # the lit side of the softbox and the light panel, then the black things over them
+    for name in ("face", "panel"):
+        f = f * (1.0 - maps[name])[..., None] + np.float32([66.0, 64.0, 62.0]) * maps[name][..., None]
+    for name in ("body", "base", "leg", "flag", "pole"):
         f *= (1.0 - 0.97 * maps[name])[..., None]
     # wood: the parquet (planks) and the bench
     planks = 1.0 - 0.22 * (np.mod(xx * 0.6 + yy, 26.0) < 2.0)
@@ -4885,7 +4895,8 @@ def _border_frame(w=1500, h=2000):
     parts = {k: v > 0.5 for k, v in maps.items()}
     parts.update(person=person, strap=(strap > 0.5) & ~person & (xx > x_leg_r + 8), stain=stain > 0.5, crumb=crumb > 0.5, pool=glow > 0.5)
     parts["far"] = parts["base"] & (xx > 0.118 * w)
-    parts["behind"] = (xx > 0.95 * w) & (yy > 0.12 * h) & (yy < 0.56 * h)
+    parts["behind"] = (xx > 0.95 * w) & (yy > 0.51 * h) & (yy < 0.59 * h)
+    parts["edge"] = (np.abs(yy - 0.76 * h) <= 8) & (xx > 0.01 * w) & (xx < 0.10 * w)   # the upper edge of the parquet
     parts["paper"] = (xx > 0.16 * w) & (xx < 0.22 * w) & (yy > 0.82 * h) & (yy < 0.90 * h)
     parts["wood"] = parts["parquet"] & (yy > 0.82 * h) & (yy < 0.90 * h) & (xx < 0.09 * w)
     ys = int(0.80 * h)
@@ -4910,7 +4921,7 @@ def check_border():
     gray = lambda im: im.astype(np.float32).mean(axis=2)  # noqa: E731
     warm = lambda im: im[..., 0].astype(np.float32) - im[..., 2].astype(np.float32)  # noqa: E731
     said = lambda d: ", ".join(f"{k} {v * 100:.0f}%" for k, v in d.items())  # noqa: E731
-    names = ("body", "face", "base", "far", "leg", "parquet", "pool", "bench", "pole", "behind")
+    names = ("body", "face", "base", "far", "leg", "parquet", "flag", "panel", "pool", "bench", "pole", "behind")
 
     # ---- what is marked for removal ----
     def marked(**consts):
@@ -4928,11 +4939,12 @@ def check_border():
         return got
 
     was, now = marked(**_BORDER_OFF), marked()
-    if was["face"] > 0.6 or was["far"] > 0.6 or was["parquet"] > 0.05:
+    if was["face"] > 0.6 or was["far"] > 0.6 or was["parquet"] > 0.05 or was["panel"] > 0.05:
         bad.append("the frame of this check must be one where the former way leaves the lit side of the softbox, the far edge of its "
-                   f"base and the parquet: {said(was)}")
-    if min(now[k] for k in ("body", "face", "base", "far", "leg", "parquet", "pole")) < 0.97:
-        bad.append(f"the softbox with its lit side, its base to the far edge, the leg, the pole and the parquet must be marked for removal: {said(now)}")
+                   f"base, the parquet and the light panel beside the flag: {said(was)}")
+    if min(now[k] for k in ("body", "face", "base", "far", "leg", "parquet", "flag", "panel", "pole")) < 0.97:
+        bad.append("the softbox with its lit side, its base to the far edge, the leg, the flag with the light panel beside it, the pole "
+                   f"and the parquet must be marked for removal: {said(now)}")
     if max(now[k] for k in ("pool", "bench", "behind")) > 0.02:
         bad.append("a pool of warm light, a wooden bench the person leans on and the wall behind a pole that stands free must not be "
                    f"marked: {said(now)}")
@@ -4940,6 +4952,10 @@ def check_border():
         bad.append(f"what is taken away is not gear that stays: {now['kept'] * 100:.0f}% of the lit side and the parquet are still protected as gear")
     # each rule by itself
     no_hull, no_black, no_floor = marked(GEAR_HULL_MAX=0.0), marked(GEAR_BLACK_DEEP=-1.0, GEAR_BLACK_PURE=-1.0), marked(GEAR_FLOOR_MAX=0.0)
+    no_light = marked(GEAR_LIGHT_OVER=0.0)
+    if not (0.05 < no_light["panel"] < 0.9):
+        bad.append("the light panel beside the flag must be what the rule for light gear takes whole (GEAR_LIGHT_OVER) - without that rule "
+                   f"a part of it goes with the flag, a part stays: {no_light['panel'] * 100:.0f}% of it is marked")
     if no_hull["face"] > 0.6:
         bad.append(f"the lit side must be what the rule 'to the border' takes (GEAR_HULL_MAX): without it {no_hull['face'] * 100:.0f}% of it is marked")
     if no_black["far"] > 0.6:
@@ -4959,6 +4975,19 @@ def check_border():
     hull = eng0._whole_to_border(take)
     if not hull[20:120, :60].all():
         bad.append("to the border: every row of a thing that reaches the border somewhere must be taken from the border to its far side")
+    if not hull[30:110, 60:60 + rim].all():
+        bad.append(f"to the border: ...and GEAR_HULL_RIM further ({rim} px)")
+    stays = np.zeros((200, 600), bool)
+    stays[20:120, 63:70] = True          # gear that stays, three pixels beyond the thing
+    held = eng0._whole_to_border(take, gear=stays)
+    if held[30:110, 63:].any() or not held[30:110, 60:63].all():
+        bad.append("to the border: the rim goes up to gear that stays and not into it")
+    two = np.zeros((200, 600), bool)
+    two[20:40, 0:30] = two[44:60, 0:30] = True         # two things 2% of the height apart...
+    two[110:130, 0:30] = two[142:160, 0:30] = True     # ...and two that are 6% apart
+    closed = eng0._whole_to_border(two)
+    if not closed[40:44, :30].all() or closed[132:140, :30].any():
+        bad.append("to the border: rows left out between two rows of a thing are closed when they are few (GEAR_HULL_GAP), not when they are many")
     if hull[130:160, :38].any():
         bad.append("to the border: behind a pole that stands free the wall stays")
     if (hull & ~take)[:, cap + rim + 1:].any():
@@ -4966,8 +4995,66 @@ def check_border():
     if not np.array_equal(eng0._whole_to_border(take[:, ::-1])[:, ::-1], hull):
         bad.append("to the border: the right border must be treated like the left one")
 
-    def floor_of(a_val, b_val, x0=0, soft=False, touch_person=False, size=(60, 80)):
-        """A patch of one colour at the left border (or `x0` from it) of a grey sheet: what _foreign_floor takes of it."""
+    def light_of(x0=40, x1=70, panel_l=70.0, spot=False, gear=True, mirror=False, ask="panel"):
+        """
+        A flag taken at the left border of a wall of 12, and a panel from x0 to x1 with a black end on its far side:
+        how much of the panel goes with it (ask: of its black "end", of the "rim" of 4 px beyond its far side, of
+        what lies "beyond" 12 px from it).
+        """
+        L = np.full((300, 400), 12.0, np.float32)
+        L[60:180, x0:x1] = panel_l
+        L[100:112, x1:x1 + 12] = 1.0
+        if spot:
+            L[100:105, x0 + 10:x0 + 15] = 70.0
+        taken = np.zeros((300, 400), bool)
+        taken[40:200, :40] = True
+        edges = np.zeros((300, 400), np.uint8)
+        cv2.rectangle(edges, (x0, 60), (x1 - 1, 179), 1, 3)
+        if mirror:
+            L, taken, edges = (np.ascontiguousarray(m[:, ::-1]) for m in (L, taken, edges))
+        n_e, lbl_e, st_e, _ = cv2.connectedComponentsWithStats(edges, connectivity=8)
+        lut = np.zeros(n_e, np.float32)
+        lut[1:] = 1.0 if gear else 0.0
+        z = np.zeros((300, 400), np.float32)
+        got = eng0._light_gear_of_thing(taken, lbl_e, st_e, lut, np.ascontiguousarray(L), np.zeros((300, 400), bool),
+                                        np.full((300, 1), 12.0, np.float32), z, z)
+        got = got[:, ::-1] if mirror else got
+        where = {"panel": got[60:180, x0:x1], "end": got[100:112, x1:x1 + 12], "rim": got[70:95, x1 + 1:x1 + 5],
+                 "beyond": got[70:95, x1 + 12:]}
+        return float(where[ask].mean())
+
+    lights = {"a light panel right beside a taken flag": light_of(), "the same at the right border": light_of(mirror=True),
+              "its black end": light_of(ask="end"), "a rim of 4 px beyond it": light_of(ask="rim"),
+              "a panel 55 px wide, with what its edges enclose": light_of(40, 95),
+              "a panel 10 px away from the flag": light_of(50, 80), "a panel no lighter than the wall": light_of(panel_l=20.0),
+              "a dark panel with a speck of light": light_of(panel_l=20.0, spot=True), "a panel that reaches into the frame": light_of(40, 140),
+              "gear that may not be taken": light_of(gear=False), "the black end of a panel that stays": light_of(50, 80, ask="end"),
+              "12 px beyond the panel": light_of(ask="beyond")}
+    if min(list(lights.values())[:5]) < 0.99 or max(list(lights.values())[5:]) > 0.01:
+        bad.append("light gear goes with a taken thing at the border when it hangs together with it, has something lighter than the "
+                   "backdrop by GEAR_LIGHT_OVER (at least GEAR_LIGHT_MIN of the frame), ends within GEAR_LIGHT_REACH of the border and "
+                   f"may be taken - then whole, with its black end and a rim, otherwise not at all: {said(lights)}")
+
+    def black_rest(thing_l, wall_l):
+        """A dark thing 80 px wide at the border of a wall, marked up to 24 px: how much of the rest is taken with it."""
+        L = np.full((200, 600), wall_l, np.float32)
+        L[:, :80] = thing_l
+        mark = np.zeros((200, 600), np.uint8)
+        mark[:, :24] = 1
+        z = np.zeros((200, 600), np.float32)
+        return float(eng0._whole_black_thing(L, np.full((200, 1), wall_l, np.float32), mark, z, z, np.zeros((200, 600), bool))[:, 24:80].mean())
+
+    blacks = {"black (3.5) on a wall of 10": black_rest(3.5, 10.0), "black outright (1.5) on a wall of 6": black_rest(1.5, 6.0),
+              "dark (3.5) on a wall of 6": black_rest(3.5, 6.0), "dark (6) on a wall of 10": black_rest(6.0, 10.0)}
+    if min(list(blacks.values())[:2]) < 0.99 or max(list(blacks.values())[2:]) > 0.01:
+        bad.append("black on a dark wall: under GEAR_BLACK_DEEP where the middle of the row is above GEAR_BLACK_WALL, or under "
+                   f"GEAR_BLACK_PURE anywhere - and nothing else: {said(blacks)}")
+
+    def floor_of(a_val, b_val, x0=0, soft=False, touch_person=False, size=(60, 80), dark=False):
+        """
+        A patch of one colour at the left border (or `x0` from it) of a grey sheet: what _foreign_floor takes of it
+        (of its middle). dark: the patch lies in deep shade (L 15 of 255).
+        """
         L = np.full((300, 400), 120.0, np.float32)
         A, B = np.zeros_like(L), np.zeros_like(L)
         m = np.zeros_like(L)
@@ -4975,18 +5062,46 @@ def check_border():
         m = cv2.GaussianBlur(m, (0, 0), 14.0 if soft else 0.8)
         A += a_val * m
         B += b_val * m
+        if dark:
+            L -= 105.0 * m
         fg_s = np.zeros_like(L)
         if touch_person:
             fg_s[90:200, x0 + size[0] + 4:x0 + size[0] + 40] = 1.0
         excl = cv2.dilate((fg_s > 0.12).astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))) > 0
-        return float(eng0._foreign_floor(L, A, B, fg_s, excl)[110:170, x0 + 8:x0 + size[0] - 8].mean())
+        edge = min(8, size[0] // 3, size[1] // 3)
+        return float(eng0._foreign_floor(L, A, B, fg_s, excl)[100 + edge:100 + size[1] - edge, x0 + edge:x0 + size[0] - edge].mean())
 
     floors = {"wood at the border": floor_of(8.0, 18.0), "the same colour, fading": floor_of(8.0, 18.0, soft=True),
               "wood away from the border": floor_of(8.0, 18.0, x0=40), "wood that touches the person": floor_of(8.0, 18.0, touch_person=True),
-              "blue at the border": floor_of(2.0, -20.0), "wood over a third of the frame": floor_of(8.0, 18.0, size=(390, 150))}
+              "blue at the border": floor_of(2.0, -20.0), "wood over a third of the frame": floor_of(8.0, 18.0, size=(390, 150)),
+              "a faintly warm patch at the border": floor_of(3.0, 6.0), "a speck of wood at the border": floor_of(8.0, 18.0, size=(7, 7)),
+              "wood in deep shade": floor_of(8.0, 18.0, dark=True)}
     if floors["wood at the border"] < 0.95 or max(v for k, v in floors.items() if k != "wood at the border") > 0.02:
-        bad.append("the floor beyond the sheet is what has the colour of wood, reaches a border, has a sharp edge, does not touch the "
-                   f"person and is no backdrop of its own: {said(floors)}")
+        bad.append("the floor beyond the sheet is what has the colour of wood (far enough from the colour of the backdrop: "
+                   "GEAR_FLOOR_CHROMA), is not in deep shade, reaches a border, has a sharp edge, does not touch the person and is "
+                   f"neither a speck (GEAR_FLOOR_MIN) nor a backdrop of its own (GEAR_FLOOR_MAX): {said(floors)}")
+
+    # along the person, on drawn masks: two legs 10 px apart, and what the two searches found around them
+    fg_d = np.zeros((400, 600), np.uint8)
+    fg_d[50:350, 265:290] = fg_d[50:350, 300:325] = 255
+    seam_d, spot_d = np.zeros((400, 600), np.uint8), np.zeros((400, 600), np.uint8)
+    seam_d[100:300, 259:263] = 1         # the joint search: a long line along a leg (the rim of a sheer skirt)...
+    seam_d[198:202, 290:300] = 1         # ...the joint of the floor between the legs...
+    seam_d[248:252, 325:600] = 1         # ...and the same joint where it runs away from the person
+    spot_d[100:160, 327:333] = 1         # the dust search: a strip along a leg...
+    spot_d[300:308, 360:368] = 1         # ...and a crumb a little way off
+    seam_0, spot_0 = seam_d.copy(), spot_d.copy()
+    joined, gone_j, gone_s = eng0._found_beside_person(seam_d, spot_d, fg_d)
+    left = {"a long line of the joint search along a leg": float(joined[100:300, 259:263].mean()),
+            "a strip of the dust search along a leg": float(joined[100:160, 327:333].mean()),
+            "the joint between the legs": float(joined[198:202, 290:300].mean()),
+            "the joint that runs away from the person": float(joined[248:252, 325:600].mean()),
+            "a crumb a little way off": float(joined[300:308, 360:368].mean())}
+    if max(list(left.values())[:2]) > 0.0 or min(list(left.values())[2:]) < 1.0 or (gone_j, gone_s) != (800, 360):
+        bad.append("along the person, on drawn masks: a long line of the joint search and a strip of the dust search are dropped, the joint "
+                   f"between the legs, a joint that runs away and a crumb stay: {said(left)}; dropped {gone_j} and {gone_s} px, expected 800 and 360")
+    if not (np.array_equal(seam_d, seam_0) and np.array_equal(spot_d, spot_0)):
+        bad.append("along the person: the two masks of the searches must stay as they were found (the stage cache holds them)")
 
     # the wall is continued from backdrop only: gear that stays is no wall
     rng = np.random.default_rng(45)
@@ -5008,11 +5123,20 @@ def check_border():
     base = dict(H.STD, speedMode="quality", scuffs=0, blur=0, cycCurve=0, smokeOn=False, removeStands=True)
     g0 = gray(frame)
 
+    named = []                                           # every call of the fill for large places: was the gear that stays named
+
     def run(consts=None, src=None, scale=None, **over):
         eng = H.make_engine(E, sil)
         eng.lama_sess = H.LightLama()
         for name_c, value_c in (consts or {}).items():
             setattr(eng, name_c, value_c)
+        fill = eng._big_pieces
+
+        def fill_heard(*args, **kwargs):
+            named.append(getattr(kwargs.get("gear_s"), "size", 0) > 1)
+            return fill(*args, **kwargs)
+
+        eng._big_pieces = fill_heard
         pic = frame if src is None else src
         out, st = _quiet(eng.process, pic, 8, dict(base, **over), **({} if scale is None else {"render_scale": scale}))
         return _comp(pic, out), st, out
@@ -5021,10 +5145,15 @@ def check_border():
         g = gray(c)
         rows = slice(int(0.10 * h), int(0.30 * h))
         place, wall = (xx > 0.01 * w) & (xx < 0.08 * w), (xx > 0.15 * w) & (xx < 0.21 * w)
+        flag_rows = slice(int(0.16 * h), int(0.38 * h))
+        flag_place, flag_wall = (xx > 0.91 * w) & (xx < 0.99 * w), (xx > 0.74 * w) & (xx < 0.82 * w)
         return dict(
             softbox=float(np.median(g[rows][place[rows]]) - np.median(g[rows][wall[rows]])),
+            flag=float(np.median(g[flag_rows][flag_place[flag_rows]]) - np.median(g[flag_rows][flag_wall[flag_rows]])),
+            panel=float(np.median(g[parts["panel"]]) - np.median(g[flag_rows][flag_wall[flag_rows]])),
             parquet=float(np.median(g[parts["wood"]]) - np.median(g[parts["paper"]])),
             wood=float(np.median(warm(c)[parts["wood"]]) - np.median(warm(c)[parts["paper"]])),
+            edge=float(np.percentile(warm(c)[parts["edge"]], 90) - np.median(warm(c)[parts["paper"]])),
             strap=float(np.median((g - g0)[parts["strap"]])), strap_max=float(np.abs(g - g0)[parts["strap"]].max()),
             stain=float(np.median((g - g0)[parts["stain"]])), crumb=float(np.median((g - g0)[parts["crumb"]])),
             joint=float(np.median((g - g0)[parts["joint"]])),
@@ -5033,18 +5162,24 @@ def check_border():
             person=float(np.abs(c - frame.astype(np.float32))[_person_core(cv2.resize(sil, (w, h)))].max()),
         )
 
-    old_way = dict(_BORDER_OFF, PERSON_EDGE_SHARE=2.0)
+    old_way = dict(_BORDER_OFF, PERSON_EDGE_REACH=0.0)
     c_was, st_was, _ = run(old_way)
     c_now, st_now, _ = run()
     m_was, m_now = measure(c_was), measure(c_now)
     num = lambda d: ", ".join(f"{k} {v:+.1f}" for k, v in d.items())  # noqa: E731
-    if m_was["strap"] < 30.0 or m_was["wood"] < 30.0 or abs(m_was["softbox"]) < 6.0:
-        bad.append(f"the frame of this check must be one where the former way repaints the strap, leaves the parquet and the softbox: {num(m_was)}")
+    if m_was["strap"] < 30.0 or m_was["wood"] < 30.0 or abs(m_was["softbox"]) < 6.0 or m_was["panel"] < 20.0:
+        bad.append("the frame of this check must be one where the former way repaints the strap, leaves the parquet, the softbox and the "
+                   f"light panel: {num(m_was)}")
     if abs(m_now["softbox"]) > 3.0:
         bad.append(f"where the softbox stood the wall must be the wall beside it: {m_now['softbox']:+.1f} levels against it")
+    if abs(m_now["flag"]) > 3.0 or abs(m_now["panel"]) > 3.0:
+        bad.append("where the flag hung and where the light panel stood beside it the wall must be the wall beyond them: "
+                   f"{m_now['flag']:+.1f} and {m_now['panel']:+.1f} levels against that wall")
     if abs(m_now["parquet"]) > 5.0 or abs(m_now["wood"]) > 3.0:
         bad.append(f"where the parquet lay the floor must be the sheet beside it: {m_now['parquet']:+.1f} levels against it, "
                    f"red minus blue {m_now['wood']:+.1f} against it")
+    if m_now["edge"] > 4.0:
+        bad.append(f"the edge of the parquet must go with it (GEAR_FLOOR_RIM): a line {m_now['edge']:+.1f} warmer than the sheet is left along it")
     if m_now["strap_max"] > 1.0:
         bad.append(f"a strip along the person is the person's: the strap must stay as shot, it was moved by up to {m_now['strap_max']:.1f} levels")
     if m_now["stain"] > -10.0 or m_now["crumb"] < 30.0 or m_now["joint"] < 15.0:
@@ -5054,8 +5189,12 @@ def check_border():
     if abs(m_now["pool"]) > 2.0 or m_now["bench"] > 1.0 or m_now["behind"] > 1.0 or m_now["person"] > 0.0:
         bad.append(f"the pool of light, the bench, the wall behind the free pole and the person must stay: {num({k: m_now[k] for k in ('pool', 'bench', 'behind', 'person')})}")
     big = st_now.get("big_fill") or {}
-    if big.get("pieces") != 2:
-        bad.append(f"the place of the softbox and the place of the parquet are too large for the network - two pieces: the answer says {st_now.get('big_fill')}")
+    if big.get("pieces") != 3:
+        bad.append("the places of the softbox, of the flag and of the parquet are too large for the network - three pieces: the answer "
+                   f"says {st_now.get('big_fill')}")
+    if not named or not all(named):
+        bad.append("the cleaning must name the gear that stays to the fill for large places (gear_s) - it is no wall to continue from: "
+                   f"named in {sum(named)} of {len(named)} calls")
     if not (500 < st_was["spot_px"] - st_now["spot_px"] < 4000):
         bad.append(f"what was dropped along the person is not counted as found: spot_px {st_was['spot_px']} -> {st_now['spot_px']}")
 
@@ -5083,14 +5222,16 @@ def check_border():
     gs, gs0 = gray(c_s), gray(small)
     strap_s = float(np.abs(gs - gs0)[cv2.erode(half(parts["strap"]).astype(np.uint8), np.ones((3, 3), np.uint8)) > 0].max())
     wood_s = float(np.median(warm(c_s)[half(parts["wood"])]) - np.median(warm(c_s)[half(parts["paper"])]))
-    if strap_s > 1.5 or abs(wood_s) > 3.0 or (st_s.get("big_fill") or {}).get("pieces") != 2:
+    if strap_s > 1.5 or abs(wood_s) > 3.0 or (st_s.get("big_fill") or {}).get("pieces") != 3:
         bad.append(f"a reduced copy of the frame must decide as the frame does: the strap moved by {strap_s:.1f} levels, the place of the parquet "
                    f"is {wood_s:+.1f} warmer than the sheet, big_fill {st_s.get('big_fill')}")
     report("border", not bad,
            f"a softbox at the border goes whole - with its lit side between the body and the border and the far edge of its black base on a dark "
            f"wall (the former way marked {was['face'] * 100:.0f}% and {was['far'] * 100:.0f}% of them) - and its place is the wall beside it "
-           f"({m_now['softbox']:+.1f} levels; continued from backdrop only: {tone['yes']:.0f} next to gear that stays, {tone['no']:.0f} when the gear "
-           f"counts as wall); the parquet goes ({m_now['parquet']:+.1f} levels against the sheet beside it, no warmer), a pool of warm light, a bench "
+           f"({m_now['softbox']:+.1f} levels); a flag goes, and the light panel that stands right beside it goes with it, whole (without that rule: "
+           f"{no_light['panel'] * 100:.0f}% of it): {m_now['flag']:+.1f} and {m_now['panel']:+.1f} levels against the wall beyond them, "
+           f"{m_was['panel']:+.0f} the former way; the wall is continued from backdrop only (on a drawn map: {tone['yes']:.0f} next to gear "
+           f"that stays, {tone['no']:.0f} when the gear counts as wall); the parquet goes with its edge ({m_now['parquet']:+.1f} levels against the sheet beside it, no warmer), a pool of warm light, a bench "
            f"the person leans on and the wall behind a free pole stay; a dark strip along a leg is the person's (the former way repainted it by "
            f"{m_was['strap']:+.0f} levels), a stain, a crumb and the joint between the legs are repaired as before; the green preview, the "
            f"second pass and the reduced copy decide alike; without the tick nothing is taken away"

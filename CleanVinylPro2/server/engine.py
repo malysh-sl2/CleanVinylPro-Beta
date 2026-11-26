@@ -1068,10 +1068,22 @@ class CleanVinylEngine:
     #      Along the left and the right border (twice the strip) such a thing is followed as far as it goes, not
     #      only GEAR_BLACK_REACH from what was marked.
     #   2. What a taken thing at the left or right border cuts off from the frame goes with it: row by row everything
-    #      between the border and the far side of the thing, and GEAR_HULL_RIM (of the width) further; rows left out
-    #      between two such rows are closed (GEAR_HULL_GAP of the height). Only for a thing that reaches the border
-    #      itself somewhere - behind a pole that stands free the wall stays - and no further into the frame than
-    #      GEAR_HULL_MAX of the width: a cable that comes in over the border takes nothing with it out there.
+    #      between the border and the far side of the thing, and GEAR_HULL_RIM (of the width) further - up to gear
+    #      that stays, not into it; rows left out between two such rows are closed (GEAR_HULL_GAP of the height).
+    #      Only for a thing that reaches the border itself somewhere - behind a pole that stands free the wall
+    #      stays - and no further into the frame than GEAR_HULL_MAX of the width: a cable that comes in over the
+    #      border takes nothing with it out there.
+    #      And light gear that hangs together with such a thing goes with it, whole: on 0Q5A3413 a lit strip
+    #      softbox crosses a black flag and sticks out beyond it, further than GEAR_HULL_MAX - its end stayed in
+    #      the air when the flag went; and of a light panel that stands right beside a black flag, on the side of
+    #      the frame, the rules above take a part and leave a part (two thirds of the panel drawn for the check
+    #      `border` went, a third stayed). "Light": a group
+    #      of gear edges that may be taken (not along the person), with at least GEAR_LIGHT_MIN of the frame
+    #      lighter than the backdrop around it by GEAR_LIGHT_OVER (0..255) - the edge of a shadow has nothing
+    #      light, and dark things have their own rules. "At the border": the group ends within GEAR_LIGHT_REACH
+    #      of the width from that border; one that reaches further into the frame is left as it was. The black
+    #      that hangs together with it goes too (the black end of that softbox, L 0..3 on a wall of 7). Light
+    #      gear that stands alone stays, as before (a reflector, a grey panel).
     #   3. The floor beyond the sheet: what has the colour of wood (the hue between the two numbers of
     #      GEAR_FLOOR_HUE, at least GEAR_FLOOR_CHROMA away from the colour of the backdrop), reaches a border of the
     #      frame, ends in a sharp edge (GEAR_FLOOR_EDGE: the colour changes by that much from one pixel of the 1024
@@ -1085,6 +1097,9 @@ class CleanVinylEngine:
     GEAR_HULL_MAX = 0.16
     GEAR_HULL_RIM = 0.015
     GEAR_HULL_GAP = 0.03
+    GEAR_LIGHT_OVER = 20.0
+    GEAR_LIGHT_MIN = 0.0003
+    GEAR_LIGHT_REACH = 0.25
     GEAR_FLOOR_CHROMA = 9.0
     GEAR_FLOOR_HUE = (35.0, 100.0)
     GEAR_FLOOR_EDGE = 1.5
@@ -1114,10 +1129,12 @@ class CleanVinylEngine:
         held &= st[:, cv2.CC_STAT_AREA] <= self.GEAR_BLACK_MAX * L.size
         return np.maximum(marked, held[lbl].view(np.uint8))
 
-    def _whole_to_border(self, take: np.ndarray) -> np.ndarray:
+    def _whole_to_border(self, take: np.ndarray, gear: np.ndarray | None = None) -> np.ndarray:
         """
         `take` (bool, the 1024 copy: what "remove the stands" takes away) with what its things at the left and right
-        border cut off from the frame (see GEAR_HULL_MAX).
+        border cut off from the frame (see GEAR_HULL_MAX). `gear` (bool): the gear that is not taken - the rim
+        beyond the far side of a thing stops at it: a stool that stands beside a black flag, on the side of the
+        frame, is not eaten into (it stays gear, whole).
         """
         sh, sw = take.shape
         if self.GEAR_HULL_MAX <= 0.0:
@@ -1141,8 +1158,72 @@ class CleanVinylEngine:
             thing = np.isin(lbl, at_border)
             hull[:, :cap] = np.maximum.accumulate(thing[:, ::-1], axis=1)[:, ::-1]   # from the border to the far side
             hull = cv2.morphologyEx(hull, cv2.MORPH_CLOSE, np.ones((gap, 1), np.uint8))
-            hull = cv2.dilate(hull, np.ones((1, 2 * rim + 1), np.uint8))
+            if gear is None:
+                hull = cv2.dilate(hull, np.ones((1, 2 * rim + 1), np.uint8))
+            else:
+                stays = np.ascontiguousarray((gear[:, ::-1] if mirrored else gear)[:, :wide])
+                for _ in range(rim):      # one pixel further at a time, and not into the gear
+                    step = cv2.dilate(hull, np.ones((1, 3), np.uint8))
+                    step[stays & (hull == 0)] = 0
+                    hull = step
             np.logical_or(view[:, :wide], hull > 0, out=view[:, :wide])
+        return out
+
+    def _light_gear_of_thing(self, take: np.ndarray, labels: np.ndarray, stats: np.ndarray, gear_lut: np.ndarray,
+                             L: np.ndarray, person: np.ndarray, row_mid_l: np.ndarray, fg_s: np.ndarray,
+                             core_s: np.ndarray) -> np.ndarray:
+        """
+        The light gear that hangs together with a thing `take` holds at the left or right border, whole, with the
+        black that hangs together with it and a rim (see GEAR_LIGHT_OVER): bool, the 1024 copy. `labels`, `stats`:
+        the groups of strong edges; `gear_lut`: which of them are gear that may be taken; L in 0..255; `person`:
+        the person with the band around it; the last three as for _whole_black_thing.
+        """
+        sh, sw = take.shape
+        out = np.zeros((sh, sw), dtype=bool)
+        if self.GEAR_LIGHT_OVER <= 0.0:
+            return out
+        n, lbl_t = cv2.connectedComponents(take.view(np.uint8), connectivity=8)
+        if n <= 1:
+            return out
+        k = int(self.GEAR_BODY_K)
+        k_body = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        k_ring = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * k + 1, 2 * k + 1))
+        k_rim = np.ones((5, 5), np.uint8)
+        reach = int(round(self.GEAR_LIGHT_REACH * sw))
+        for right in (False, True):
+            at = np.unique(lbl_t[:, -2:] if right else lbl_t[:, :2])
+            at = at[at > 0]
+            if at.size == 0:
+                continue
+            near = cv2.dilate(np.isin(lbl_t, at).view(np.uint8), k_rim) > 0
+            for i in np.unique(labels[near]):
+                i = int(i)
+                if i <= 0 or gear_lut[i] <= 0:
+                    continue
+                x0, y0, bw, bh, area = (int(v) for v in stats[i])
+                if area > self.GEAR_BLACK_MAX * sh * sw:
+                    continue
+                if (x0 < sw - reach) if right else (x0 + bw > reach):
+                    continue                             # it reaches into the frame: not a thing at the border
+                ya, yb, xa, xb = max(0, y0 - 2 * k), min(sh, y0 + bh + 2 * k), max(0, x0 - 2 * k), min(sw, x0 + bw + 2 * k)
+                # the group with what its edges enclose
+                body = cv2.morphologyEx((labels[ya:yb, xa:xb] == i).view(np.uint8), cv2.MORPH_CLOSE, k_body)
+                outline, _ = cv2.findContours(body, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(body, outline, -1, 1, thickness=cv2.FILLED)
+                wide = cv2.dilate(body, k_rim) > 0
+                ring = ((cv2.dilate(body, k_ring) > 0) & ~wide & ~take[ya:yb, xa:xb] & ~person[ya:yb, xa:xb]
+                        & (labels[ya:yb, xa:xb] == 0))
+                if int(ring.sum()) < 30:
+                    continue
+                l_here = L[ya:yb, xa:xb]
+                lit = (body > 0) & (l_here > float(np.median(l_here[ring])) + self.GEAR_LIGHT_OVER)
+                if int(lit.sum()) < self.GEAR_LIGHT_MIN * sh * sw:
+                    continue                             # nothing light in it: the edge of a shadow, a dark thing
+                out[ya:yb, xa:xb] |= body > 0
+        if bool(out.any()):
+            # ...with the black that hangs together with it (the black end of a softbox), and a rim
+            grown = self._whole_black_thing(L, row_mid_l, out.view(np.uint8), fg_s, core_s, person)
+            out = (cv2.dilate(grown, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))) > 0) & ~person
         return out
 
     def _foreign_floor(self, L: np.ndarray, A: np.ndarray, B: np.ndarray, fg_s: np.ndarray,
@@ -1154,7 +1235,7 @@ class CleanVinylEngine:
         sh, sw = L.shape
         found = np.zeros((sh, sw), dtype=bool)
         back = fg_s < 0.1
-        if int(back.sum()) < 0.05 * back.size:
+        if self.GEAR_FLOOR_MAX <= 0.0 or int(back.sum()) < 0.05 * back.size:
             return found
         da, db = A - float(np.median(A[back])), B - float(np.median(B[back]))
         far = np.hypot(da, db)                       # how far the colour is from the backdrop's
@@ -1416,7 +1497,11 @@ class CleanVinylEngine:
                 k_f = 2 * max(1, int(round(self.GEAR_FLOOR_RIM * sw))) + 1
                 floor = cv2.dilate(floor.view(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_f, k_f)))
                 stand_remove = np.maximum(stand_remove, floor.astype(np.float32))
-            stand_remove = self._whole_to_border(stand_remove > 0.5).astype(np.float32)
+            if num_lbl > 1:
+                light = self._light_gear_of_thing(stand_remove > 0.5, labels, stats, take_lut, L, fg_border_excl,
+                                                  row_mid_l, fg_s, core_s)
+                stand_remove = np.maximum(stand_remove, light.astype(np.float32))
+            stand_remove = self._whole_to_border(stand_remove > 0.5, gear=(stand_mask > 0.5) & (stand_remove <= 0.5)).astype(np.float32)
         stand_remove[core_s > 0.35] = 0.0
         if lines_out is not None and gear_body:
             # the gear that stays when the stands are taken away (see GEAR_KEPT_MAX), shaped like `stand_protect`
@@ -2448,7 +2533,7 @@ class CleanVinylEngine:
     # few pixels off the band. Of the JOINTS of the floor only a strip longer than PERSON_EDGE_JOINT times the
     # reach is dropped: a joint ends at the person, it does not run along it, and the short piece of it that shows
     # in a narrow gap between two legs must go with the rest of the line. The single hairs of the hairdo have a
-    # search of their own (4b) and are not asked.
+    # search of their own (4b) and are not asked. (PERSON_EDGE_REACH 0 switches the rule off.)
     PERSON_EDGE_REACH = 0.0045
     PERSON_EDGE_RIM = 7.0
     PERSON_EDGE_SHARE = 0.5
@@ -2461,6 +2546,8 @@ class CleanVinylEngine:
         protected band. long_only: only strips longer than PERSON_EDGE_JOINT times the reach (the joints).
         """
         h, w = found.shape[:2]
+        if self.PERSON_EDGE_REACH <= 0.0:
+            return None
         person = fg_u8 > 22
         rows, cols = np.flatnonzero(person.any(axis=1)), np.flatnonzero(person.any(axis=0))
         if rows.size == 0:
