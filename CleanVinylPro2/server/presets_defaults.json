@@ -140,7 +140,7 @@
       "dressSmooth": false,
       "dressStrength": 40,
       "cycCurve": 65,
-      "cycDepth": 0,
+      "cycDepth": 10,
       "cleanPasses": 1
     }
   },
@@ -169,7 +169,7 @@
       "dressSmooth": false,
       "dressStrength": 40,
       "cycCurve": 65,
-      "cycDepth": 0,
+      "cycDepth": 10,
       "cleanPasses": 1
     }
   },
@@ -227,7 +227,7 @@
       "dressSmooth": false,
       "dressStrength": 40,
       "cycCurve": 65,
-      "cycDepth": 0,
+      "cycDepth": 10,
       "cleanPasses": 1
     }
   },

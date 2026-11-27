@@ -986,7 +986,7 @@ def check_depth():
 
     # ---- a dark wall, the floor lit right up to it ----
     frame2, sil2 = _depth_frame("pool", w, h)
-    res2 = {d: run(frame2, sil2, d) for d in (0, 60)}
+    res2 = {d: run(frame2, sil2, d) for d in (0, 10, 60)}
     prof2 = {d: rows(gray(res2[d][0])) for d in res2}
     up = float((at(prof2[60], 0.48, 0.52) - at(prof2[0], 0.48, 0.52)).mean())    # the wall an eighth of the frame above the line
     dimmed = float((at(prof2[0], 0.79, 0.99) - at(prof2[60], 0.79, 0.99)).max())
@@ -994,6 +994,18 @@ def check_depth():
         bad.append(f"the tone of the floor must be carried up the wall: at 0.50 of the height the wall is {up:+.1f} levels against the plain cove")
     if dimmed > 1.0:
         bad.append(f"below the line the wider zone only lifts: the lit floor was dimmed by {dimmed:.1f} levels")
+    # A small depth is a small step. The dark presets ship 10 since 4.17.0 (the owner had put 10 on a low-key frame
+    # by hand and asked for it as their value); they shipped 0 before because at 60 the pool of light the person
+    # stands in is carried up the dark wall - what `up` measures. At 10 it is a tenth of that (+1.5 levels here,
+    # no pixel moved by more than 5.7), and it is not nothing. The limits are levels of this frame, not shares of
+    # what 60 does: a slider that is twice as strong all along must not pass.
+    up10 = float((at(prof2[10], 0.48, 0.52) - at(prof2[0], 0.48, 0.52)).mean())
+    step10, step60 = (float(np.abs(gray(res2[d][0]) - gray(res2[0][0])).max()) for d in (10, 60))
+    if not 0.7 <= up10 <= 3.0 or step10 > 8.0:
+        bad.append(f"a small depth must be a small step: at 10 the dark wall moves by {up10:+.1f} levels an eighth of the frame above the line "
+                   f"(0.7 to 3.0 expected; at 60: {up:+.1f}) and a pixel by up to {step10:.1f} (8.0 at most; at 60: {step60:.1f})")
+    if float(np.abs(res2[10][0] - res2[0][0])[cv2.resize(sil2, (w, h)) > 0.9].max()) > 0.0:
+        bad.append("depth 10 on the dark wall: the person was changed")
     # (the rule is needed: with the wider zone for everything, the lit floor loses light)
     res_all = run(frame2, sil2, 60, consts=dict(CORNER_DEPTH_SIGN=-1e-9))
     dim_all = float((at(prof2[0], 0.79, 0.99) - at(rows(gray(res_all[0])), 0.79, 0.99)).max())
@@ -1035,7 +1047,9 @@ def check_depth():
            f"a dark belt of far floor ({belt_frame:.0f} levels below the wall; the plain cove leaves {belt[0]:.0f}) takes the tone around it: {belt[60]:.1f} at depth 60, "
            f"{belt[100]:.1f} at 100, and the tone rises to the lit floor without falling back ({falls[60]:.1f} / {falls[100]:.1f} levels; {falls[0]:.1f} after the plain cove); "
            f"the floor next to the camera, the far wall and the person stay; a dark wall takes the tone of a lit floor ({up:+.0f} levels an eighth "
-           f"of the frame above the line) and the lit floor is not dimmed ({dimmed:.1f}; with the wider zone for everything {dim_all:.0f}); nothing without a corner or "
+           f"of the frame above the line) and the lit floor is not dimmed ({dimmed:.1f}; with the wider zone for everything {dim_all:.0f}); a small depth is "
+           f"a small step - at 10, what the dark presets ship, the dark wall moves by {up10:+.1f} levels there and no pixel by more than {step10:.1f} "
+           f"({step60:.1f} at 60); nothing without a corner or "
            f"without the corner tool; the reduced copy within {off:.1f} levels" if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 

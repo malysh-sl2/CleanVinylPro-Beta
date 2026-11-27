@@ -1735,6 +1735,8 @@ async function main() {
       const start = env.of("/session/start")[0];
       expect(env.state("activePresetId") === "lowkey_wide", "a dark full-length frame must take 'Темний дальній план', got " + env.state("activePresetId"));
       expect(start.used && start.used.spots === 80 && start.used.cycCurve === 65 && start.used.smokeOn === false, "...and be cleaned with its values: " + JSON.stringify(start.used));
+      expect(start.used && start.used.cycDepth === 10 && env.state("getSliderVal('gSlDepth')") === 10 && env.el("gValDepth").textContent === "10%",
+        "...'Глибина' 10 among them (4.17.0), and the row shows it: " + (start.used && start.used.cycDepth) + " / '" + env.el("gValDepth").textContent + "'");
       expect(env.el("dlgActivePresetName").textContent === "Темний дальній план", "the button must show it: " + env.el("dlgActivePresetName").textContent);
       expect(env.badge().includes("Темний дальній план") && env.badge().includes("темний фон") && env.badge().includes("повний зріст"),
         "the note must name the preset, the dark backdrop and the framing: " + env.badge());
@@ -2516,11 +2518,13 @@ async function main() {
     expect(mine.spots === 33 && mine.smokeOn === true && mine.cycCurve === 0, "the user's own preset must be as it was saved");
     expect(env.state("activePresetId") === "lowkey" && env.state("getSliderVal('gSlSpots')") === 80 && env.state("getSliderVal('gSlCyc')") === 65 && !env.el("dlgChkSmoke").checked,
       "the controls of the active preset must follow");
-    expect(env.server.disk["user_settings.json"].presetMoves.length === 5, "the moves must be remembered: " + JSON.stringify(env.server.disk["user_settings.json"].presetMoves));
-    // (4.14.0: "Глибина" is 60 in the light presets with a floor; the dark presets and the user's own know nothing of it)
-    const depths = ["std", "medium_shot", "wide_shot", "clean_stands", "lowkey", "user_1"].map((id) => cfgOf(env, id).cycDepth);
-    expect(JSON.stringify(depths) === JSON.stringify([60, 60, 60, 60, undefined, undefined]) && env.state("getSliderVal('gSlDepth')") === 0,
-      "depth must reach the restored light presets only, and the slider of the active dark preset stays at 0: " + JSON.stringify(depths));
+    expect(env.server.disk["user_settings.json"].presetMoves.length === 6, "the moves must be remembered: " + JSON.stringify(env.server.disk["user_settings.json"].presetMoves));
+    // (4.14.0: "Глибина" is 60 in the light presets with a floor; 4.17.0: 10 in the dark ones with a floor; the
+    //  close-up presets and the user's own know nothing of it)
+    const depths = ["std", "medium_shot", "wide_shot", "clean_stands", "lowkey", "closeup", "user_1"].map((id) => cfgOf(env, id).cycDepth);
+    expect(JSON.stringify(depths) === JSON.stringify([60, 60, 60, 60, 10, undefined, undefined]) && env.state("getSliderVal('gSlDepth')") === 10,
+      "depth must reach the restored presets with a floor - 60 the light ones, 10 the dark one - and the slider of the active dark preset: " +
+      JSON.stringify(depths) + " / " + env.state("getSliderVal('gSlDepth')"));
   });
 
   // ---------------------------------------------------------------- one mode; the edge of the brush and the eraser
@@ -3434,7 +3438,7 @@ async function main() {
     expect(holder(env) === "dlgToolBrush", "after B the brush is in hand, and the mouse over the photo gives its button the keyboard: " + holder(env));
   });
 
-  await scenario("'Глибина': a slider under 'Циклорама' - 60 in the light presets, 0 in the dark ones; one light refresh, Apply carries it; nothing without the corner tool", { detail: false },
+  await scenario("'Глибина': a slider under 'Циклорама' - 60 in the light presets, 10 in the dark ones; one light refresh, Apply carries it; nothing without the corner tool", { detail: false },
     async (env, expect) => {
       env.check("dlgChkAutoPreset", false);
       await env.open();
@@ -3446,12 +3450,15 @@ async function main() {
       const rows = Array.from(env.doc.querySelectorAll("#dlgGearPopover .gear-scroll > .g-row"));
       const at = (id) => rows.findIndex((n) => !!n.querySelector("#" + id));
       expect(at("gSlDepth") === at("gSlCyc") + 1 && at("gSlCyc") >= 0, "the row stands right under 'Циклорама': " + at("gSlCyc") + " / " + at("gSlDepth"));
-      const want = { "Студія (Стандарт)": 60, "Середній план": 60, "Дальній план": 60, "Без стійок (AI)": 60, "Темний ключ": 0, "Темний середній план": 0, "Темний дальній план": 0 };
+      // (4.17.0: 10 in the dark presets that have the corner tool - the owner: «я поставив 10 став одразу»)
+      const want = { "Студія (Стандарт)": 60, "Середній план": 60, "Дальній план": 60, "Без стійок (AI)": 60, "Темний ключ": 10, "Темний середній план": 10, "Темний дальній план": 10 };
       for (const [name, value] of Object.entries(want)) {
         env.clickPreset(name);
         expect(depth() === value && badge() === (value ? value + "%" : "Вимк.") && !env.el("gSlDepth").classList.contains("disabled"),
           `the preset '${name}': depth ${value} expected, the slider says ${depth()} / '${badge()}'`);
       }
+      const tip = rows[at("gSlDepth")].getAttribute("data-tip") || "";
+      expect(tip.includes("У світлих пресетах стоїть 60%, у темних — 10%."), "the hint of the row names what the presets ship: 60% in the light ones, 10% in the dark ones");
       env.clickPreset("Дальній план");
       await env.settle(1000);
       let last = quick().pop();
@@ -3484,6 +3491,82 @@ async function main() {
       await env.settle(900);
       const a = env.of("/session/apply");
       expect(a.length === 1 && a[0].body.params.cycDepth === 35 && a[0].body.params.cycCurve === 50, "Apply carries depth: " + (a[0] && a[0].body.params.cycDepth));
+    });
+
+  // ---------------------------------------------------------------- "Глибина" 10 in the dark presets (4.17.0)
+  // The owner had put 10 on the slider of a low-key frame himself. Asked whether the dark presets should come with
+  // it, he wrote on 2026-11-27: «я поставив 10 став одразу». With the automatic preset every dark frame opens with
+  // the values of its preset, so the 10 on the slider was gone with the next photo.
+  // (what a PC of 4.16.0 holds: the built-in presets of that version - the dark ones with depth 0 -, a dark preset
+  //  of the user's own, and the moves up to "depth60")
+  const DARK_FLOOR_IDS = ["lowkey", "lowkey_medium", "lowkey_wide"];
+  const pc416 = (over) => {
+    const now = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, "..", "server", "presets_defaults.json"), "utf8"));
+    now.forEach((p) => { if (DARK_FLOOR_IDS.includes(p.id)) p.cfg.cycDepth = 0; });
+    Object.keys(over || {}).forEach((id) => Object.assign(now.find((p) => p.id === id).cfg, over[id]));
+    now.push({ id: "usr_1700000000001", name: "Мій темний", color: "#54d182", builtin: false, cfg: Object.assign({}, now.find((p) => p.id === "lowkey_wide").cfg, { cycDepth: 0, spots: 66 }) });
+    return now;
+  };
+  const settings416 = (list, active, sliders) => ({
+    schemaVersion: 5, activePresetId: active, autoPreset: true, cfg: Object.assign({}, list.find((p) => p.id === active).cfg, sliders || {}),
+    presetMoves: ["cyc65", "smokeOff", "lowkeySpots80", "lowkeyCyc65", "depth60"], knownDefaultIds: list.filter((p) => p.builtin).map((p) => p.id)
+  });
+  const depthOf = (env, id) => env.state(`(presetsList.find((p) => p.id === ${JSON.stringify(id)}) || { cfg: {} }).cfg.cycDepth`);
+
+  await scenario("'Глибина' 10 in the dark presets: a PC of 4.16.0 gets it once, a dark frame opens with it; 0 saved afterwards stays 0",
+    { disk: { "presets_local.json": pc416(), "user_settings.json": settings416(pc416(), "lowkey_wide", { cycDepth: 10 }) },
+      serverPresets: pc416(), scene: { kind: "dark", framing: "wide", dark: true } }, async (env, expect) => {
+      await sleep(500);                                      // bootstrap + the first sync with the server
+      expect(DARK_FLOOR_IDS.every((id) => depthOf(env, id) === 10), "the three dark presets with a floor must get depth 10: " + DARK_FLOOR_IDS.map((id) => depthOf(env, id)).join());
+      expect(depthOf(env, "lowkey_close") === 0 && depthOf(env, "usr_1700000000001") === 0,
+        "'Темний ближній план' (no corner tool) and the user's own dark preset stay at 0: " + [depthOf(env, "lowkey_close"), depthOf(env, "usr_1700000000001")].join());
+      expect(["std", "medium_shot", "wide_shot", "clean_stands"].every((id) => depthOf(env, id) === 60) && depthOf(env, "closeup") === 0 && depthOf(env, "gentle") === 0,
+        "the light presets are left as they were");
+      expect(env.state("activePresetId") === "lowkey_wide" && env.state("getSliderVal('gSlDepth')") === 10,
+        "the 10 that stood on the slider (put there by hand on 4.16.0) stays: " + env.state("getSliderVal('gSlDepth')"));
+      const onDisk = env.server.disk;
+      expect(DARK_FLOOR_IDS.every((id) => onDisk["presets_local.json"].find((p) => p.id === id).cfg.cycDepth === 10) && onDisk["presets_local.json"].length === 11,
+        "the presets on the PC must hold it");
+      const moves = onDisk["user_settings.json"].presetMoves || [];
+      expect(moves.includes("darkDepth10") && moves.length === 6, "the settings must remember that the move was made: " + JSON.stringify(moves));
+      const sent = env.of("/presets").filter((r) => r.method === "POST");
+      expect(sent.length >= 1 && DARK_FLOOR_IDS.every((id) => sent[sent.length - 1].body.find((p) => p.id === id).cfg.cycDepth === 10), "the copy on the server must get it too");
+      // a dark frame: the automatic preset cleans it with the values of the preset - now with depth 10
+      await env.open();
+      await env.settle(600);
+      const start = env.of("/session/start")[0];
+      const sp = start.body.scenePresets || {};
+      expect(sp.dark_wide && sp.dark_wide.cycDepth === 10 && sp.dark_medium.cycDepth === 10 && sp.dark.cycDepth === 10 && sp.dark_close.cycDepth === 0 && sp.wide.cycDepth === 60,
+        "what the server is offered for the kinds of frame: " + JSON.stringify(Object.fromEntries(Object.keys(sp).map((k) => [k, sp[k].cycDepth]))));
+      expect(env.state("activePresetId") === "lowkey_wide" && start.used && start.used.cycDepth === 10 && start.used.cycCurve === 65,
+        "the dark frame is cleaned with 'Темний дальній план' and depth 10: " + JSON.stringify(start.used && [start.used.cycCurve, start.used.cycDepth]));
+      env.click("dlgBtnGear");
+      expect(env.state("getSliderVal('gSlDepth')") === 10 && env.el("gValDepth").textContent === "10%" && !env.el("gSlDepth").classList.contains("disabled"),
+        "the row 'Глибина' shows 10%: '" + env.el("gValDepth").textContent + "'");
+      expect(env.recomputes().length === 0 && env.state("previewMatchesSettings()") === true, "the frame is already cleaned with these values: nothing is asked again");
+      // the user decides otherwise: 0 saved into the preset stays 0 from now on (the next start reads these files)
+      await env.drag("gSlDepth", 0);
+      await env.settle(900);
+      env.click("gBtnSavePreset");
+      await env.settle(300);
+      expect(depthOf(env, "lowkey_wide") === 0 && onDisk["presets_local.json"].find((p) => p.id === "lowkey_wide").cfg.cycDepth === 0, "depth 0 saved into the preset must be saved as it is");
+      expect(env.state("applyPresetDefaultMoves()") === false && depthOf(env, "lowkey_wide") === 0 && env.state("getSliderVal('gSlDepth')") === 0, "...and must not be moved again");
+    });
+
+  await scenario("'Глибина' 10 in the dark presets: a depth the user saved into a dark preset stays, the untouched slider of the active one follows",
+    { disk: { "presets_local.json": pc416({ lowkey_wide: { cycDepth: 25 } }), "user_settings.json": settings416(pc416({ lowkey_wide: { cycDepth: 25 } }), "lowkey") },
+      serverPresets: pc416({ lowkey_wide: { cycDepth: 25 } }), scene: { kind: "dark", framing: "wide", dark: true } }, async (env, expect) => {
+      await sleep(500);
+      expect(depthOf(env, "lowkey_wide") === 25, "25 saved into 'Темний дальній план' by the user must stay: " + depthOf(env, "lowkey_wide"));
+      expect(depthOf(env, "lowkey") === 10 && depthOf(env, "lowkey_medium") === 10 && depthOf(env, "lowkey_close") === 0, "the other dark presets with a floor get 10, the close-up stays");
+      expect(env.state("activePresetId") === "lowkey" && env.state("getSliderVal('gSlDepth')") === 10,
+        "the slider of the active dark preset stood at 0, the former default: it follows to 10, got " + env.state("getSliderVal('gSlDepth')"));
+      expect(env.server.disk["user_settings.json"].cfg.cycDepth === 10, "...and is saved so");
+      await env.open();
+      await env.settle(600);
+      const start = env.of("/session/start")[0];
+      expect(env.state("activePresetId") === "lowkey_wide" && start.used && start.used.cycDepth === 25 && env.state("getSliderVal('gSlDepth')") === 25,
+        "a dark full-length frame is cleaned with the user's own 25: " + (start.used && start.used.cycDepth));
     });
 
   // ---------------------------------------------------------------- a new result leaves "До" (4.16.0)

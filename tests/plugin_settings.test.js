@@ -12,7 +12,10 @@
 //   - 4.7.0: the edge of the brush and the eraser (soft unless a file says otherwise) is read and written back; the
 //     speed mode of an older file is not read - the file written back names the one mode that is left;
 //   - 4.9.0: the slider of the single hairs ("strayHair") is read, applied and part of what makes the preview out
-//     of date; a preset that does not name it - every built-in one - leaves the tool off.
+//     of date; a preset that does not name it - every built-in one - leaves the tool off;
+//   - 4.17.0: "Глибина" is 10 in the three dark presets that have the corner tool (the owner: «я поставив 10 став
+//     одразу»): on a PC that holds its presets they get it once, the slider of the active one follows, a value
+//     the user chose stays, "Темний ближній план" and the light presets are left alone.
 //   node tests/plugin_settings.test.js
 const fs = require("fs");
 const path = require("path");
@@ -239,7 +242,9 @@ const modMoves = { exports: null };
 new Function("module", movesCode)(modMoves);
 const runMoves = modMoves.exports;
 
-const defaultsNow = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "CleanVinylPro2", "server", "presets_defaults.json"), "utf8"));
+// (read from next to the plugin under test: tests/try_defects.py puts a copy of the file there, so that a defect
+// in the server's list of presets is seen here as well)
+const defaultsNow = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, "..", "server", "presets_defaults.json"), "utf8"));
 // "Зйомка з димом" was a built-in preset up to 4.12.0 (taken out in 4.13.0: the owner asked for it). The PCs of
 // earlier versions hold it, so the lists of those versions are built with it, the way 4.12.0 shipped it.
 const SMOKE_PRESET_412 = {
@@ -264,7 +269,8 @@ const as430 = () => older(() => 0);
 const as440 = () => older((id) => (FLOOR_440.includes(id) ? 65 : 0));
 const mine = { id: "my_1", name: "Мій", builtin: false, cfg: { cycCurve: 0, spots: 92, smokeOn: true } };
 const MOVES_4130 = ["cyc65", "smokeOff", "lowkeySpots80", "lowkeyCyc65"];
-const ALL_MOVES = MOVES_4130.concat(["depth60"]);
+const MOVES_4160 = MOVES_4130.concat(["depth60"]);
+const ALL_MOVES = MOVES_4160.concat(["darkDepth10"]);
 const cycNow = Object.fromEntries(IDS_440.map((id) => [id, FLOOR_440.includes(id) || id === "lowkey" ? 65 : 0]));
 const smokeNow = Object.fromEntries(IDS_440.map((id) => [id, id === "smoke"]));
 const same = (got, want) => Object.keys(want).every((id) => got[id] === want[id]);
@@ -321,24 +327,64 @@ r = runMoves(as440(), { schemaVersion: 5, activePresetId: "std", cfg: { cycCurve
 moveCase("the smoke switch of the active preset goes off once; switched on again by the user it stays on",
   r.changed[0] === true && r.changed[1] === false && r.smokeNow === false && r.slider === 65, r);
 
-// 4.13.0 -> 4.14.0: "Глибина" (the wider cove of the corner tool) is 60 in the light presets with a floor
+// 4.13.0 -> 4.14.0: "Глибина" (the wider cove of the corner tool) is 60 in the light presets with a floor;
+// 4.16.0 -> 4.17.0: ...and 10 in the dark presets with a floor. A PC of 4.13.0 gets both.
 const LIGHT_FLOOR = ["std", "medium_shot", "wide_shot", "clean_stands"];
+const DARK_FLOOR = ["lowkey", "lowkey_medium", "lowkey_wide"];
+const shipsDepth = (id) => (LIGHT_FLOOR.includes(id) ? 60 : DARK_FLOOR.includes(id) ? 10 : 0);
 const as4130 = () => defaultsNow.map((p) => Object.assign({}, p, { cfg: noDepth(p.cfg) }));
-const depthNow = Object.fromEntries(defaultsNow.map((p) => [p.id, LIGHT_FLOOR.includes(p.id) ? 60 : undefined]));
+const depthNow = Object.fromEntries(defaultsNow.map((p) => [p.id, shipsDepth(p.id) || undefined]));
 r = runMoves(as4130().concat([mine]), { schemaVersion: 5, activePresetId: "wide_shot", cfg: { cycCurve: 65, spots: 85, smokeOn: false }, presetMoves: MOVES_4130 }, 2);
-moveCase("presets of 4.13.0: the light presets with a floor get depth 60, the dark and the close ones and the user's own nothing; once",
-  r.changed[0] === true && r.changed[1] === false && same(r.depth, depthNow) && r.depth.my_1 === undefined && r.saved.presetMoves.includes("depth60"), r);
+moveCase("presets of 4.13.0: the light presets with a floor get depth 60, the dark ones with a floor 10, the close ones and the user's own nothing; once",
+  r.changed[0] === true && r.changed[1] === false && same(r.depth, depthNow) && r.depth.my_1 === undefined &&
+  r.saved.presetMoves.includes("depth60") && r.saved.presetMoves.includes("darkDepth10"), r);
 moveCase("...and the slider of the active light preset follows; nothing else of it moves", r.depthSlider === 60 && r.slider === 65 && r.spotsSlider === 85 && r.smokeNow === false, r);
 r = runMoves(as4130(), { schemaVersion: 5, activePresetId: "lowkey", cfg: { cycCurve: 65, spots: 80, smokeOn: false }, presetMoves: MOVES_4130 });
-moveCase("the slider of an active dark preset stays at 0", r.depthSlider === 0 && r.depth.lowkey === undefined && r.depth.std === 60, r);
+moveCase("the slider of an active dark preset goes to 10, not to 60", r.depthSlider === 10 && r.depth.lowkey === 10 && r.depth.std === 60, r);
 const deep = as4130();
 deep.find((p) => p.id === "std").cfg.cycDepth = 25;
 r = runMoves(deep, { schemaVersion: 5, activePresetId: "std", cfg: { cycCurve: 65, cycDepth: 25 }, presetMoves: MOVES_4130 });
 moveCase("a depth the user chose stays, in the preset and on the slider", r.depth.std === 25 && r.depthSlider === 25 && r.depth.wide_shot === 60, r);
 r = runMoves(defaultsNow, { schemaVersion: 5, activePresetId: "std", cfg: { cycCurve: 65, cycDepth: 0 }, presetMoves: ALL_MOVES });
 moveCase("depth put back to 0 by the user after 4.14.0 stays at 0", r.changed[0] === false && r.depthSlider === 0, r);
-moveCase("presets_defaults.json: exactly the light presets with a floor carry depth 60, every other preset 0",
-  defaultsNow.every((p) => p.cfg.cycDepth === (LIGHT_FLOOR.includes(p.id) ? 60 : 0)), defaultsNow.map((p) => [p.id, p.cfg.cycDepth]));
+moveCase("presets_defaults.json: the light presets with a floor carry depth 60, the dark ones with a floor 10, every other preset 0",
+  defaultsNow.every((p) => p.cfg.cycDepth === shipsDepth(p.id)), defaultsNow.map((p) => [p.id, p.cfg.cycDepth]));
+
+// 4.16.0 -> 4.17.0: "Глибина" 10 in the dark presets with a floor. The owner had put 10 on the slider of a low-key
+// frame himself; asked whether the dark presets should come with it: «я поставив 10 став одразу».
+// (a PC of 4.16.0: every built-in preset as it shipped then - the dark ones with depth 0 - and the moves up to depth60)
+const as4160 = () => defaultsNow.map((p) => Object.assign({}, p, { cfg: Object.assign({}, p.cfg, DARK_FLOOR.includes(p.id) ? { cycDepth: 0 } : {}) }));
+const depth4170 = Object.fromEntries(defaultsNow.map((p) => [p.id, shipsDepth(p.id)]));
+const dark = (id, over) => Object.assign({}, defaultsNow.find((p) => p.id === id).cfg, { cycDepth: 0 }, over || {});
+r = runMoves(as4160().concat([mine]), { schemaVersion: 5, activePresetId: "lowkey_wide", cfg: dark("lowkey_wide"), presetMoves: MOVES_4160 }, 2);
+moveCase("presets of 4.16.0: the three dark presets with a floor get depth 10, once; no other preset moves",
+  r.changed[0] === true && r.changed[1] === false && same(r.depth, depth4170) && r.depth.lowkey_close === 0 && r.depth.my_1 === undefined &&
+  r.saved.presetMoves.includes("darkDepth10") && r.saved.presetMoves.length === ALL_MOVES.length, r);
+moveCase("...the slider of the active dark preset follows; nothing else of it moves", r.depthSlider === 10 && r.slider === 65 && r.spotsSlider === 80 && r.smokeNow === false, r);
+r = runMoves(as4160(), { schemaVersion: 5, activePresetId: "lowkey_wide", cfg: dark("lowkey_wide", { cycDepth: 10 }), presetMoves: MOVES_4160 });
+moveCase("the owner's PC: 10 put on the slider by hand and never saved - the slider stays at 10, the preset gets it",
+  r.changed[0] === true && r.depthSlider === 10 && r.depth.lowkey_wide === 10 && r.depth.lowkey === 10 && r.depth.lowkey_medium === 10, r);
+r = runMoves(as4160(), { schemaVersion: 5, activePresetId: "lowkey", cfg: dark("lowkey", { cycDepth: 35 }), presetMoves: MOVES_4160 });
+moveCase("another depth on the slider of the active dark preset stays; its preset still gets 10", r.depthSlider === 35 && r.depth.lowkey === 10, r);
+const chosen = as4160();
+chosen.find((p) => p.id === "lowkey_wide").cfg.cycDepth = 25;   // saved into the preset by the user
+chosen.find((p) => p.id === "lowkey_medium").cfg.cycDepth = 10;  // (the same value as the new default: nothing to do there)
+r = runMoves(chosen, { schemaVersion: 5, activePresetId: "lowkey_wide", cfg: dark("lowkey_wide", { cycDepth: 25 }), presetMoves: MOVES_4160 });
+moveCase("a depth the user saved into a dark preset stays, in the preset and on the slider",
+  r.depth.lowkey_wide === 25 && r.depthSlider === 25 && r.depth.lowkey_medium === 10 && r.depth.lowkey === 10, r);
+r = runMoves(as4160(), { schemaVersion: 5, activePresetId: "lowkey_close", cfg: dark("lowkey_close"), presetMoves: MOVES_4160 });
+moveCase("\"Темний ближній план\" has no corner tool: its preset and its slider stay at 0",
+  r.depth.lowkey_close === 0 && r.depthSlider === 0 && r.slider === 0 && r.depth.lowkey_wide === 10, r);
+r = runMoves(as4160(), { schemaVersion: 5, activePresetId: "wide_shot", cfg: Object.assign({}, defaultsNow.find((p) => p.id === "wide_shot").cfg), presetMoves: MOVES_4160 });
+moveCase("an active light preset: its slider stays at 60, its preset too", r.depthSlider === 60 && r.depth.wide_shot === 60 && r.depth.std === 60 && r.depth.lowkey_wide === 10, r);
+r = runMoves(as4160().concat([Object.assign({}, mine, { cfg: { cycCurve: 65, cycDepth: 0, spots: 80, smokeOn: false } })]),
+  { schemaVersion: 5, activePresetId: "my_1", cfg: { cycCurve: 65, cycDepth: 0, spots: 80, smokeOn: false }, presetMoves: MOVES_4160 });
+moveCase("the user's own dark preset is his: depth 0 stays, on the slider too", r.depth.my_1 === 0 && r.depthSlider === 0 && r.depth.lowkey_wide === 10, r);
+r = runMoves(as4160(), { schemaVersion: 5, activePresetId: "lowkey_wide", cfg: dark("lowkey_wide"), presetMoves: ALL_MOVES });
+moveCase("depth put back to 0 in a dark preset after 4.17.0 stays at 0", r.changed[0] === false && r.depth.lowkey_wide === 0 && r.depthSlider === 0, r);
+r = runMoves(defaultsNow, { schemaVersion: 5, activePresetId: "lowkey_wide", cfg: Object.assign({}, defaultsNow.find((p) => p.id === "lowkey_wide").cfg) });
+moveCase("a fresh install of 4.17.0 with a dark preset on the controls: 10 is there already, nothing moves, the moves are remembered",
+  r.changed[0] === false && same(r.depth, depth4170) && r.depthSlider === 10 && ALL_MOVES.every((id) => r.saved.presetMoves.includes(id)), r);
 
 const FLOOR_NOW = ["std", "medium_shot", "wide_shot", "clean_stands", "lowkey", "lowkey_medium", "lowkey_wide"];
 moveCase("presets_defaults.json: exactly the presets with a floor carry \"Циклорама\" 65",
@@ -465,6 +511,10 @@ let sp = sceneApi.scene(defaultsNow);
 moveCase("the automatic preset: a dark backdrop has its own preset for every framing, a light one as before",
   sp && Object.keys(sp.ids).length === 8 && same(sp.ids, Object.assign({ close: "closeup", medium: "medium_shot", wide: "wide_shot", default: "std" }, DARK_KEYS)) &&
   sp.params.dark_wide.cycCurve === 65 && sp.params.dark_close.seamOn === false, sp && sp.ids);
+moveCase("...and what the server is sent for a dark frame carries depth 10 (4.17.0); for a dark close-up 0, for a light frame 60",
+  sp && sp.params.dark_wide.cycDepth === 10 && sp.params.dark_medium.cycDepth === 10 && sp.params.dark.cycDepth === 10 &&
+  sp.params.dark_close.cycDepth === 0 && sp.params.wide.cycDepth === 60 && sp.params.close.cycDepth === 0,
+  sp && Object.fromEntries(Object.keys(sp.params).map((k) => [k, sp.params[k].cycDepth])));
 sp = sceneApi.scene(defaultsNow.filter((p) => p.id !== "lowkey_wide"));
 moveCase("...a deleted dark preset is simply not offered (the server then takes the general dark one)",
   sp && !("dark_wide" in sp.ids) && sp.ids.dark === "lowkey" && Object.keys(sp.ids).length === 7, sp && sp.ids);

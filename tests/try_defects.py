@@ -15,7 +15,8 @@ Run nothing heavy next to this script: a check that runs out of memory is killed
 A defect of the PANEL (the word "panel" instead of a check group) is put into a copy of the plugin folder, and the
 two tests of the panel are pointed at that copy (CV_PLUGIN_DIR): the settings test, and the scenarios of the
 window test whose names contain the text (or one of the texts) given with the defect. The program files are not
-touched by these.
+touched by these. The server's list of built-in presets (presets_defaults.json) is copied next to that folder,
+where both tests read it, and can take a defect of the panel as well.
 They need Node.js and the jsdom package (tests/README.md).
 
 Do NOT edit the program files, build the package or run the checks yourself while this is going: the script
@@ -51,94 +52,77 @@ def panel(*texts):
     return ("panel",) + tuple(texts)
 
 
+# The three scenarios named "'Глибина' ..." (the slider, and the two of a PC of 4.16.0), the automatic preset on a dark
+# frame, and the backup of an older version: where the window shows what the dark presets ship.
+DEPTH10 = ("'Глибина'", "automatic preset: a dark frame takes", "restoring a backup made by an older version")
+PRESETS_JSON = "CleanVinylPro2/server/presets_defaults.json"
+# "Темний дальній план" as the server's list writes it, up to the value in question (the line of its colour is the
+# only one in the file; "Темний ключ" has the same values)
+_WIDE_JSON = '    "color": "#8468e8",\n    "builtin": true,\n    "cfg": {\n' + "".join(f'      "{k}": {v},\n' for k, v in (
+    ("spots", 80), ("scuffs", 55), ("blur", 0), ("feather", 65), ("seamOn", "true"), ("seam", 90), ("edge", 78), ("smokeOn", "false"),
+    ("smoke", 70), ("grain", 95), ("shadow", "true"), ("removeStands", "false"), ("master", 100), ("fracFine", "true"), ("fracMed", "true"),
+    ("fracLarge", "true"), ("dressSmooth", "false"), ("dressStrength", 40), ("cycCurve", 65)))
+_MOVE = '  { id: "darkDepth10", presets: ["lowkey", "lowkey_medium", "lowkey_wide"], key: "cycDepth", slider: "gSlDepth", from: 0, to: 10 }\n'
+_WIDE = "        wide = 1.0 + self.CORNER_DEPTH_WIDE * float(np.clip(depth / 100.0, 0.0, 1.0))\n"
+
+
+def _preset_js(preset_id, name, color, head, depth):
+    """The first lines of a built-in preset in DEFAULT_PRESETS of main.js, up to its depth."""
+    return f'    id: "{preset_id}",\n    name: "{name}",\n    color: "{color}",\n    builtin: true,\n    cfg: {{ {head}, cycCurve: 65, cycDepth: {depth},'
+
+
 # (name, check groups - or panel(<text>, ...), file, exact text, replacement)
 DEFECTS = [
-    # ---- what the fill is shown in place of the person (4.16.0; the dark stepped smear where the line of the paper
-    #      met the hem on the owner's 0Q5A3610): the backdrop that lies right beside the protected band.
-    ("paint: the person is painted over with the wide average alone, as up to 4.15.0 (the narrow steps are never taken)", "edge", ENGINE,
-     "        for sigma in (self.HEAL_SRC_STEPS if near else ()):\n",
-     "        for sigma in ():\n"),
-    ("paint: the first pass of the cleaning paints the former way whatever is asked", "edge", ENGINE,
-     "                            fill_s = self._backdrop_under_person(src_s, w_bg, near=src_near)\n",
-     "                            fill_s = self._backdrop_under_person(src_s, w_bg, near=False)\n"),
-    ("paint: only the wider of the two narrow steps - the backdrop 6 px around, not what lies right beside the band", "edge", ENGINE,
-     "    HEAL_SRC_STEPS = (6.0, 2.5)   # ...and the narrower ones that replace it where backdrop lies that near\n",
-     "    HEAL_SRC_STEPS = (6.0,)\n"),
-    ("paint: only the narrowest step - beside a marked place as tall as that window is wide it is blind, and the wide average shows", "edge", ENGINE,
-     "    HEAL_SRC_STEPS = (6.0, 2.5)   # ...and the narrower ones that replace it where backdrop lies that near\n",
-     "    HEAL_SRC_STEPS = (2.5,)\n"),
-    ("paint: a narrow step is taken in full only where its whole window is backdrop - never at the band", "edge", ENGINE,
-     "    HEAL_SRC_SEEN = 0.12          # of a window is backdrop: that step is taken in full\n",
-     "    HEAL_SRC_SEEN = 1.0\n"),
-    ("paint: the narrow steps average the frame as it is - the person comes into the paint", "edge", ENGINE,
-     "            beside = cv2.GaussianBlur(src_s * w_bg[:, :, None], (0, 0), sigmaX=sigma, sigmaY=sigma) / (den[:, :, None] + 1e-4)\n",
-     "            beside = cv2.GaussianBlur(src_s, (0, 0), sigmaX=sigma, sigmaY=sigma)\n"),
-    ("paint: a marked place counts as backdrop that stays (the first pass)", "edge", ENGINE,
-     "                        bg_valid = (~fg_bad_s) & (~hm_s)\n",
-     "                        bg_valid = (~fg_bad_s)\n"),
-    ("paint: the second pass of the cleaning still paints the person over with the wide average", "edge", ENGINE,
-     "                        f2 = cv2.resize(np.clip(self._backdrop_under_person(s2_img, w2, near=src_near), 0, 255).astype(np.uint8),\n",
-     "                        f2 = cv2.resize(np.clip(self._backdrop_under_person(s2_img, w2, near=False), 0, 255).astype(np.uint8),\n"),
-    ("paint: what the second pass marked counts as backdrop for its paint", "edge", ENGINE,
-     "                            w2[cv2.resize(spot2_mask, (sw2, sh2), interpolation=cv2.INTER_NEAREST) > 0] = 0.0\n",
-     "                            pass\n"),
-    ("paint: the stage cache does not tell the two ways apart (a repair made the other way is taken ready)", "edge", ENGINE,
-     "            k_heal = (k_detect, fast_mode, grain_keep, tone_edge, big_fill, src_near)\n",
-     "            k_heal = (k_detect, fast_mode, grain_keep, tone_edge, big_fill)\n"),
-    ("paint: Apply does not notice that the way was switched", "edge", ENGINE,
-     "            bool(p.get(\"bigFill\", True)), bool(p.get(\"srcNear\", True)),\n",
-     "            bool(p.get(\"bigFill\", True)),\n"),
-    ("paint: the switch is not read - the new way also where the pixels of v3.2.1 are asked for", "process", ENGINE,
-     "            src_near = bool(params.get(\"srcNear\", True))\n",
-     "            src_near = True\n"),
-    # ---- a new result leaves "До" (4.16.0; the owner: "when the bar reaches its end, show the photo after - now it
-    #      is before, inconvenient"). All of it is the panel: the scenarios named "a new result leaves 'До'".
-    ("view: the bar ends and 'До' stays on screen, as up to 4.15.0 (a recompute never shows its result)", panel("a new result leaves"), MAINJS,
-     "      done = true;\n      showNewResult();  // the bar reached its end (or the light refresh is back): \"До\" gives way to the result\n",
-     "      done = true;\n"),
-    ("view: only the bar leaves 'До' - the light refresh of a slider or a preset comes back unseen", panel("a new result leaves"), MAINJS,
-     "      showNewResult();  // the bar reached its end (or the light refresh is back): \"До\" gives way to the result\n",
-     "      if (!quick) showNewResult();\n"),
-    ("view: only the light refresh leaves 'До' - a run with the bar ends on the original", panel("a new result leaves"), MAINJS,
-     "      showNewResult();  // the bar reached its end (or the light refresh is back): \"До\" gives way to the result\n",
-     "      if (quick) showNewResult();\n"),
-    ("view: 'До' is left when the run STARTS, not when its picture comes (a cancelled run has switched the view by then)", panel("a new result leaves"), MAINJS,
-     "  const run = ++recomputeRun;\n  const newest = () => run === recomputeRun;\n",
-     "  const run = ++recomputeRun;\n  const newest = () => run === recomputeRun;\n  showNewResult();\n"),
-    ("view: a run that was cancelled or failed leaves 'До' too, though it brought nothing", panel("a new result leaves"), MAINJS,
-     "      sessState.recomputing = false;\n      sessState.previewBusy = false;\n    }\n  }\n",
-     "      sessState.recomputing = false;\n      sessState.previewBusy = false;\n      showNewResult();\n    }\n  }\n"),
-    ("view: the answer of a run that gave way to a newer one leaves 'До' while the bar is still running", panel("a new result leaves"), MAINJS,
-     "    if (!newest()) return false;  // a newer call is on its way: this answer is for values that are gone\n",
-     "    if (!newest()) { showNewResult(); return false; }\n"),
-    ("view: 'Маска' is left as well when a new result comes", panel("a new result leaves"), MAINJS,
-     "function showNewResult() {\n  if (sessState.view === \"original\") setView(\"result\");\n",
-     "function showNewResult() {\n  if (sessState.view !== \"result\") setView(\"result\");\n"),
-    ("view: the exact picture that comes by itself takes the original away from whoever looks at it", panel("a new result leaves"), MAINJS,
-     "    if (!refine) showNewResult();\n",
-     "    showNewResult();\n"),
-    ("view: with 2 passes the picture of a change comes in the background and 'До' stays on screen", panel("a new result leaves"), MAINJS,
-     "    if (!refine) showNewResult();\n",
+    # ---- "Глибина" 10 in the dark presets (4.17.0; the owner had put 10 on a low-key frame by hand and, asked
+    #      whether the dark presets should come with it, wrote «я поставив 10 став одразу»).
+    # The engine is as it was. What the new value leans on - a small depth is a small step - is asked of it now:
+    ("depth: any depth above 0 widens the cove in full - the 10 of the dark presets is as much as 100", "depth", ENGINE,
+     _WIDE, "        wide = 1.0 + self.CORNER_DEPTH_WIDE * float(depth > 0)\n"),
+    ("depth: the widening is twice what the slider says - 10 does what 20 should", "depth", ENGINE,
+     _WIDE, "        wide = 1.0 + self.CORNER_DEPTH_WIDE * float(np.clip(depth / 50.0, 0.0, 1.0))\n"),
+    ("depth: a depth under 20 counts as none - what the dark presets ship does nothing", "depth", ENGINE,
+     _WIDE, "        wide = 1.0 + self.CORNER_DEPTH_WIDE * float(np.clip((depth if depth >= 20 else 0.0) / 100.0, 0.0, 1.0))\n"),
+    # What the presets ship: the plugin's own list and the server's.
+    ("presets: 'Темний дальній план' ships depth 0, as up to 4.16.0 (the plugin's list)", panel(*DEPTH10), MAINJS,
+     _preset_js("lowkey_wide", "Темний дальній план", "#8468e8", "spots: 80, scuffs: 55, blur: 0", 10),
+     _preset_js("lowkey_wide", "Темний дальній план", "#8468e8", "spots: 80, scuffs: 55, blur: 0", 0)),
+    ("presets: 'Темний ключ' ships depth 0, as up to 4.16.0 (the plugin's list)", panel(*DEPTH10), MAINJS,
+     _preset_js("lowkey", "Темний ключ", "#9d7cff", "spots: 80, scuffs: 55, blur: 0", 10),
+     _preset_js("lowkey", "Темний ключ", "#9d7cff", "spots: 80, scuffs: 55, blur: 0", 0)),
+    ("presets: 'Темний середній план' ships depth 0, as up to 4.16.0 (the plugin's list)", panel(*DEPTH10), MAINJS,
+     _preset_js("lowkey_medium", "Темний середній план", "#b190ff", "spots: 72, scuffs: 50, blur: 0", 10),
+     _preset_js("lowkey_medium", "Темний середній план", "#b190ff", "spots: 72, scuffs: 50, blur: 0", 0)),
+    ("presets: the server's list keeps depth 0 for 'Темний дальній план' (presets_defaults.json)", panel(*DEPTH10), PRESETS_JSON,
+     _WIDE_JSON + '      "cycDepth": 10,\n', _WIDE_JSON + '      "cycDepth": 0,\n'),
+    # The one-time move for a PC that holds its presets.
+    ("move: there is no move for the dark presets - a PC that holds its presets keeps depth 0 in them", panel(*DEPTH10), MAINJS,
+     _MOVE, ""),
+    ("move: the dark close-up is moved too ('Темний ближній план' has no corner tool and ships 0)", panel(*DEPTH10), MAINJS,
+     _MOVE, _MOVE.replace('"lowkey_medium", "lowkey_wide"]', '"lowkey_medium", "lowkey_close", "lowkey_wide"]')),
+    ("move: 'Темний ключ' is left out of the move", panel(*DEPTH10), MAINJS,
+     _MOVE, _MOVE.replace('["lowkey", "lowkey_medium", "lowkey_wide"]', '["lowkey_medium", "lowkey_wide"]')),
+    ("move: 'Темний середній план' is left out of the move", panel(*DEPTH10), MAINJS,
+     _MOVE, _MOVE.replace('["lowkey", "lowkey_medium", "lowkey_wide"]', '["lowkey", "lowkey_wide"]')),
+    ("move: 'Темний дальній план' is left out of the move - the preset of a dark full-length frame keeps 0", panel(*DEPTH10), MAINJS,
+     _MOVE, _MOVE.replace('["lowkey", "lowkey_medium", "lowkey_wide"]', '["lowkey", "lowkey_medium"]')),
+    ("move: the slider of the active dark preset is not moved (the move names no slider)", panel(*DEPTH10), MAINJS,
+     _MOVE, _MOVE.replace(' slider: "gSlDepth",', '')),
+    ("move: the move leads to 60, the depth of the light presets", panel(*DEPTH10), MAINJS,
+     _MOVE, _MOVE.replace("to: 10 }", "to: 60 }")),
+    ("move: the move takes 60 for the former value - a dark preset at 0 is never moved", panel(*DEPTH10), MAINJS,
+     _MOVE, _MOVE.replace("from: 0,", "from: 60,")),
+    ("move: a move does not ask what the preset holds - a depth the user saved into a dark preset is replaced by 10", panel(*DEPTH10), MAINJS,
+     "      if (!isFormer(p.cfg[m.key] ?? m.from)) return;\n",
      ""),
-    ("view: 'До / Після' pressed while the first bar is running - the window opens on the original", panel("a new result leaves"), MAINJS,
-     "      showNewResult();  // (\"До / Після\" pressed while the first bar was running: the bar ends on the result too)\n",
-     ""),
-    ("view: the first bar ends on the cleaned photo whatever was asked for - also when 'Маска' was pressed", panel("a new result leaves"), MAINJS,
-     "      showNewResult();  // (\"До / Після\" pressed while the first bar was running: the bar ends on the result too)\n",
-     "      setView(\"result\");\n"),
-    ("view: the clothing tick on 'До' brings its picture unseen", panel("a new result leaves"), MAINJS,
-     "      if (takeSessionPictures(d)) showNewResult();\n",
-     "      takeSessionPictures(d);\n"),
-    ("view: a step on the mask (inversion, Ctrl + Z) leaves 'До' - it says in words what it did, the view is the user's", panel("a new result leaves"), MAINJS,
-     "      if (typeof d.mask_share === \"number\") sessState.maskShare = d.mask_share;\n      if (d.history) setEditHistory(d.history);\n",
-     "      if (typeof d.mask_share === \"number\") sessState.maskShare = d.mask_share;\n      if (d.history) setEditHistory(d.history);\n      showNewResult();\n"),
-    ("view: the hint of 'До / Після' does not say that a new result brings the cleaned photo back by itself", panel("a new result leaves"), PLUGIN + "/index.html",
-     " Коли готовий новий результат (після галочки, повзунка чи «↻ Перерахувати»), вікно само повертається до чистого фото.",
-     ""),
-    # (Not in the list, because the checks cannot tell:
-    #   - "a run that the SERVER stopped for a request of another window leaves 'До'" (the branch `d.superseded` of
-    #     the newest call): the scripted server of the test stops a run only for a newer request of the same window,
-    #     and that older call is not the newest any more.)
+    ("move: a move does not ask what stands on the slider - a depth put there by hand is replaced by 10", panel(*DEPTH10), MAINJS,
+     "    if (m.slider && getSliderVal(m.slider) === m.from) {\n",
+     "    if (m.slider) {\n"),
+    # The hint of the row.
+    ("hint: the hint of 'Глибина' still says 0% for the dark presets", panel(*DEPTH10), PLUGIN + "/index.html",
+     "У світлих пресетах стоїть 60%, у темних — 10%.",
+     "У світлих пресетах стоїть 60%, у темних — 0%."),
+    # (Not in the list, because it is no rule of the program: which number is right for a dark frame. 10 is the
+    #  owner's own choice; what it does on his six dark frames was measured and looked at - see AGENTS.md.)
 ]
 
 def _label(groups) -> str:

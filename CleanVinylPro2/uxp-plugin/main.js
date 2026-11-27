@@ -6,7 +6,7 @@ const uxpShell = uxp.shell;
 const CANDIDATE_URLS = ["http://127.0.0.1:18746", "http://localhost:18746"];
 // The same number as in manifest.json and server.py. A server of another version still answers (for example the
 // previous one that was left running after an update) - the panel then says how to restart it.
-const PLUGIN_VERSION = "4.16.0";
+const PLUGIN_VERSION = "4.17.0";
 let SERVER_URL = CANDIDATE_URLS[0];
 
 const DEFAULT_PRESETS = [
@@ -43,14 +43,14 @@ const DEFAULT_PRESETS = [
     name: "Темний ключ",
     color: "#9d7cff",
     builtin: true,
-    cfg: { spots: 80, scuffs: 55, blur: 0, cycCurve: 65, cycDepth: 0, feather: 65, seamOn: true, seam: 90, edge: 78, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
+    cfg: { spots: 80, scuffs: 55, blur: 0, cycCurve: 65, cycDepth: 10, feather: 65, seamOn: true, seam: 90, edge: 78, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
   },
   {
     id: "lowkey_medium",
     name: "Темний середній план",
     color: "#b190ff",
     builtin: true,
-    cfg: { spots: 72, scuffs: 50, blur: 0, cycCurve: 65, cycDepth: 0, feather: 68, seamOn: true, seam: 80, edge: 82, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
+    cfg: { spots: 72, scuffs: 50, blur: 0, cycCurve: 65, cycDepth: 10, feather: 68, seamOn: true, seam: 80, edge: 82, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
   },
   {
     id: "lowkey_close",
@@ -64,7 +64,7 @@ const DEFAULT_PRESETS = [
     name: "Темний дальній план",
     color: "#8468e8",
     builtin: true,
-    cfg: { spots: 80, scuffs: 55, blur: 0, cycCurve: 65, cycDepth: 0, feather: 65, seamOn: true, seam: 90, edge: 78, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
+    cfg: { spots: 80, scuffs: 55, blur: 0, cycCurve: 65, cycDepth: 10, feather: 65, seamOn: true, seam: 90, edge: 78, smokeOn: false, smoke: 70, grain: 95, shadow: true, removeStands: false, master: 100, fracFine: true, fracMed: true, fracLarge: true, dressSmooth: false, dressStrength: 40, cleanPasses: 1 }
   },
   {
     id: "clean_stands",
@@ -142,9 +142,14 @@ const PRESET_DEFAULT_MOVES = [
   // 4.5.0: ...and the wall-floor line goes on a dark backdrop as well
   { id: "lowkeyCyc65", presets: ["lowkey"], key: "cycCurve", slider: "gSlCyc", from: 0, to: 65 },
   // 4.14.0: "Глибина" - the cove of the corner tool is wider on a light backdrop (a preset saved before knows no
-  // such value: that counts as 0). The dark presets stay at 0: there the wider cove carries the pool of light the
-  // person stands in up a black wall.
-  { id: "depth60", presets: ["std", "medium_shot", "wide_shot", "clean_stands"], key: "cycDepth", slider: "gSlDepth", from: 0, to: 60 }
+  // such value: that counts as 0). The dark presets stayed at 0 then: at 60 the wider cove carries the pool of
+  // light the person stands in up a black wall.
+  { id: "depth60", presets: ["std", "medium_shot", "wide_shot", "clean_stands"], key: "cycDepth", slider: "gSlDepth", from: 0, to: 60 },
+  // 4.17.0: ...and 10 in the dark presets that have the corner tool. The owner had set 10 by hand on a low-key
+  // frame, and asked whether the dark presets should come with it he wrote «я поставив 10 став одразу». (With the
+  // automatic preset every dark frame opens with the values of its preset, so a 10 put on the slider was gone
+  // with the next photo.) "Темний ближній план" has no corner tool: its depth would do nothing and stays 0.
+  { id: "darkDepth10", presets: ["lowkey", "lowkey_medium", "lowkey_wide"], key: "cycDepth", slider: "gSlDepth", from: 0, to: 10 }
 ];
 const PRESET_SWITCHES = {
   smokeOn: { get: () => smokeEnabled, set: (v) => { smokeEnabled = !!v; } }
