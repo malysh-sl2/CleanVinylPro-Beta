@@ -324,6 +324,30 @@ written here and in the repository.
   (1) a picture of the place was made from his own frame and result and opened in his viewer beside
   the chat (section 4, «A question about a place needs a picture»).
 
+- **2026-11-27, on reply #25** (two messages one after the other, no files; the second came while the
+  agent had not answered the first. Written down before any work on them). His words, all of them:
+  «а нащо зливати якщо ти можеж редагувати далі то зливай мені перший варіан не потрібний. дивися я
+  ставлю галочку щзі стойками а вона відключається зроби як я посллідніраз ш так би вона і другий раз
+  була»
+  «і ще у назві плагіна пиши версію бо деколи не розумію чи установ нову чи то стара»
+  Read as - three things:
+  (1) the merge. Reply #25 had ended with "pull request #1 stays open; write «зливай» and it is
+  merged". He asks what merging is for, and says: if the agent can go on editing, then merge - he
+  does not need the first variant (the old program 3.2.1 in the folder `CleanVinylPro/`, which the
+  merge takes out of `main`; from his PC he removed it himself). The word «зливай» is there, but
+  under a condition - «якщо ти можеж редагувати далі» - and section 6 says the opposite of that
+  condition: merging ends this session's ability to push. The text of the pull request says so;
+  whether a reply ever told him is not recorded (section 3, «Merging», has only what he was told
+  merging means). That reading, and what follows from it, are the agent's;
+  (2) the tick «Стійки» at the top of the big window: he puts it and it goes off again; it should be
+  the next time the way he left it the last time. (It is a value of the preset, and every built-in
+  preset but «Чистка + стійки» carries it off: each new photo with the automatic preset, and each
+  click on a preset, take the tick away.) The same story as «Глибина» 10 in 4.17.0, said of a tick;
+  (3) the version in the name of the plugin: he cannot always tell whether the new one is installed
+  or still the old one.
+  No option card was shown. Nothing about 4.16.0, 4.17.0, the smear, or the question of reply #25
+  (is 10 right on his other dark frames).
+
 ## 2. What is in the repository
 
 | Path | What it is | Rule |
