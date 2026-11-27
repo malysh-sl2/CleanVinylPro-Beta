@@ -347,6 +347,8 @@ written here and in the repository.
   or still the old one.
   No option card was shown. Nothing about 4.16.0, 4.17.0, the smear, or the question of reply #25
   (is 10 right on his other dark frames).
+  4.18.0 answers (2) and (3) (reply #26). The pull request was NOT merged, and the reply told him why
+  (section 3, «Merging»).
 
 ## 2. What is in the repository
 
@@ -1467,13 +1469,62 @@ second plugin next to the installed one and lose his presets.
     `tests/try_defects.py` holds the 18 defects of 4.17.0 (3 «depth: …» in the engine, 15 in the
     panel).
 
+- **4.18.0** — the tick «Стійки» stays as it was left, and the version stands next to the name of the
+  plugin; after his two messages of 2026-11-27 on reply #25 (section 1). The engine and the server did
+  not change.
+  - **Why the tick went off.** Up to 4.17.0 `removeStands` was a value of the preset: `applyConfig` put
+    the box from it, and every built-in preset but «Без стійок (AI)» (`clean_stands`) ships it off.
+    With the automatic preset (on by default) that meant, for every photo: the sets offered to the
+    server said "keep the stands" (the first scan itself carried the tick he had left - the server
+    took the set of the frame instead), the frame was cleaned WITH the stands, the preset put on
+    the controls took the tick off, he put it again and waited for a full recompute. A click on a
+    preset took it off too. (The new scenarios, run on the plugin of 4.17.0, show exactly that.)
+  - **The tick is the user's own** now (`standsEnabled` in `main.js`), like the mixer brush:
+    `readCurrentConfig()` and `normalizedPresetConfig()` - so every set of `buildScenePresets` - carry
+    it; `applyConfig` leaves the box alone and `updateSliderVisuals` shows the switch;
+    `presetConfigToSave()` drops `removeStands`, so a preset saved now holds no word of it (the
+    shipped lists keep the key as it was - `true` in `clean_stands` - and nothing reads it); the
+    settings keep it as `standsOn` (and as `cfg.removeStands`, which a plugin of 4.17.0 reads).
+  - **What puts it and what takes it off.** The box. And `applyPreset(p, byHand)` with `byHand` true
+    - a click on a preset in the list, or «Скинути пресет» - for a preset of `STANDS_PRESET_IDS`
+    (`clean_stands` only): that PUTS the tick, the name of the preset promises it. Nothing takes it
+    off but the user: no preset clicked by hand, no preset the program picks, not `clean_stands`
+    put on the controls by the program (the active preset after a restart, the automatic choice
+    off). A preset of the user's own that 4.17.0 saved with `removeStands: true` does not put it.
+    A settings file or a backup that is read sets it both ways.
+  - **A PC of 4.17.0.** `applySettingsSnapshot` takes `standsOn` when the file has it, else
+    `cfg.removeStands` - the box as it stood when 4.17.0 last wrote the settings (it writes them
+    after every change). So the first photo after the update opens the way he left the tick. The
+    presets on the PC are not rewritten.
+  - **The note of the opening.** A window that opens with the tick on says so in the corner of the
+    photo, after the words about the automatic preset: «Стійки прибираються: галочка «Стійки» стоїть,
+    як ви її лишили.» Things at the borders go, and this time he did not ask for it.
+  - **The hint** of the tick (`index.html`) and both sentences of the hint line say that it stays.
+  - **The version next to the name.** `manifest.json`: `"name"` and the label of the panel are «Чистий
+    Вініл Pro 4.18.0» - WRITTEN BY HAND with every version (section 4). Photoshop takes from them the
+    Plugins menu, the tab of the panel and the plugin list. `main.js`: `PLUGIN_NAME` and
+    `PLUGIN_TITLE` (name and version) - the title of the big window; a line under the name on the
+    panel, `#brandVersion`, is filled at the start with «версія » and `PLUGIN_VERSION`. The layers
+    and the step of the History panel keep the plain name: no version goes into a document. The
+    group `server` and the window test compare all of it with the version.
+  - NOT built: the same for the smoke tick and the shadows tick, which are still values of the preset
+    (he named the stands; reply #26 asks about the smoke tick); a version in the names of the ZIP,
+    the `.ccx` or the folder (the download link, the installer and "copy over the old folder" lean
+    on those names); the merge (section 3).
+  - Checks: the settings test has 110 cases (25 new: the tick in a settings file of 4.17.0 and of
+    4.18.0, read into a panel where it stands or not; what the sets carry; what puts the tick and
+    what does not; what a saved preset holds); the window test has 132 scenarios (five new «'Стійки'
+    …»; the older one of the tick and the one of the name rewritten; the two of the backup ask for
+    the tick); the group `server` asks for the version next to the name; `tests/try_defects.py`
+    holds the 34 defects of 4.18.0 (23 «stands: …», 11 «name: …»), all in the panel.
+
 ## 3. Current state — update this at the end of every session
 
-_Last updated: by the agent of the first session, after releasing 4.17.0 (the answer to his message of
-2026-11-27 on the questions of reply #24)._
+_Last updated: by the agent of the first session, after releasing 4.18.0 (the answer to his two messages
+of 2026-11-27 on reply #25)._
 
-- **Released:** 4.17.0, tag `cvp2-v4.17.0`, as a pre-release. Direct download:
-  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.17.0/CleanVinylPro2.zip`
+- **Released:** 4.18.0, tag `cvp2-v4.18.0`, as a pre-release. Direct download:
+  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.18.0/CleanVinylPro2.zip`
 - **Owner's progress:** 4.2.0 to 4.12.0 have been installed and work on his PC (program in
   `D:\Plugin Photoshop\CleanVinylPro2`, models in `D:\model AI fotoshop`, LaMa on `CUDAExecutionProvider`,
   Python 3.12.10). So the `.bat` files, the installer, the GPU, the real models and the panel HAVE run on
@@ -1517,40 +1568,47 @@ _Last updated: by the agent of the first session, after releasing 4.17.0 (the an
   him; Photoshop 28.0 is all right; the dark presets should come with «Глибина» 10 - 4.17.0 does
   that (reply #25). WHETHER 4.16.0 IS INSTALLED HE DID NOT SAY: nothing of his is known about its
   two changes yet.
-  **He has not reported on 4.16.0 or 4.17.0 yet.**
+  On 2026-11-27, after reply #25 (section 1): he ticks «Стійки» on his frames and the tick went off
+  by itself - it should stay as he left it; the version should stand in the name of the plugin, he
+  cannot always tell whether the new one is installed; and why merge, if the agent can go on
+  editing - the first variant is not needed. 4.18.0 answers the first two (reply #26); the pull
+  request was not merged («Merging», below). Read from that, not said by him: he does install the
+  versions (which one he has now is not known), and he works with the automatic preset on or
+  clicks presets - the tick went off only then.
+  **He has not reported on 4.16.0, 4.17.0 or 4.18.0 yet** - not on the smear, not on «Глибина» 10.
   The path to the plugin list of Creative Cloud (Stock & Marketplace → Plugins → Manage plugins → the three
   dots → Uninstall; the same list opens from Photoshop with Plugins → Manage Plugins) is in section 6 of
   the manual since 4.8.0. Whether his Creative Cloud shows these names in English or in Ukrainian is not
   known.
 - **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (50 results in
-  2152 s; 127 scenarios of the panel test and 85 cases of the settings test among them) on
+  2066 s; 132 scenarios of the panel test and 110 cases of the settings test among them) on
   2026-11-27 (the clock of the sandbox), with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4, with
   nothing running next to it.
-  Deliberate defects for what is new in 4.17.0 (`tests/try_defects.py`), put in one by one: 18 - 3 in
-  the engine («depth: …», asked of the group `depth`: the engine did not change, its check did) and
-  15 in the panel (what each of the three dark presets ships in the plugin's list, what the
-  server's list holds, the move and its parts, the two rules every move obeys, the hint of the
-  row), asked of the settings test and of the scenarios «'Глибина' …», «automatic preset: a dark
-  frame takes …» and «restoring a backup made by an older version …». All are caught by the checks
-  as they are now, each by the line of the rule it breaks. They ran in a copy of the tree after
-  the last change of the panel and the checks: 18 in one run of 340 s.
-  Holes found while 4.17.0 was built, all closed:
-  - "the widening is twice what the slider says" was caught by a hair. The first shape of the new
-    line of `depth` allowed "a fifth of what 60 does", and with that defect 60 does what 100
-    should: 4.3 against a fifth of 20.5. The limits are levels of the drawn frame now (0.7 to 3.0
-    on the wall, 8.0 for a pixel); 4.3 and 10.7 fail them plainly;
-  - a defect in the server's list of presets could not be tried at all: the settings test read
-    `presets_defaults.json` from the repository, whatever plugin it was pointed at. It reads the
-    file next to the plugin under test now (the runner had always put a copy there);
-  - a new case of the settings test ("a fresh install: nothing moves") failed for the helper's own
-    start: without a settings file its sliders stand at 0, and the moves then move the SLIDERS of
-    the active preset. A case that asks for "nothing moves" puts the values of the preset on the
-    controls first.
-  Not in the list, because it is no rule of the program: which number is right on a dark frame. 10
-  is his own choice; what it does on his six dark frames was measured and looked at (section 2).
-  Holes found while earlier versions were built are told in the history of this file (4.16.0: at
-  `b27ccd3`; 4.15.0: at `f60cf37`; 4.14.0: at `2fd2d21`; 4.13.0: at `155e1ce`; 4.12.0: at `8b620e2`;
-  4.11.0: at `07e8995`; 4.10.0: at `64700aa`; 4.9.0: at `78a08b8`; 4.8.0: at `0f4cb46`).
+  Deliberate defects for what is new in 4.18.0 (`tests/try_defects.py`), put in one by one: 34, all in
+  the panel. 23 «stands: …» - what took the tick away up to 4.17.0; the tick itself, its box and
+  its pill; the settings, a file of 4.17.0, a backup; which preset puts the tick and when; what the
+  window says - asked of the settings test and of the six scenarios «'Стійки' …», those of the
+  settings also of the two backup scenarios. 11 «name: …» - the name and the label of the manifest
+  without the version or with the number before, the title of the window, the line on the panel,
+  the step of the History panel - eight asked of the scenario of the name, three of the group
+  `server`. All are caught by the checks as they are now, each by the line of the rule it breaks.
+  They ran in a copy of the tree after the last change of the panel and the checks: 34 in one run
+  of 865 s.
+  Holes found while 4.18.0 was built, all closed:
+  - "the settings can only put the tick, never take it off" was caught by one line alone, and that
+    line asks which of two words of a settings file wins when they disagree - a pair that no file
+    written by the program holds. Nothing asked the real case: a file or a backup with the tick
+    off, read while the tick stands. The settings test now reads such files into a panel where the
+    tick stands, and the scenario «'Стійки' in a backup» restores three backups one after another;
+  - the same defect had a name that claimed more than it did ("a tick taken off comes back after a
+    restart"): at a start the tick is off before any file is read, so nothing comes back.
+  Not in the list, because the checks cannot tell: how Photoshop shows the name of the manifest (the
+  Plugins menu, the tab, the list of Creative Cloud), and whether a panel whose label changes with
+  every version keeps its place in his workspace.
+  Holes found while earlier versions were built are told in the history of this file (4.17.0: at
+  `ab97249`; 4.16.0: at `b27ccd3`; 4.15.0: at `f60cf37`; 4.14.0: at `2fd2d21`; 4.13.0: at `155e1ce`;
+  4.12.0: at `8b620e2`; 4.11.0: at `07e8995`; 4.10.0: at `64700aa`; 4.9.0: at `78a08b8`; 4.8.0: at
+  `0f4cb46`).
   Their lessons stay rules: read the reason after "<-" of every caught defect - when it names another rule
   than the one the defect breaks, the check that should have noticed is too weak (the runner shows only
   the FIRST failed rule: put the defect in by hand and read the whole list when in doubt); read the
@@ -1573,11 +1631,37 @@ _Last updated: by the agent of the first session, after releasing 4.17.0 (the an
   the rule a case where it decides; after a constant was tuned, every defect is run again.
   From 4.17.0: the limit of a check is a number of its own frame, never a share of what the same
   code does elsewhere - a fault that scales everything scales such a limit with it.
-  The runners of earlier versions are gone or replaced (4.16.0: 26 defects, in the history at `b27ccd3`;
-  4.15.0: 63, at `f60cf37`; 4.14.0: 42, at `2fd2d21`; 4.13.0: 43, at `155e1ce`;
+  From 4.18.0: the name of a defect is a claim about the program - when the line that catches it
+  speaks of something else, ask whether the defect does what its name says, and whether the real
+  case has a check at all.
+  The runners of earlier versions are gone or replaced (4.17.0: 18 defects, in the history at `ab97249`;
+  4.16.0: 26, at `b27ccd3`; 4.15.0: 63, at `f60cf37`; 4.14.0: 42, at `2fd2d21`; 4.13.0: 43, at `155e1ce`;
   4.12.0: 45, at `8b620e2`; 4.11.0: 30, at `07e8995`; 4.10.0: 54, at `64700aa`; 4.9.0: 35, at `78a08b8`;
   4.8.0: 71, at `0f4cb46`; 4.7.0: 29, at `c3be3ed`; 4.6.0: 34, at `50bae15`; 4.5.0: 71 and 4.4.0: 41, never
   committed); their checks are still in `tests/run_checks.py`.
+- **Decided by the agent alone for 4.18.0** (no option card; change it if he says otherwise):
+  - the tick «Стійки» is the user's own for EVERY preset, not only against the automatic choice: a
+    click on a preset no longer takes it off either. His words name no cause («вона відключається»);
+  - one preset puts it: «Без стійок (AI)», and only when he clicks it (or resets it). A preset of
+    his own that an older version saved with the tick does not;
+  - a preset no longer stores the tick;
+  - after the update the tick stands as the settings of 4.17.0 last held it;
+  - a window that opens with the tick on says so for a few seconds (he did not ask for the note);
+  - the smoke tick and the shadows tick stay values of the preset (he named the stands only);
+    reply #26 asks whether the smoke tick should stay too;
+  - the version stands after the name - «Чистий Вініл Pro 4.18.0» - in the manifest (the Plugins
+    menu, the tab), as «версія 4.18.0» under the name on the panel, and in the title of the big
+    window; not in the layers, the History panel or the names of the files;
+  - the pull request was NOT merged although the word «зливай» is in his message («Merging», below).
+- **Not run in Photoshop yet (4.18.0):** all of it. In particular:
+  - how Photoshop shows a name that carries the version: the Plugins menu, the tab of the panel,
+    the plugin list of Creative Cloud, the dialog of the `.ccx`; whether the tab changes at once
+    after an update or only after Photoshop is started again;
+  - whether a panel whose label changes with every version keeps its place in his workspace (the
+    id of the panel is the same; at 4.8.0 the name changed once and he did not complain);
+  - the two lines of the header of the panel at its smallest width (250 px);
+  - the tick on his real settings file: it is read from `cfg.removeStands` of what 4.17.0 wrote;
+  - everything of 4.16.0 and 4.17.0 as well: he has not written about either.
 - **Decided by the agent alone for 4.17.0** (no option card; change it if he says otherwise):
   - «став одразу» is read as "put it there from the start" (section 1);
   - all THREE dark presets with the corner tool get 10. He had put it on «Темний дальній план»; the
@@ -1973,16 +2057,29 @@ _Last updated: by the agent of the first session, after releasing 4.17.0 (the an
   - of 4.5.0, still unconfirmed: opening the backup folder from the panel, the look of the new buttons,
     the one-time preset moves. (Ctrl+Z works in Photoshop: he confirmed it.)
 - **Merging:** pull request #1 (`arena/33f1ced8-cleanvinylpro-beta` into `main`) is open and deliberately not
-  merged yet: fixes that follow his report on 4.17.0 should come from the session that knows the code. He
-  asked what merging into `main` means and was told: the version is already published and can be downloaded;
-  merging only marks it on GitHub as the main one and changes nothing on his PC; he should write «зливай»
-  when he wants it. Merge it when he writes that or when the session ends (section 6). If `main` already
-  contains this file, that has happened. Merging also removes the folder `CleanVinylPro/` from `main`.
+  merged. On 2026-11-27 he wrote «а нащо зливати якщо ти можеж редагувати далі то зливай мені перший
+  варіан не потрібний» (section 1). The word is there, and so is the condition - "if you can go on
+  editing" - while by section 6 a merge ends this session's ability to push; and he sent two more
+  wishes in the same breath. So it was not merged, and reply #26 told him: merging changes nothing
+  on his PC and nothing in the downloads; it only makes this work the main one on GitHub and takes
+  the old program out of `main`; after it this chat can deliver nothing more (Arena's rule, as
+  section 6 has it), and the next wish would need a new chat; so the pull request waits until he
+  says the work is finished - or is merged at once if he writes «зливай зараз», knowing that. The
+  old program he does not need is not on his PC and in no download; it only lies in `main` until
+  the merge.
+  Whether a session can go on after a merge was not tried: a wrong guess would cost him the chat
+  that knows the code.
+  Merge it when he writes «зливай зараз», says the work is done, or when the session ends (section
+  6). If `main` already contains this file, that has happened. Merging also removes the folder
+  `CleanVinylPro/` from `main`.
 
-### Open questions (ask when he reports on 4.17.0)
+### Open questions (ask when he reports on 4.18.0)
 
-- New with 4.17.0 (asked in reply #25): is 10 right on his other dark frames, or does he end up
-  with another number?
+- New with 4.18.0 (asked in reply #26): should the smoke tick stay as he leaves it too, like
+  «Стійки» now? Not asked, to be read from his next message: is the version shown where he looks
+  (the Plugins menu, the tab of the panel); does the tick hold on his PC.
+- From 4.17.0 (asked in reply #25, not answered and not asked again in #26): is 10 right on his other
+  dark frames, or does he end up with another number?
 - From 4.16.0 (asked in reply #24). Answered on 2026-11-27: «До» after a slider does not matter;
   Photoshop 28.0 is all right. NOT answered: is the dark smear beside the hem of `0Q5A3610` gone on
   his PC (x 2806-2899, y 4583-4623)? He did not understand the question as told in words; reply
@@ -2033,12 +2130,13 @@ _Last updated: by the agent of the first session, after releasing 4.17.0 (the an
   Now it is evened and stays.
 - Does he want the wall smoothed as strongly as in his retouch of frame 2? Then «Розмиття фону» should get a
   default above 0 in «Дальній план». (Open since 4.4.0.)
-- His retouch removes the studio gear at the frame edges; the presets leave it (`removeStands` off, as before).
-  (Open since 4.5.0, asked once, not answered.)
+- His retouch removes the studio gear at the frame edges; the presets leave it (`removeStands` off). Open
+  since 4.5.0; answered by use on 2026-11-27: he ticks «Стійки» on his frames and wants the tick to stay
+  (4.18.0). The presets still ship it off, so a fresh installation starts without the tick.
 - A series shot with smoke and the automatic preset: every frame opens with smoke protection off and a note
   that smoke was seen. The manual tells him to untick «Авто…» and pick «Зйомка з димом» for such a series.
   If that is a nuisance, the smoke switch could be kept as the user left it when the automatic preset is put
-  on the controls.
+  on the controls. (4.18.0 did that for «Стійки»; reply #26 asks whether the smoke tick should follow.)
 
 ### Offered to the owner, not built (he has not asked for them)
 
@@ -2084,6 +2182,9 @@ _Last updated: by the agent of the first session, after releasing 4.17.0 (the an
   on his side, a shipped value with a move in `PRESET_DEFAULT_MOVES` on ours (4.17.0: he had set
   «Глибина» 10 by hand and asked for it "from the start"). A move cannot tell a value he saved that
   equals the former default from the default itself.
+  A TICK he wants every time is taken out of the presets instead (4.18.0: «Стійки» became the user's
+  own switch, like «Мікс»). Still values of the preset, and so put back by every preset that lands
+  on the controls: the smoke tick, «Зберігати тіні під моделлю», the seam switch.
 
 ### Known limits of the image processing
 
@@ -2345,9 +2446,10 @@ npm install --prefix tests jsdom@24      # for the panel test; the folder is git
 /tmp/cvenv/bin/python tests/run_checks.py install bat    # only the groups named
 /tmp/cvenv/bin/python tests/run_checks.py --full         # more random cases
 
-# the deliberate defects of the latest version: 6 minutes for 4.17.0 (2 for the 3 of the engine - each runs
-# the group depth, 40 s - and 4 for the 15 of the panel, 15 s each; 22 minutes for the 26 of 4.16.0); it
-# patches engine.py in place - run those in a copy of the tree (below)
+# the deliberate defects of the latest version: 14 minutes for the 34 of 4.18.0, all in the panel (23 run
+# the six scenarios «'Стійки'», about 37 s each; 11 of the name take 2 s each). Three of those go through the
+# group server and patch the plugin in place, as every defect of the engine does: run in a copy of the tree
+# (below). For comparison: 6 minutes for the 18 of 4.17.0, 22 for the 26 of 4.16.0
 /tmp/cvenv/bin/python tests/try_defects.py               # ends with "N of N defects caught"
 /tmp/cvenv/bin/python tests/try_defects.py "called a line" "the slider"   # only the defects whose name or group has these words
 /tmp/cvenv/bin/python tests/try_defects.py panel:        # only the defects of the panel (they go into a copy
@@ -2396,6 +2498,9 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
 - **Version number:** it lives in `server/server.py` (`APP_VERSION`), `uxp-plugin/manifest.json`,
   `uxp-plugin/main.js` (`PLUGIN_VERSION`), the `echo` lines of `install_windows.bat`, `start_gpu_server.bat`
   and `restart_gpu_server.bat`, and the manual. The group `server` fails if they disagree.
+  Since 4.18.0 the number also stands in the NAME of the plugin: `"name"` and the label of the panel
+  in `manifest.json` are «Чистий Вініл Pro X.Y.Z» - two more places to write by hand (the line on
+  the panel and the title of the window take it from `PLUGIN_VERSION`).
   `start_gpu_server.bat` also compares the version of a running server in two Python one-liners
   (`d.get('version')=='X'`). In the three `.bat` the old number stands in 1, 1 and 6 places and nowhere
   else: replace it as bytes, so that CRLF stays. `README.md` (link and number) and the manual (title, the
@@ -2868,6 +2973,22 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   BEFORE starting it** (4.17.0). A stale sentence of the manual (a backdrop is dark under 26) was
   noticed a few minutes into the release run; the manual is in the ZIP, the run compares the ZIP
   with the folder, so the run was stopped and started again.
+- **A new module variable of `main.js` must be declared in the settings test too** (4.18.0). That test
+  runs functions cut out of `main.js` with stub globals of its own, in several code blocks; a function
+  that reads a variable its block lacks dies with a ReferenceError before one case is counted. Put
+  the variable next to `mixEnabled` in every block.
+- **"Photoshop started again" can be a second panel inside one scenario** (4.18.0):
+  `makeEnv({ disk: <a copy of env.server.disk> })`, 400 ms for its start, `close()` in a `finally`;
+  its script errors are a list of its own (`errors`) - ask for them. A scenario that only hands a
+  settings file to one panel never shows that what the panel WRITES is what it reads.
+- **The name of a defect is a claim** (4.18.0). "A tick taken off comes back after a restart" was not
+  what that defect did - at a start the tick is off before any file is read. It was caught by a
+  line about something that cannot happen, and the real case (a file read while the tick stands)
+  had no check.
+- **A word of command inside a question is not yet a command** (4.18.0). «а нащо зливати якщо ти можеж
+  редагувати далі то зливай …» holds «зливай» and the condition under which he means it. What the
+  condition asks was looked up (section 6: a merge ends the pushing), the act that cannot be taken
+  back was left undone, and the reply said so in its first lines.
 - **`pkill -f "tests/run_checks.py"` inside a `bash` call kills that call too** (its own command line
   matches). Stop a background run with the process tool; a background run that writes to a file
   shows an empty log there - read the file.
@@ -2902,6 +3023,9 @@ Read this twice. The owner lost two days because a download link died.
    - open the pull request early, but **merge it only as the last action of the session**, when the owner says
      so or when the work is finished; tell him that after the merge this chat can deliver nothing more and
      that the next job needs a new chat;
+   - 2026-11-27: he wrote «зливай» inside a sentence that asks what merging is for and names a condition
+     («якщо ти можеж редагувати далі»). It was not merged; reply #26 told him what a merge costs (section
+     3, «Merging»). The words that merge at once are «зливай зараз»;
    - if you start a session and `main` lacks the previous work, find the open pull request
      (`gh pr list --state open`), merge it (`gh pr merge <number> --merge`), then bring `main` into your own
      branch (`git fetch origin main && git merge origin/main`).
