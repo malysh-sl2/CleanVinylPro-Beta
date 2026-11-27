@@ -365,6 +365,19 @@ written here and in the repository.
   chat cannot be named, and offered to write the first message for that chat. Nothing was built or
   released.
 
+- **2026-11-27, after reply #27** (one message, about 20:10 UTC, no files; «ретач4мі» is a link to
+  `https://retouch4.me`). His words, all of them:
+  «ти можеш ізучити що робе [ретач4мі](https://retouch4.me) з одягом і зробити щось похоже бо має ріняти не
+  доглажене зморшки і пятна як є а станом на зари ужаш усе плаття точками заливає і колір міняє»
+  Read as: study what Retouch4me does with clothes (their plugin Fabric) and make something like it:
+  the tool has to even out what was not ironed - wrinkles and stains - and leave the rest as it is;
+  as it is NOW it is a horror: it floods the whole dress with dots and changes the colour.
+  Which program «станом на зараз» means he does not say. This program has a clothing tool (the tick
+  «Одяг», the slider «Сила рівняння одягу» - his word «рівняти» is the word of that slider), so the
+  first reading is: the clothing tool of «Чистий Вініл Pro» does that to a dress. The other reading:
+  the retouching plugin he builds in another chat (his message before this one). No frame came with
+  it, no name of a frame, no settings.
+
 ## 2. What is in the repository
 
 | Path | What it is | Rule |
