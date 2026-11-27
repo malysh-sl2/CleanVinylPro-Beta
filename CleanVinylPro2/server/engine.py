@@ -3774,16 +3774,118 @@ class CleanVinylEngine:
     DRESS_DEEP = 0.25       # cloth that departs from the surface of the garment by more (log units) at strength 100
                             # is a fold, not a crease: it stays
     DRESS_TINT = 0.05       # a tint up to about this (log units) is a stain to even out at strength 100, not a colour
+    DRESS_PRINT = 0.20      # a colour this far (log units) from the colour of the garment is a print: it stays
+    DRESS_COLOURS = 3       # garments of different colour that are told apart, at most
+    DRESS_APART = 0.12      # hues (the shares of red and of blue in R + G + B) closer than this are one garment
 
     @staticmethod
     def _dress_scale(dress_mask_small: np.ndarray) -> float:
-        """The half-width of the widest parts of the clothing, as a share of the long side of the mask (0 = none)."""
+        """The half-width of the widest parts of the clothing (or of one garment of it, given its own mask), as a
+        share of the long side of the mask (0 = none)."""
         solid = (dress_mask_small > 0.5).astype(np.uint8)
         if not np.any(solid):
             return 0.0
         solid = cv2.copyMakeBorder(solid, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)  # the frame edge is an outline too
         dt = cv2.distanceTransform(solid, cv2.DIST_L2, 3)
         return float(np.percentile(dt[solid > 0], 90)) / float(max(dress_mask_small.shape[:2]))
+
+    @staticmethod
+    def _cloth_colours(low: np.ndarray, wgt: np.ndarray) -> list:
+        """
+        The clothing split into garments of clearly different colour - a white shirt and a blue skirt, a red dress
+        and the man in white next to it. Returns one weight map per garment (each a part of `wgt`); `wgt` itself,
+        alone, when all of the clothing has one colour. Why: the surface of a garment is fitted to the cloth around
+        every spot; a window that reaches a garment of another colour would fit one tilted plane to both, and the
+        cloth on both sides of the border would be pulled onto the tilt - white cloth came out warmer 50 px from a
+        blue panel. Every garment is therefore ironed by a pass that sees only itself.
+          * Colour is the hue alone (the shares of red and blue in R + G + B): light and shade do not split a
+            garment, however deep the shade.
+          * Two hues are two garments when they are DRESS_APART apart AND next to nothing lies between them: the
+            sheen of a satin dress is a hue of its own too, but one that every step in between also has.
+          * A hue on less than 4% of the clothing is no garment: a print, an emblem, a button. It belongs to no
+            pass - it is not ironed and does not bend the surface of the garment it sits on.
+        Up to DRESS_COLOURS garments.
+        """
+        h, w = wgt.shape[:2]
+        f = max(1, int(round(max(h, w) / 320.0)))
+        sw, sh = max(8, w // f), max(8, h // f)
+        ms = cv2.resize(wgt, (sw, sh), interpolation=cv2.INTER_AREA)
+        lin = np.maximum(np.exp(cv2.resize(low, (sw, sh), interpolation=cv2.INTER_AREA)) - 0.02, 1e-4)
+        total = lin.sum(axis=2)
+        hue = np.stack([lin[..., 0] / total, lin[..., 2] / total], axis=-1).astype(np.float32)
+        sel = (ms > 0.5) & (total > 0.06)                     # (deep shade has no hue to speak of)
+        pts = hue[sel]
+        if pts.shape[0] < 200:
+            return [wgt]
+        apart = CleanVinylEngine.DRESS_APART
+        # k-means with a fixed start (along the main axis of the cloud): the same photo gives the same split
+        mean = pts.mean(axis=0)
+        _, vec = np.linalg.eigh(np.cov((pts - mean).T) + 1e-12 * np.eye(2))
+        order = np.argsort((pts - mean) @ vec[:, -1])
+        cen = np.stack([pts[order[int(q * (pts.shape[0] - 1))]] for q in np.linspace(0.1, 0.9, CleanVinylEngine.DRESS_COLOURS)])
+        for _ in range(10):
+            lab = np.argmin(((pts[:, None, :] - cen[None, :, :]) ** 2).sum(axis=2), axis=1)
+            for i in range(cen.shape[0]):
+                if np.any(lab == i):
+                    cen[i] = pts[lab == i].mean(axis=0)
+        groups = [[i] for i in range(cen.shape[0]) if np.any(lab == i)]
+
+        def members(grp):
+            return np.isin(lab, grp)
+
+        def centre(grp):
+            return pts[members(grp)].mean(axis=0)
+
+        merged = True
+        while merged and len(groups) > 1:
+            merged = False
+            for i in range(len(groups)):
+                for j in range(i + 1, len(groups)):
+                    ci, cj = centre(groups[i]), centre(groups[j])
+                    gap = float(np.hypot(*(ci - cj)))
+                    one = gap < apart
+                    if not one:
+                        # is there a valley between the two hues? the share of their cloth in the middle third
+                        both = pts[members(groups[i] + groups[j])]
+                        along = (both - ci) @ (cj - ci) / (gap * gap)
+                        one = float(np.mean((along > 1.0 / 3.0) & (along < 2.0 / 3.0))) > 0.12
+                    if one:
+                        groups[i] = groups[i] + groups[j]
+                        del groups[j]
+                        merged = True
+                        break
+                if merged:
+                    break
+        # A garment is the hue of most of its group (the median: a print that fell into the group does not move
+        # it) and whatever lies near that hue - as near as the garment's own cloth does, DRESS_APART at least.
+        cen_g, rad_g = [], []
+        for grp in groups:
+            p = pts[members(grp)]
+            c = np.median(p, axis=0)
+            cen_g.append(c)
+            rad_g.append(max(apart, 3.0 * float(np.median(np.hypot(p[:, 0] - c[0], p[:, 1] - c[1])))))
+        cen_g, rad_g = np.stack(cen_g), np.float32(rad_g)
+
+        def label(x):
+            """x: ... x 2 hues -> the number of the garment, -1: none"""
+            dist = np.sqrt(((x[..., None, :] - cen_g) ** 2).sum(axis=-1))
+            near = np.argmin(dist, axis=-1)
+            return np.where(np.take_along_axis(dist, near[..., None], axis=-1)[..., 0] <= rad_g[near], near, -1)
+
+        lab_pts = label(pts)
+        share = np.array([float(np.mean(lab_pts == i)) for i in range(cen_g.shape[0])])
+        is_garment = share >= 0.04
+        if not np.any(is_garment):
+            return []
+        if cen_g.shape[0] == 1 and share[0] > 0.995:
+            return [wgt]
+        lab_map = label(hue)
+        lab_map[total <= 0.06] = int(np.argmax(share))        # (deep shade goes with the main garment)
+        # (a 5 px vote: single pixels of another hue - grain, the edge of a seam - do not make holes)
+        votes = np.stack([cv2.blur((lab_map == i).astype(np.float32), (5, 5)) for i in range(-1, cen_g.shape[0])], axis=0)
+        best = (np.argmax(votes, axis=0) - 1).astype(np.int16)
+        best = cv2.resize(best, (w, h), interpolation=cv2.INTER_NEAREST)
+        return [wgt * (best == i) for i in range(cen_g.shape[0]) if is_garment[i]]
 
     @staticmethod
     def _cloth_surface(low: np.ndarray, wgt: np.ndarray, lum_w: np.ndarray, sigma: float, eps_std: float,
@@ -3819,8 +3921,13 @@ class CleanVinylEngine:
         yy -= ft(0.5 * sh)
         sg = sigma * sw / float(w)
 
+        # The window ends at 2.2 sigma. A plane fit gives far points a long lever: with the full Gaussian a border
+        # between two garments 3.5 sigma away still tilted the surface, and white cloth 40 px from a blue panel
+        # came out a touch warmer.
+        kw = 2 * int(np.ceil(2.2 * sg)) + 1
+
         def blur(x):
-            return cv2.GaussianBlur(x, (0, 0), sg, borderType=cv2.BORDER_REFLECT)
+            return cv2.GaussianBlur(x, (kw, kw), sg, borderType=cv2.BORDER_REFLECT)
 
         def fitter(mw):
             """The plane fit for the weights `mw`: a function channel -> the value of its plane at every pixel."""
@@ -3928,10 +4035,7 @@ class CleanVinylEngine:
 
         ref = float(max(dw, dh))
         sig_fine = max(0.8, 0.0009 * ref)            # everything finer is weave and grain: never touched
-        half = cls._dress_scale(dress_mask_small) * ref
-        sig_ref = max(2.0 * sig_fine, cls.DRESS_EPS_REF * half)
-        sig_wide = max(2.0 * sig_fine, cls.DRESS_WIDTH * half)
-        sig_max = sig_wide * (0.4 + 0.6 * s)
+        half_all = cls._dress_scale(dress_mask_small) * ref
         # The slider: the widths and the share that is evened grow with it steadily; what counts as shallow grows
         # slowly (x0.73 at 45, x0.82 at 60, x1.18 at 150) - the top of the slider is a heavier iron, not a press.
         shape = s ** 0.4
@@ -3941,7 +4045,7 @@ class CleanVinylEngine:
         tint = cls.DRESS_TINT * (0.5 + 0.5 * s)
 
         # work only inside the box around the clothing
-        mg = int(3.0 * max(sig_max, sig_wide)) + 4
+        mg = int(3.0 * max(2.0 * sig_fine, cls.DRESS_WIDTH * half_all)) + 4
         bx0, bx1 = max(0, int(xs.min()) - mg), min(dw, int(xs.max()) + 1 + mg)
         by0, by1 = max(0, int(ys.min()) - mg), min(dh, int(ys.max()) + 1 + mg)
         fx0, fx1 = int(bx0 / sc), min(w, int(np.ceil(bx1 / sc)))
@@ -3949,61 +4053,91 @@ class CleanVinylEngine:
         cw, ch = bx1 - bx0, by1 - by0
         crop = cleaned_f32[fy0:fy1, fx0:fx1]
         m = np.ascontiguousarray(dm[by0:by1, bx0:bx1])
-        m_src = np.clip((m - 0.10) / 0.50, 0.0, 1.0)     # the fits only "see" the clothing
+        m_all = np.clip((m - 0.10) / 0.50, 0.0, 1.0)     # the fits only "see" the clothing
 
         small = cv2.resize(crop, (cw, ch), interpolation=cv2.INTER_AREA)
         logs = np.log(small + 0.02)
-        den = cv2.GaussianBlur(m_src, (0, 0), sig_fine) + 1e-4
-        low = cv2.GaussianBlur(logs * m_src[..., None], (0, 0), sig_fine) / den[..., None]
-        del logs
-        lum_w = np.exp(low) * np.float32([0.299, 0.587, 0.114])
-        lum_w /= lum_w.sum(axis=2, keepdims=True)
 
-        # How deep is every spot of the cloth, all in all? Its departure from the smooth surface of the garment as
-        # a whole (the widest window, the same at every strength). What is deep - a fold, drapery, gathers, a seam,
-        # an edge - stays at every width: a fold is not ironed "a little at each width" until it is gone. A fold
-        # is deep along its whole profile: the depth is read from the deepest spot nearby (about one narrow
-        # window), so the flanks of a fold stay with its bottom.
-        surf, _, _ = cls._cloth_surface(low, m_src, lum_w, sig_wide, 0.5 * deep_lim, deep_cut=2.0, want_keep=False)
-        depth = np.abs(((low - surf) * lum_w).sum(axis=2))
-        del surf
-        # 0 up to 0.8 of the limit, 1 from 1.2 of it: what is clearly a fold is not touched AT ALL (a gate that
-        # only weakens would let every width take its share, and four shares are a third of the fold)
-        deep = np.clip((depth / deep_lim - 0.8) / 0.4, 0.0, 1.0)
-        deep = deep * deep * (3.0 - 2.0 * deep)
-        del depth
-        # the flanks of a fold, and a soft border: the shoulders of a fold are not shaved off, no crease ends at a line
-        kd = int(np.clip(round(2.0 * sig_ref), 3, 81)) | 1
-        near = cv2.GaussianBlur(cv2.dilate(deep, np.ones((kd, kd), np.uint8)), (0, 0), 0.5 * kd)
-        np.maximum(deep, near, out=deep)
-        del near
+        def low_layer(wgt):
+            den = cv2.GaussianBlur(wgt, (0, 0), sig_fine) + 1e-4
+            lo = cv2.GaussianBlur(logs * wgt[..., None], (0, 0), sig_fine) / den[..., None]
+            lw = np.exp(lo) * np.float32([0.299, 0.587, 0.114])
+            lw /= lw.sum(axis=2, keepdims=True)
+            return lo, lw
 
-        cur = low.copy()
-        for k in range(cls.DRESS_RUNGS - 1, -1, -1):          # from narrow to wide
-            sg = sig_max / (2.0 ** k)
-            # a width that comes down to the weave fades out: the slider never switches a width on with a jump
-            rung = float(np.clip((sg - 1.5 * sig_fine) / (1.5 * sig_fine), 0.0, 1.0))
-            if rung <= 0.0:
+        low, lum_w = low_layer(m_all)
+        d = np.zeros_like(low)
+        # Garments of clearly different colour are ironed one by one, each seeing only itself (_cloth_colours) -
+        # down to its low layer: the blur that makes it must not mix two garments along their border either.
+        for m_src in cls._cloth_colours(low, m_all):
+            if m_src is not m_all:
+                low, lum_w = low_layer(m_src)
+            cur = low.copy()
+            half = cls._dress_scale(m_src) * float(max(cw, ch)) if m_src is not m_all else half_all
+            sig_ref = max(2.0 * sig_fine, cls.DRESS_EPS_REF * half)
+            sig_wide = max(2.0 * sig_fine, cls.DRESS_WIDTH * half)
+            sig_max = sig_wide * (0.4 + 0.6 * s)
+            if half <= 0.0:
                 continue
-            eps = eps_ref * (sig_ref / sg) ** 0.5
-            # a narrow band is a crease; a wide band is a fold of the garment and stays
-            guard = float(np.clip((sg - 2.0 * sig_ref) / (2.0 * sig_ref), 0.0, 1.0))
-            t_col = max(0.7 * eps, tint)
-            surf, keep, keep_col = cls._cloth_surface(cur, m_src, lum_w, sg, eps, band_guard=guard, tint_std=0.5 * t_col)
-            r = cur - surf
-            r_lum = (r * lum_w).sum(axis=2)
-            r_col = r - r_lum[..., None]
-            # brightness: what is not deep (the spot) and lies in calm cloth (the piece) is pulled onto the surface
-            g_lum = (1.0 - deep) * (1.0 - keep)
-            # colour: a strong tint is a colour of the cloth - a print, a second garment - and no stain
-            col2 = (r_col * r_col * lum_w).sum(axis=2)
-            g_col = (1.0 - deep) * (1.0 - keep_col) / (1.0 + (col2 / (t_col * t_col)) ** 2)
-            pull = r_lum[..., None] * g_lum[..., None] + r_col * g_col[..., None]
-            cur -= pull * (rung * amount)
-            del surf, keep, keep_col, r, r_lum, r_col, g_lum, g_col, col2, pull
+            # How deep is every spot of the cloth, all in all? Its departure from the smooth surface of the garment
+            # as a whole (the widest window, the same at every strength). What is deep - a fold, drapery, gathers,
+            # a seam, an edge - stays at every width: a fold is not ironed "a little at each width" until it is gone.
+            surf, _, _ = cls._cloth_surface(low, m_src, lum_w, sig_wide, 0.5 * deep_lim, deep_cut=2.0, want_keep=False)
+            r = low - surf
+            del surf
+            depth = (r * lum_w).sum(axis=2)
+            # ... and how far is its COLOUR from the colour of the garment there? A print, an emblem, a hand the
+            # mask let through: not cloth to even, at any strength.
+            r -= depth[..., None]
+            tinted = np.sqrt((r * r * lum_w).sum(axis=2))
+            del r
+            # 0 up to 0.8 of the limit, 1 from 1.2 of it: what is clearly a fold is not touched AT ALL (a gate that
+            # only weakens would let every width take its share, and four shares are a third of the fold)
+            deep = np.clip(np.maximum(np.abs(depth) / deep_lim, tinted / cls.DRESS_PRINT) * 2.5 - 2.0, 0.0, 1.0)
+            deep = deep * deep * (3.0 - 2.0 * deep)
+            del depth, tinted
+            # the flanks of a fold, and a soft border: the shoulders of a fold are not shaved off, no crease ends
+            # at a line
+            kd = int(np.clip(round(2.0 * sig_ref), 3, 81)) | 1
+            near = cv2.GaussianBlur(cv2.dilate(deep, np.ones((kd, kd), np.uint8)), (0, 0), 0.5 * kd)
+            np.maximum(deep, near, out=deep)
+            del near
+            # (1 inside this garment, 0 in the others and on the pixels of the border between two: each garment is
+            # moved by its own pass only, and a border pixel, a mix of two colours, by none)
+            own = None
+            if m_src is not m_all:
+                own = cv2.erode((m_src > 0.0).astype(np.uint8), np.ones((5, 5), np.uint8)).astype(np.float32)
 
-        d = cur - low
-        del cur, low
+            for k in range(cls.DRESS_RUNGS - 1, -1, -1):          # from narrow to wide
+                sg = sig_max / (2.0 ** k)
+                # a width that comes down to the weave fades out: the slider never switches a width on with a jump
+                rung = float(np.clip((sg - 1.5 * sig_fine) / (1.5 * sig_fine), 0.0, 1.0))
+                if rung <= 0.0:
+                    continue
+                eps = eps_ref * (sig_ref / sg) ** 0.5
+                # a narrow band is a crease; a wide band is a fold of the garment and stays
+                guard = float(np.clip((sg - 2.0 * sig_ref) / (2.0 * sig_ref), 0.0, 1.0))
+                t_col = max(0.7 * eps, tint)
+                surf, keep, keep_col = cls._cloth_surface(cur, m_src, lum_w, sg, eps, band_guard=guard, tint_std=0.5 * t_col)
+                r = cur - surf
+                r_lum = (r * lum_w).sum(axis=2)
+                r_col = r - r_lum[..., None]
+                # brightness: what is not deep (the spot) and lies in calm cloth (the piece) is pulled onto the surface
+                g_lum = (1.0 - deep) * (1.0 - keep)
+                # colour: a strong tint is a colour of the cloth - a print, a second garment - and no stain
+                col2 = (r_col * r_col * lum_w).sum(axis=2)
+                g_col = (1.0 - deep) * (1.0 - keep_col) / (1.0 + (col2 / (t_col * t_col)) ** 2)
+                pull = r_lum[..., None] * g_lum[..., None] + r_col * g_col[..., None]
+                cur -= pull * (rung * amount)
+                del surf, keep, keep_col, r, r_lum, r_col, g_lum, g_col, col2, pull
+            del deep
+            cur -= low
+            if own is not None:
+                cur *= own[..., None]
+            d += cur
+            del cur
+        del low, lum_w, logs
+
         # in deep shadow there is nothing to iron, only sensor noise
         lit = np.clip((cv2.cvtColor(small, cv2.COLOR_RGB2GRAY) - 0.03) / 0.05, 0.0, 1.0)
         cover = np.clip(m * 1.5, 0.0, 1.0)
