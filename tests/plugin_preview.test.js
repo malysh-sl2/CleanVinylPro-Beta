@@ -32,11 +32,17 @@
 //   - the brush and the eraser are used on the cleaned photo: the mask never switches on by itself;
 //   - Ctrl + "+" / Ctrl + "-" / Ctrl + 0 zoom as in Photoshop; the right mouse button drags the photo;
 //   - the name without the 2 (4.8.0): what Photoshop is told - the window, the history step, the layer; layers
-//     made by an older version are still found by the "До / Після" button of the panel;
+//     made by an older version are still found by the "До / Після" button of the panel; the version next to the
+//     name (4.18.0) - in manifest.json (the Plugins menu, the tab of the panel), on the panel, in the title of
+//     the big window, and in nothing that goes into the document;
 //   - a new result leaves "До" (4.16.0): when the bar of a recompute reaches its end - or the light refresh of a
 //     slider or a preset is back, or the clothing tick is answered - a window that shows the original goes to the
 //     cleaned photo by itself; "Маска" stays; a run that was cancelled, failed or gave way switches nothing, nor
-//     does the exact picture that comes by itself.
+//     does the exact picture that comes by itself;
+//   - the tick «Стійки» is the user's own (4.18.0): it stays as it was left - for the next photo, whichever preset
+//     the program picks, and after Photoshop is started again; every set of values offered to the server carries
+//     it; no preset takes it off, a click by hand on «Без стійок (AI)» puts it; a PC of 4.17.0 starts with the tick
+//     as it stood there; a backup holds it.
 //
 //   node tests/plugin_preview.test.js
 //   node tests/plugin_preview.test.js "preset click" remembered     (only the scenarios whose name has one of the texts)
@@ -1460,12 +1466,25 @@ async function main() {
   });
 
   // ---------------------------------------------------------------- the name (4.8.0: without the 2)
-  await scenario("the name has no 2: the panel, the window, the history step, the new layer; a layer made by 4.7.0 is still found", {}, async (env, expect) => {
+  // The version next to the name (4.18.0). The owner, 2026-11-27: «і ще у назві плагіна пиши версію бо деколи не
+  // розумію чи установ нову чи то стара». It stands wherever the plugin is named for a person - the Plugins menu and
+  // the tab of the panel (manifest.json), the header of the panel, the title of the big window - and nowhere in
+  // what goes into a document.
+  await scenario("the name has no 2 and carries the version: the Plugins menu, the panel, the window; not the history step or the layer; a layer made by 4.7.0 is still found", {}, async (env, expect) => {
     const name = "Чистий Вініл Pro";
+    const named = name + " " + PLUGIN_VERSION;
+    const manifest = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, "manifest.json"), "utf8"));
+    expect(/^\d+\.\d+\.\d+$/.test(PLUGIN_VERSION) && env.state("PLUGIN_VERSION") === PLUGIN_VERSION, "manifest.json and main.js name one version: " + PLUGIN_VERSION + " / " + env.state("PLUGIN_VERSION"));
+    expect(manifest.name === named, "the name of the plugin (the Plugins menu, the list of plugins) carries the version: " + manifest.name);
+    expect(manifest.entrypoints[0].label.default === named, "the tab of the panel carries the version: " + manifest.entrypoints[0].label.default);
     expect(env.doc.title === name, "the title of the panel: " + env.doc.title);
-    expect(env.doc.querySelector(".brand-title").textContent === name, "the name on the panel: " + env.doc.querySelector(".brand-title").textContent);
+    const title = env.doc.querySelector(".brand-title");
+    expect(title.textContent === name, "the name on the panel: " + title.textContent);
+    const ver = env.doc.getElementById("brandVersion");
+    expect(ver !== null && ver.textContent === "версія " + PLUGIN_VERSION && ver.parentNode === title.parentNode && ver.previousElementSibling === title,
+      "the version stands right under the name on the panel: " + (ver && ver.textContent));
     await env.open();
-    expect(env.ps.modal && env.ps.modal.title === name, "the title of the big window: " + (env.ps.modal && env.ps.modal.title));
+    expect(env.ps.modal && env.ps.modal.title === named, "the title of the big window carries the version: " + (env.ps.modal && env.ps.modal.title));
     env.click("dlgBtnApply");
     await env.waitFor(() => env.ps.layersMade.length === 1, 3000);
     await env.waitFor(() => env.state("isBusy") === false);
@@ -1473,6 +1492,8 @@ async function main() {
     expect(env.ps.history.join() === name, "the step of the History panel: " + env.ps.history.join());
     const with2 = env.ps.commands.concat(env.ps.history, env.ps.layersMade).filter((text) => /ініл (Pro )?2/.test(String(text)));
     expect(with2.length === 0 && env.ps.commands.length >= 2, "nothing Photoshop is told may carry the 2: " + with2.join(" | "));
+    const versioned = env.ps.commands.concat(env.ps.history, env.ps.layersMade).filter((text) => /\d+\.\d+\.\d+/.test(String(text)));
+    expect(versioned.length === 0, "nothing that goes into the document carries a version: " + versioned.join(" | "));
 
     // "До / Після" of the panel finds the layer of this plugin by its name - the new one and the one of 4.7.0
     const tryLayers = async (layers) => {
@@ -2389,6 +2410,7 @@ async function main() {
       makeMaskDefault = true;
       setBrushSoft(false, false);
       sessState.brushSize = 61;
+      standsEnabled = true;                                  // (4.18.0: the tick «Стійки» is one of the switches)
       renderPresets();
       updateSliderVisuals();
     })()`);
@@ -2417,9 +2439,11 @@ async function main() {
       makeMaskDefault = false;
       setBrushSoft(true, false);
       sessState.brushSize = 28;
+      standsEnabled = false;
       renderPresets();
       updateSliderVisuals();
     })()`);
+    expect(saves[0].body.settings.standsOn === true && !env.el("dlgChkStands").checked, "(the backup holds the stands tick; it is off now)");
     env.click("btnBackupRestore");
     await env.settle(300);
     expect(box.classList.contains("visible") && backupRows(env).length === 1, "the list of backups must appear: " + box.textContent);
@@ -2438,6 +2462,7 @@ async function main() {
       env.state("activePresetId") === "usr_7" && env.state("deletedDefaultIds.join()") === "gentle", "the switches, the active preset and the deleted preset must be back");
     expect(env.state("getSliderVal('gSlSpots')") === 44 && env.el("dlgChkSmoke").checked && !env.el("dlgChkAutoPreset").checked && env.el("dlgChkMakeMask").checked &&
       env.el("dlgActivePresetName").textContent === "Мій сірий фон", "the controls must show it: " + env.el("dlgActivePresetName").textContent);
+    expect(env.state("standsEnabled") === true && env.el("dlgChkStands").checked && env.el("dlgWrapStands").classList.contains("active"), "the stands tick must be back as well");
     const copy = env.of("/backup/save")[1];
     expect(copy && copy.body.label === "before-restore" && copy.body.presets.length === 10 && !copy.body.presets.some((x) => x.id === "usr_7"),
       "what was there before the restore must be kept as one more backup");
@@ -2460,7 +2485,8 @@ async function main() {
     // the restored state opens the window as usual
     await env.open();
     const p0 = env.of("/session/start")[0].body.params;
-    expect(p0.spots === 44 && p0.smokeOn === true && p0.speedMode === "quality", "the first scan must go with the restored values: " + JSON.stringify([p0.spots, p0.smokeOn, p0.speedMode]));
+    expect(p0.spots === 44 && p0.smokeOn === true && p0.speedMode === "quality" && p0.removeStands === true,
+      "the first scan must go with the restored values: " + JSON.stringify([p0.spots, p0.smokeOn, p0.speedMode, p0.removeStands]));
   });
 
   await scenario("backup: a server before 4.5.0, a file that cannot be written, an empty folder, a broken file - the panel says what to do",
@@ -2502,8 +2528,10 @@ async function main() {
     await sleep(400);
     env.server.backups.push({
       file: "CleanVinylPro2_backup_old.json", saved_at: "2026-11-01T10:00:00", version: "4.4.0", label: "", presets_list: presets430(),
-      settings: { schemaVersion: 5, activePresetId: "lowkey", autoPreset: true, presetMoves: [], knownDefaultIds: IDS_OLD.slice(), deletedDefaultIds: [], cfg: Object.assign({}, presets430()[4].cfg) }
+      // (the stands tick stood when that version wrote the backup: it says so among the values of the controls)
+      settings: { schemaVersion: 5, activePresetId: "lowkey", autoPreset: true, presetMoves: [], knownDefaultIds: IDS_OLD.slice(), deletedDefaultIds: [], cfg: Object.assign({}, presets430()[4].cfg, { removeStands: true }) }
     });
+    expect(env.state("standsEnabled") === false, "(the stands tick is off before the restore)");
     env.click("btnBackupRestore");
     await env.settle(300);
     backupRows(env)[0].click();
@@ -2519,6 +2547,8 @@ async function main() {
     expect(env.state("activePresetId") === "lowkey" && env.state("getSliderVal('gSlSpots')") === 80 && env.state("getSliderVal('gSlCyc')") === 65 && !env.el("dlgChkSmoke").checked,
       "the controls of the active preset must follow");
     expect(env.server.disk["user_settings.json"].presetMoves.length === 6, "the moves must be remembered: " + JSON.stringify(env.server.disk["user_settings.json"].presetMoves));
+    expect(env.state("standsEnabled") === true && env.el("dlgChkStands").checked && env.server.disk["user_settings.json"].standsOn === true,
+      "the stands tick must come back the way the old backup held it - on - and be kept the new way");
     // (4.14.0: "Глибина" is 60 in the light presets with a floor; 4.17.0: 10 in the dark ones with a floor; the
     //  close-up presets and the user's own know nothing of it)
     const depths = ["std", "medium_shot", "wide_shot", "clean_stands", "lowkey", "closeup", "user_1"].map((id) => cfgOf(env, id).cycDepth);
@@ -3168,17 +3198,65 @@ async function main() {
     expect(env.recomputes().length === 0 && env.edits().length === 0, "none of this asks the server for anything");
   });
 
-  await scenario("'Стійки': a tick on the top bar next to the others, one full recompute; a preset sets it; no row of the settings", { recomputeDelay: 150, detail: false }, async (env, expect) => {
+  // ---------------------------------------------------------------- the tick «Стійки» (the user's own since 4.18.0)
+  // The owner, 2026-11-27: «дивися я ставлю галочку щзі стойками а вона відключається зроби як я посллідніраз ш так
+  // би вона і другий раз була». Up to 4.17.0 the tick was a value of the preset, and every built-in preset but
+  // «Без стійок (AI)» carries it off: each new photo with the automatic preset, and each click on a preset, took
+  // it away. Now it stays the way he left it; one preset - «Без стійок (AI)», clicked by hand - puts it.
+  const standsTicked = (env) => env.el("dlgChkStands").checked && env.el("dlgWrapStands").classList.contains("active");
+  const standsClear = (env) => !env.el("dlgChkStands").checked && !env.el("dlgWrapStands").classList.contains("active");
+  const lastRecompute = (env) => { const rc = env.recomputes(); return rc[rc.length - 1]; };
+  // every set the automatic preset offers the server says the same of the stands: true / false; null = they differ
+  const setsStands = (start) => {
+    const sp = (start && start.body.scenePresets) || {};
+    const said = Object.keys(sp).map((k) => sp[k].removeStands);
+    return said.length === 8 && said.every((v) => v === said[0]) ? said[0] : null;
+  };
+  const openNext = async (env, n) => {
+    env.click("btnRun");
+    await env.waitFor(() => env.of("/session/start").length === n && !!env.state("sessState.id"), 4000);
+    await env.settle(400);
+  };
+  const applied = async (env) => {
+    env.click("dlgBtnApply");
+    await env.waitFor(() => env.state("sessState.open") === false, 4000);
+    await env.waitFor(() => env.state("isBusy") === false, 4000);
+    await env.settle(500);                                   // (the settings are written a moment after a change)
+  };
+  // Photoshop started again: a new panel that finds on the PC the files the first one left there
+  const restarted = async (env, opts) => {
+    const next = makeEnv(Object.assign({ disk: JSON.parse(JSON.stringify(env.server.disk)) }, opts || {}));
+    await sleep(400);                                        // bootstrap + the first sync with the server
+    return next;
+  };
+  // (what a PC of 4.17.0 holds: the built-in presets of that version - the same values as now -, two presets of the
+  //  user's own, one of them saved while the tick stood; the settings say how the tick stood when they were written)
+  const pc417 = () => {
+    const now = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, "..", "server", "presets_defaults.json"), "utf8"));
+    const wide = now.find((p) => p.id === "lowkey_wide").cfg;
+    now.push({ id: "usr_1700000000002", name: "Мій зі стійками", color: "#54d182", builtin: false, cfg: Object.assign({}, wide, { removeStands: true, spots: 66 }) });
+    now.push({ id: "usr_1700000000003", name: "Мій без стійок", color: "#59b5ff", builtin: false, cfg: Object.assign({}, wide, { removeStands: false, spots: 67 }) });
+    return now;
+  };
+  const settings417 = (list, active, ticked, more) => Object.assign({
+    schemaVersion: 5, activePresetId: active, autoPreset: true, cfg: Object.assign({}, list.find((p) => p.id === active).cfg, { removeStands: ticked }),
+    presetMoves: ["cyc65", "smokeOff", "lowkeySpots80", "lowkeyCyc65", "depth60", "darkDepth10"], knownDefaultIds: list.filter((p) => p.builtin).map((p) => p.id)
+  }, more || {});
+
+  await scenario("'Стійки': a tick on the top bar next to the others, one full recompute; the user's own - no preset takes it off, 'Без стійок (AI)' clicked by hand puts it; no row of the settings", { recomputeDelay: 150, detail: false }, async (env, expect) => {
     env.check("dlgChkAutoPreset", false);
     await env.open();
     expect(env.doc.getElementById("gChkRemoveStands") === null, "the row of the settings is gone");
     expect(env.el("dlgWrapStands").parentNode === env.el("dlgWrapMix").parentNode && env.el("dlgWrapStands").parentNode === env.el("dlgWrapSmoke").parentNode,
       "the tick stands on the top bar, in the row of the other ticks");
-    expect(env.el("dlgWrapStands").textContent.trim() === "Стійки" && (env.el("dlgWrapStands").getAttribute("data-tip") || "").includes("Прибирати стійки"), "it has a word and a hint");
-    expect(env.of("/session/start")[0].body.params.removeStands === false && !env.el("dlgChkStands").checked, "off until it is ticked");
+    const tip = env.el("dlgWrapStands").getAttribute("data-tip") || "";
+    expect(env.el("dlgWrapStands").textContent.trim() === "Стійки" && tip.includes("Прибирати стійки"), "it has a word and a hint");
+    expect(tip.includes("Галочка не належить пресету") && tip.includes("для наступних фото") && tip.includes("«Без стійок (AI)»"),
+      "the hint says whose the tick is: it stays as it was put, one preset puts it");
+    expect(env.of("/session/start")[0].body.params.removeStands === false && standsClear(env), "off until it is ticked");
     env.server.stats = { elapsed_ms: 9200, reused_stages: ["fg", "maps"], timing: { fill_tiles: 125, fill_s: 6.0, fill_ep: "CUDAExecutionProvider", fallback: {} } };
     env.mouse(env.el("dlgWrapStands").querySelector("span"), "click", 0);   // a click on the word
-    expect(env.el("dlgChkStands").checked && env.el("dlgWrapStands").classList.contains("active") && env.hint().includes("Прибирати стійки"), "ticked, lit, said: " + env.hint());
+    expect(standsTicked(env) && env.hint().includes("Прибирати стійки") && env.hint().includes("на наступних фото"), "ticked, lit, said - also that it will stay: " + env.hint());
     await sleep(60);
     expect(env.progressCardVisible(), "the progress card comes at once");
     await env.settle(600);
@@ -3186,18 +3264,241 @@ async function main() {
     expect(rc.length === 1 && rc[0].body.quick === undefined && typeof rc[0].body.jobId === "string" && rc[0].body.params.removeStands === true,
       "one full recompute with the stands to be removed: " + JSON.stringify(rc.map((r) => [r.body.quick, r.body.params.removeStands])));
     expect(env.hint().includes("Перераховано за 9,2 с") && env.hint().includes("людину взято готовою"), "the hint line says what the run took and what was taken ready: " + env.hint());
-    expect(env.state("presetConfigToSave().removeStands") === true, "it is a value of the preset, as before");
+    expect(!("removeStands" in env.state("presetConfigToSave()")), "it is written into no preset: " + JSON.stringify(env.state("presetConfigToSave().removeStands")));
+    expect(env.state("buildSettingsSnapshot().standsOn") === true && env.state("buildSettingsSnapshot().cfg.removeStands") === true, "the settings keep it");
+    env.server.stats = null;
     env.click("dlgBtnPresets");
-    env.clickPreset("Студія (Стандарт)");
-    expect(!env.el("dlgChkStands").checked && !env.el("dlgWrapStands").classList.contains("active"), "a preset without it unticks the box and its pill");
-    env.clickPreset("Без стійок (AI)");
+    env.clickPreset("Студія (Стандарт)");                    // (the preset that is active already: the same values)
+    await env.settle(700);
+    expect(standsTicked(env) && env.recomputes().length === 1 && env.state("previewMatchesSettings()") === true,
+      "a click on a preset that ships without the stands leaves the tick; nothing changed, nothing is asked: " + env.recomputes().length);
+    env.clickPreset("Дальній план");
     await env.settle(900);
     rc = env.recomputes();
-    expect(env.el("dlgChkStands").checked && env.el("dlgWrapStands").classList.contains("active") && rc[rc.length - 1].body.params.removeStands === true,
-      "the preset 'Без стійок (AI)' ticks it, and the refresh carries it");
+    expect(standsTicked(env) && rc.length === 2 && rc[1].body.quick === true && rc[1].body.params.spots === 85 && rc[1].body.params.removeStands === true,
+      "another preset: one light refresh with its values - and the stands still removed: " + JSON.stringify(rc.slice(1).map((r) => [r.body.quick, r.body.params.spots, r.body.params.removeStands])));
+    env.check("dlgChkStands", false);                        // only the user takes it off
+    expect(standsClear(env) && env.hint().includes("лишаються в кадрі") && env.hint().includes("на наступних фото"), "unticked, dark, said: " + env.hint());
+    await env.settle(600);
+    rc = env.recomputes();
+    expect(rc.length === 3 && rc[2].body.quick === undefined && rc[2].body.params.removeStands === false, "taken off: one full recompute with the stands kept");
+    env.clickPreset("Студія (Стандарт)");
+    await env.settle(900);
+    expect(standsClear(env) && lastRecompute(env).body.params.removeStands === false && lastRecompute(env).body.params.spots === 75, "a preset does not put it either");
+    env.clickPreset("Без стійок (AI)");
+    await env.settle(900);
+    expect(standsTicked(env) && lastRecompute(env).body.params.removeStands === true && env.state("activePresetId") === "clean_stands",
+      "the preset 'Без стійок (AI)', clicked by hand, puts it, and the refresh carries it");
+    env.clickPreset("Студія (Стандарт)");
+    await env.settle(900);
+    expect(standsTicked(env) && lastRecompute(env).body.params.removeStands === true && env.state("activePresetId") === "std", "...and it stays when the next preset is clicked");
     env.click("dlgBtnApply");
     await env.settle(900);
     expect(env.of("/session/apply").length === 1 && env.of("/session/apply")[0].body.params.removeStands === true, "Apply carries it");
+  });
+
+  await scenario("'Стійки' left on: the next photo opens without the stands - every set of the automatic preset carries the tick, the preset it picks leaves it; so after Photoshop is started again",
+    { scene: { kind: "dark", framing: "wide", dark: true }, disk: {}, detail: false, recomputeDelay: 150 }, async (env, expect) => {
+      await sleep(400);
+      await env.open();
+      await env.settle(400);
+      let start = env.of("/session/start")[0];
+      expect(start.body.params.removeStands === false && setsStands(start) === false && standsClear(env) && env.state("activePresetId") === "lowkey_wide",
+        "a fresh installation: the stands stay in the frame until the tick is put (the dark frame took 'Темний дальній план')");
+      expect(env.badge().includes("Авто-пресет: «Темний дальній план»") && !env.badge().includes("Стійки"), "the note of the opening names the preset and says nothing of the stands: " + env.badge());
+      env.check("dlgChkStands", true);
+      await env.settle(700);
+      expect(env.recomputes().length === 1 && lastRecompute(env).body.quick === undefined && lastRecompute(env).body.params.removeStands === true, "the tick: one full recompute without the stands");
+      expect(env.server.disk["user_settings.json"] && env.server.disk["user_settings.json"].standsOn === true, "the settings on the PC hold the tick: " + JSON.stringify(env.server.disk["user_settings.json"] && env.server.disk["user_settings.json"].standsOn));
+      await applied(env);
+      expect(env.of("/session/apply").length === 1 && env.of("/session/apply")[0].body.params.removeStands === true, "Apply carries it");
+      // the next photo: the same kind of frame, the automatic preset again
+      await openNext(env, 2);
+      start = env.of("/session/start")[1];
+      expect(start.body.params.removeStands === true && setsStands(start) === true,
+        "the next photo: the first scan and every set offered to the server carry the tick: " + JSON.stringify([start.body.params.removeStands, setsStands(start)]));
+      expect(start.used && start.used.removeStands === true && start.used.spots === 80 && start.used.cycDepth === 10 && env.state("activePresetId") === "lowkey_wide",
+        "the frame is cleaned with the values of 'Темний дальній план' AND without the stands: " + JSON.stringify(start.used && [start.used.spots, start.used.cycDepth, start.used.removeStands]));
+      expect(standsTicked(env), "the preset the program picked leaves the tick where the user put it");
+      expect(env.recomputes().length === 1 && env.state("previewMatchesSettings()") === true, "the first picture is already without the stands: nothing is asked again");
+      expect(env.badge().includes("Авто-пресет: «Темний дальній план»") && env.badge().includes("Стійки прибираються: галочка «Стійки» стоїть, як ви її лишили."),
+        "the note of the opening names the preset and says that the stands go because the tick was left on: " + env.badge());
+      await applied(env);
+      // Photoshop closed and started again; a light frame this time
+      const again = await restarted(env, { scene: { kind: "wide", framing: "wide", dark: false } });
+      try {
+        expect(again.state("standsEnabled") === true && standsTicked(again), "Photoshop started again: the tick is as it was left");
+        await again.open();
+        await again.settle(400);
+        const st = again.of("/session/start")[0];
+        expect(st.body.params.removeStands === true && setsStands(st) === true && st.used.removeStands === true && st.used.spots === 85 && again.state("activePresetId") === "wide_shot",
+          "...and a light frame is cleaned with 'Дальній план' and without the stands: " + JSON.stringify([st.body.params.removeStands, setsStands(st), st.used.spots, st.used.removeStands]));
+        expect(standsTicked(again) && again.recomputes().length === 0 && again.state("previewMatchesSettings()") === true, "the tick stands, nothing is asked again");
+        expect(again.badge().includes("«Дальній план»") && again.badge().includes("Стійки прибираються"), "...and the opening says so: " + again.badge());
+        expect(again.errors.length === 0, "script errors after the restart: " + again.errors.join(" | "));
+      } finally {
+        await again.close();
+      }
+    });
+
+  await scenario("'Стійки' taken off stays off: the next photo, the automatic preset and a restart keep the stands; an active 'Без стійок (AI)' that nobody clicked puts nothing",
+    { scene: { kind: "wide", framing: "wide", dark: false }, detail: false, recomputeDelay: 150,
+      disk: { "user_settings.json": { schemaVersion: 5, activePresetId: "clean_stands", autoPreset: true, standsOn: true, mixOn: false } } }, async (env, expect) => {
+      await sleep(400);
+      expect(env.state("standsEnabled") === true && standsTicked(env), "the settings of 4.18.0 bring the tick as it was left: on");
+      await env.open();
+      await env.settle(400);
+      let start = env.of("/session/start")[0];
+      expect(start.body.params.removeStands === true && setsStands(start) === true && start.used.removeStands === true, "the first photo is cleaned without the stands");
+      env.check("dlgChkStands", false);
+      await env.settle(700);
+      expect(env.recomputes().length === 1 && lastRecompute(env).body.quick === undefined && lastRecompute(env).body.params.removeStands === false, "the tick taken off: one full recompute with the stands kept");
+      expect(env.server.disk["user_settings.json"].standsOn === false, "the settings on the PC hold it");
+      await applied(env);
+      expect(env.of("/session/apply")[0].body.params.removeStands === false, "Apply carries it");
+      await openNext(env, 2);
+      start = env.of("/session/start")[1];
+      expect(start.body.params.removeStands === false && setsStands(start) === false && start.used.removeStands === false && standsClear(env),
+        "the next photo keeps the stands: " + JSON.stringify([start.body.params.removeStands, setsStands(start), start.used.removeStands]));
+      expect(env.badge().includes("Авто-пресет") && !env.badge().includes("Стійки"), "...and its opening says nothing of them: " + env.badge());
+      expect(env.recomputes().length === 1 && env.state("previewMatchesSettings()") === true, "nothing is asked again");
+      // the automatic choice off, the active preset is 'Без стійок (AI)' itself: it was not clicked, so it puts nothing
+      env.check("dlgChkAutoPreset", false);
+      env.state("applyPreset(presetsList.find((p) => p.id === 'clean_stands')); renderPresets(); scheduleSaveSettings()");
+      expect(standsClear(env), "a preset put on the controls by the program - 'Без стійок (AI)' too - leaves the tick off");
+      await applied(env);
+      await openNext(env, 3);
+      start = env.of("/session/start")[2];
+      expect(env.state("activePresetId") === "clean_stands" && start.body.scenePresets === undefined && start.body.params.removeStands === false && start.body.params.spots === 78 && standsClear(env),
+        "the window opens with the values of 'Без стійок (AI)' and the stands kept: " + JSON.stringify([start.body.params.spots, start.body.params.removeStands]));
+      await applied(env);
+      const again = await restarted(env, { scene: { kind: "wide", framing: "wide", dark: false } });
+      try {
+        expect(again.state("standsEnabled") === false && standsClear(again) && again.state("activePresetId") === "clean_stands", "Photoshop started again: the tick is off, as it was left");
+        await again.open();
+        const st = again.of("/session/start")[0];
+        expect(st.body.params.removeStands === false && standsClear(again), "...and the stands stay in the frame");
+        again.click("dlgBtnPresets");
+        again.clickPreset("Без стійок (AI)");                // now the user asks for it
+        await again.settle(900);
+        expect(standsTicked(again) && lastRecompute(again) && lastRecompute(again).body.params.removeStands === true, "the same preset clicked by hand puts the tick");
+        expect(again.errors.length === 0, "script errors after the restart: " + again.errors.join(" | "));
+      } finally {
+        await again.close();
+      }
+    });
+
+  await scenario("'Стійки' on a PC of 4.17.0: the tick as it stood when Photoshop was closed is the tick of the first photo; no preset saved there puts it",
+    { scene: { kind: "dark", framing: "wide", dark: true }, detail: false, serverPresets: pc417(),
+      disk: { "presets_local.json": pc417(), "user_settings.json": settings417(pc417(), "lowkey_wide", true) } }, async (env, expect) => {
+      await sleep(500);
+      expect(env.state("standsEnabled") === true && standsTicked(env), "the tick stood when 4.17.0 wrote its settings: it stands now");
+      await env.open();
+      await env.settle(500);
+      const start = env.of("/session/start")[0];
+      expect(start.body.params.removeStands === true && setsStands(start) === true && start.used.removeStands === true && start.used.cycDepth === 10 && standsTicked(env),
+        "the first photo after the update is cleaned without the stands: " + JSON.stringify([start.body.params.removeStands, setsStands(start), start.used.removeStands]));
+      expect(env.recomputes().length === 0 && env.state("previewMatchesSettings()") === true, "nothing is asked again");
+      const kept = env.server.disk["user_settings.json"];
+      expect(kept.standsOn === true && kept.cfg.removeStands === true, "the settings written back say it the new way (and the old way, for a server or a plugin of 4.17.0)");
+      const list = env.server.disk["presets_local.json"];
+      expect(list.length === 12 && list.find((p) => p.id === "usr_1700000000002").cfg.removeStands === true && list.find((p) => p.id === "clean_stands").cfg.removeStands === true &&
+        list.find((p) => p.id === "lowkey_wide").cfg.removeStands === false, "the presets on the PC are left as they were saved");
+      // the other way round, on another PC: the tick was off when 4.17.0 was closed - with a preset of the user's own
+      // that was saved with the tick, and with 'Без стійок (AI)' as the active preset of the day before
+      const other = makeEnv({ scene: { kind: "dark", framing: "wide", dark: true }, serverPresets: pc417(),
+        disk: { "presets_local.json": pc417(), "user_settings.json": settings417(pc417(), "clean_stands", false) } });
+      try {
+        await sleep(500);
+        expect(other.state("standsEnabled") === false && standsClear(other), "the tick was off when 4.17.0 wrote its settings: it is off");
+        await other.open();
+        await other.settle(500);
+        const st = other.of("/session/start")[0];
+        expect(st.body.params.removeStands === false && setsStands(st) === false && st.used.removeStands === false && standsClear(other), "the first photo keeps the stands");
+        other.click("dlgBtnPresets");
+        other.clickPreset("Мій зі стійками");               // saved by 4.17.0 with 'removeStands: true'
+        await other.settle(900);
+        expect(standsClear(other) && lastRecompute(other).body.params.removeStands === false && lastRecompute(other).body.params.spots === 66,
+          "a preset of the user's own that 4.17.0 saved with the tick gives its values and leaves the tick: " + JSON.stringify([lastRecompute(other).body.params.spots, lastRecompute(other).body.params.removeStands]));
+        other.check("dlgChkStands", true);
+        await other.settle(700);
+        other.click("dlgBtnGear");
+        other.click("gBtnSavePreset");                       // «Зберегти у «Мій зі стійками»» with the tick on
+        await other.settle(400);
+        const saved = other.server.disk["presets_local.json"].find((p) => p.id === "usr_1700000000002").cfg;
+        expect(!("removeStands" in saved) && saved.spots === 66, "a preset saved now holds no word of the stands: " + JSON.stringify(Object.keys(saved).filter((k) => /stand/i.test(k))));
+        other.clickPreset("Мій без стійок");                 // saved by 4.17.0 with 'removeStands: false'
+        await other.settle(900);
+        expect(standsTicked(other) && lastRecompute(other).body.params.removeStands === true && lastRecompute(other).body.params.spots === 67, "...and a preset saved without the tick does not take it off");
+        expect(other.errors.length === 0, "script errors on the other PC: " + other.errors.join(" | "));
+      } finally {
+        await other.close();
+      }
+    });
+
+  await scenario("'Стійки' and 'Скинути пресет': resetting 'Без стійок (AI)' is the user's own act and puts the tick; resetting another preset leaves it",
+    { detail: false }, async (env, expect) => {
+      env.check("dlgChkAutoPreset", false);
+      await env.open();
+      env.click("dlgBtnPresets");
+      env.clickPreset("Дальній план");
+      await env.settle(900);
+      env.check("dlgChkStands", true);
+      await env.settle(700);
+      env.click("dlgBtnGear");
+      env.click("gBtnResetPreset");
+      await sleep(60);
+      env.click("gBtnResetPreset");
+      await env.settle(900);
+      expect(standsTicked(env) && env.state("activePresetId") === "wide_shot", "'Дальній план' reset with the tick on: the tick stays");
+      env.check("dlgChkStands", false);
+      await env.settle(700);
+      env.click("gBtnResetPreset");
+      await sleep(60);
+      env.click("gBtnResetPreset");
+      await env.settle(900);
+      expect(standsClear(env), "...reset with the tick off: it stays off");
+      env.state("applyPreset(presetsList.find((p) => p.id === 'clean_stands')); renderPresets()");
+      expect(standsClear(env) && env.state("activePresetId") === "clean_stands", "(the program puts 'Без стійок (AI)' on the controls: no tick)");
+      env.click("gBtnResetPreset");
+      await sleep(60);
+      env.click("gBtnResetPreset");
+      await env.settle(900);
+      expect(standsTicked(env) && lastRecompute(env).body.params.removeStands === true, "'Без стійок (AI)' reset by the user: the tick is put, the refresh carries it");
+    });
+
+  await scenario("'Стійки' in a backup: one made with the tick off takes it off, one made with it on puts it - also a backup of 4.17.0", { disk: {} }, async (env, expect) => {
+    await sleep(400);
+    const shipped = () => JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, "..", "server", "presets_defaults.json"), "utf8"));
+    const made = (file, when, version, ticked, word) => ({
+      file, saved_at: when, version, label: "", presets_list: shipped(),
+      settings: Object.assign({
+        schemaVersion: 5, activePresetId: "std", autoPreset: true, knownDefaultIds: shipped().map((p) => p.id), deletedDefaultIds: [],
+        presetMoves: ["cyc65", "smokeOff", "lowkeySpots80", "lowkeyCyc65", "depth60", "darkDepth10"], cfg: Object.assign({}, shipped()[0].cfg, { removeStands: ticked })
+      }, word ? { standsOn: ticked } : {})
+    });
+    env.server.backups.push(made("CleanVinylPro2_backup_off.json", "2026-11-20T10:00:00", PLUGIN_VERSION, false, true));
+    env.server.backups.push(made("CleanVinylPro2_backup_on.json", "2026-11-21T11:00:00", PLUGIN_VERSION, true, true));
+    env.server.backups.push(made("CleanVinylPro2_backup_417_off.json", "2026-11-22T12:00:00", "4.17.0", false, false));   // (no word of 4.18.0 in it)
+    const restore = async (dateText) => {
+      env.click("btnBackupRestore");
+      await env.settle(300);
+      const row = () => backupRows(env).find((n) => n.textContent.includes(dateText));
+      if (!row()) throw new Error("no backup of " + dateText + " in the list: " + backupRows(env).map((n) => n.textContent).join(" | "));
+      row().click();
+      await env.settle(150);
+      row().click();
+      await env.settle(600);
+    };
+    const tick = () => [env.state("standsEnabled"), env.el("dlgChkStands").checked, env.server.disk["user_settings.json"] && env.server.disk["user_settings.json"].standsOn].join();
+    env.state("standsEnabled = true; updateSliderVisuals()");
+    await restore("20.11.2026 10:00");
+    expect(tick() === "false,false,false", "the tick stands; a backup made with it off takes it off - the switch, the box, the settings on the PC: " + tick());
+    await restore("21.11.2026 11:00");
+    expect(tick() === "true,true,true", "a backup made with the tick on puts it: " + tick());
+    await restore("22.11.2026 12:00");
+    expect(tick() === "false,false,false", "a backup of 4.17.0 made with the tick off takes it off as well: " + tick());
+    expect(env.of("/backup/read").length === 3, "(three backups were read: " + env.of("/backup/read").length + ")");
   });
 
   await scenario("every tick and switch that changes the frame asks for the exact frame at once; a slider for the quick preview; the clothing tick for neither", { recomputeDelay: 100, detail: false }, async (env, expect) => {
@@ -3811,7 +4112,7 @@ async function main() {
   }
   console.log(failed.length
     ? `plugin preview: ${failed.length} of ${results.length} scenarios FAILED`
-    : `plugin preview: ${results.length} scenarios pass (the fast window; drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes, steps back and forward, preset reset, backup, one mode, soft and hard brush edge, the exact picture by itself, strokes on the cleaned photo, zoom keys, right-button drag, the hair slider, the keyboard of the window, depth, a new result leaves 'До')`);
+    : `plugin preview: ${results.length} scenarios pass (the fast window; drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes, steps back and forward, preset reset, backup, one mode, soft and hard brush edge, the exact picture by itself, strokes on the cleaned photo, zoom keys, right-button drag, the hair slider, the keyboard of the window, depth, a new result leaves 'До', the stands tick stays as it was left, the version next to the name)`);
   process.exit(failed.length ? 1 : 0);
 }
 

@@ -15,7 +15,11 @@
 //     of date; a preset that does not name it - every built-in one - leaves the tool off;
 //   - 4.17.0: "Глибина" is 10 in the three dark presets that have the corner tool (the owner: «я поставив 10 став
 //     одразу»): on a PC that holds its presets they get it once, the slider of the active one follows, a value
-//     the user chose stays, "Темний ближній план" and the light presets are left alone.
+//     the user chose stays, "Темний ближній план" and the light presets are left alone;
+//   - 4.18.0: the tick «Стійки» is the user's own switch (the owner: «я ставлю галочку щзі стойками а вона
+//     відключається зроби як я посллідніраз ш так би вона і другий раз була»): kept with the settings, read from
+//     a file of an older version the way the tick stood there, carried by every set of values, written into no
+//     preset, put by a click by hand on «Без стійок (AI)» and taken off by nothing but the user.
 //   node tests/plugin_settings.test.js
 const fs = require("fs");
 const path = require("path");
@@ -48,6 +52,7 @@ let deletedDefaultIds = [], knownDefaultIds = [], presetsList = [], appliedPrese
 const sessState = { brushSize: 24, brushSoft: true };
 let detailPreview = false;
 let mixEnabled = false;
+let standsEnabled = false;
 const sliders = { gSlMix: 50 };
 function getSliderVal(id) { return sliders[id]; }
 function setSliderVal(id, v) { sliders[id] = Math.max(0, Math.min(100, Math.round(Number(v) || 0))); return sliders[id]; }
@@ -72,12 +77,13 @@ ${grab("updateBrushEdgeUI")}
 ${grab("setBrushSoft")}
 ${grab("buildSettingsSnapshot")}
 ${grab("applySettingsSnapshot")}
-module.exports = function run(snapshot) {
+module.exports = function run(snapshot, standsBefore) {
   idleUnloadSec = DEFAULT_IDLE_UNLOAD_SEC;
   settingsMigrated = false;
   fracAuto = fracAutoUser = autoPreset = true;
   detailPreview = false;
   mixEnabled = false;
+  standsEnabled = !!standsBefore;   // (how the tick stands before the file is read: a backup is read into a running panel)
   sliders.gSlMix = 50;
   sessState.brushSoft = true;
   pills.forEach((p) => (p.active = Number(p.dataset.sec) === 120));
@@ -169,6 +175,31 @@ for (const [name, snapshot, expOn, expStrength] of mixKeys) {
     console.log("FAIL " + name + " -> " + JSON.stringify(r.saved));
   }
 }
+// 4.18.0: the tick «Стійки» is the user's own switch, kept with the settings. A file of an older version holds the
+// tick among the values of the controls ("cfg"), the way it stood when the file was last written.
+// [name, saved file, expected in the file written back: standsOn, how the tick stands before the file is read]
+const standsKeys = [
+  ["nothing saved yet: the stands stay in the frame", {}, false],
+  ["the tick stands, a backup of 4.18.0 made with it off is read: off", { schemaVersion: 5, standsOn: false, cfg: { removeStands: false } }, false, true],
+  ["the tick stands, a backup of 4.17.0 made with it off is read: off", { schemaVersion: 5, autoPreset: true, cfg: { spots: 80, removeStands: false } }, false, true],
+  ["the tick stands, a file that says nothing of it is read: it stays", { schemaVersion: 5, autoPreset: true, mixOn: true }, true, true],
+  ["a file of 4.17.0 written while the tick stood: the tick is on", { schemaVersion: 5, autoPreset: true, cfg: { spots: 80, removeStands: true } }, true],
+  ["a file of 4.17.0 written while the tick was off: off", { schemaVersion: 5, autoPreset: true, cfg: { spots: 80, removeStands: false } }, false],
+  ["a file of 4.17.0 without the values of the controls: off", { schemaVersion: 5, autoPreset: true, mixOn: true }, false],
+  ["a file of 4.18.0, the tick left on", { schemaVersion: 5, standsOn: true, cfg: { removeStands: true } }, true],
+  ["a file of 4.18.0, the tick left off", { schemaVersion: 5, standsOn: false, cfg: { removeStands: false } }, false],
+  ["the word of 4.18.0 goes before the values of the controls: off", { schemaVersion: 5, standsOn: false, cfg: { removeStands: true } }, false],
+  ["...and on", { schemaVersion: 5, standsOn: true, cfg: { removeStands: false } }, true],
+  ["broken values are ignored", { schemaVersion: 5, standsOn: "yes", cfg: { removeStands: 1 } }, false],
+  ["a broken word, a sound value of the controls: the value counts", { schemaVersion: 5, standsOn: 1, cfg: { removeStands: true } }, true]
+];
+for (const [name, snapshot, expOn, before] of standsKeys) {
+  const r = run(snapshot, before);
+  if (r.saved.standsOn !== expOn) {
+    failed++;
+    console.log("FAIL " + name + " -> " + JSON.stringify(r.saved));
+  }
+}
 // [name, saved file, expected in the file written back: brushSoft, speedMode]
 const brushKeys = [
   ["nothing saved yet: the soft edge", {}, true],
@@ -200,6 +231,7 @@ let deletedDefaultIds = [], knownDefaultIds = [], presetsList = [], appliedPrese
 const sessState = { brushSize: 24 };
 let detailPreview = false;
 let mixEnabled = false;
+let standsEnabled = false;
 function setDetailPreview(on) { detailPreview = !!on; }
 function updateSliderVisuals() {}
 const sliders = {};
@@ -496,6 +528,7 @@ const sceneCode = `
 ${sceneConst[0]}
 let presetsList = [];
 let mixEnabled = false;
+let standsEnabled = false;
 function presetRequestParams(p) { return Object.assign({}, p.cfg); }
 function clampSliderVal(id, v) { return v; }
 function getSliderVal(id) { return id === "gSlMix" ? 50 : 0; }
@@ -522,6 +555,8 @@ moveCase("a preset that does not say whether smoke is protected: it is not", sce
   sceneApi.norm({ smokeOn: true }).smokeOn === true && sceneApi.norm({ smokeOn: false }).smokeOn === false, sceneApi.norm({}));
 
 // ------------------------------------------------------------------ 4.9.0: the slider of the single hairs
+const standsIdsConst = src.match(/const STANDS_PRESET_IDS = \[[^\]]*\];\n/);
+if (!standsIdsConst) throw new Error("STANDS_PRESET_IDS not found in main.js");
 const sliderTables = src.match(/const ALL_SLIDER_IDS = \[[\s\S]*?\n\];\nconst SLIDER_VAL_MAP = \{[\s\S]*?\n\};\nconst SLIDER_MAX_MAP = .*;\nconst sliderState = \{[\s\S]*?\n\};\n/);
 if (!sliderTables) throw new Error("the slider tables were not found in main.js");
 const hairCode = `
@@ -530,7 +565,10 @@ const sliderDisabled = {};
 const badges = {};
 let seamEnabled = true, smokeEnabled = false, dressSmoothEnabled = false, fracFine = true, fracMed = true, fracLarge = true, cleanPasses = 1;
 let mixEnabled = false;
+let standsEnabled = false;
 const speedMode = "quality";
+let activePresetId = "std", fracAuto = true, fracAutoUser = true;
+${standsIdsConst[0]}
 function el(id) { return /^(gVal|dlgVal)/.test(id) ? (badges[id] = badges[id] || { textContent: "" }) : null; }
 function updateFractionButtonsUI() {}
 ${grab("getSliderMax")}
@@ -544,11 +582,17 @@ ${grab("normalizedPresetConfig")}
 ${grab("applyConfig")}
 ${grab("updateSliderVisuals")}
 ${grab("previewSettingsSignature")}
+${grab("presetFracAuto")}
+${grab("applyPreset")}
+${grab("presetConfigToSave")}
 module.exports = {
   ids: ALL_SLIDER_IDS, map: SLIDER_VAL_MAP, state: sliderState, read: readCurrentConfig, norm: normalizedPresetConfig, apply: applyConfig,
   sig: previewSettingsSignature, badge: (id) => (badges[id] ? badges[id].textContent : null),
   set: (id, v) => { setSliderVal(id, v); updateSliderVisuals(); },
-  mix: (on) => { mixEnabled = !!on; updateSliderVisuals(); }
+  mix: (on) => { mixEnabled = !!on; updateSliderVisuals(); },
+  stands: (on) => { standsEnabled = !!on; updateSliderVisuals(); },
+  preset: (p, byHand) => { applyPreset(p, byHand); return { active: activePresetId, stands: standsEnabled }; },
+  toSave: presetConfigToSave
 };
 `;
 const modHair = { exports: null };
@@ -590,6 +634,45 @@ moveCase("a preset says nothing of the mixer brush: what it would send carries t
   (hair.apply(defaultsNow[0].cfg), hair.read().mixOn === true && hair.read().mix === 40), null);
 hair.mix(false);
 
-const total = cases.length + newKeys.length + detailKeys.length + mixKeys.length + brushKeys.length + moveCases;
+// 4.18.0: the stands - the user's own switch. No preset carries it: every set that is sent says what the tick
+// says; a click by hand on «Без стійок (AI)» puts the tick, nothing but the user takes it off.
+const byId = (id) => defaultsNow.find((p) => p.id === id);
+const sigStandsOff = hair.sig();
+hair.stands(true);
+moveCase("the stands tick is sent as 'removeStands' and makes the preview out of date",
+  hair.read().removeStands === true && hair.sig() !== sigStandsOff && (hair.stands(false), hair.read().removeStands === false && hair.sig() === sigStandsOff),
+  { read: hair.read().removeStands });
+moveCase("the tick off: what a preset would send keeps the stands in the frame - also «Без стійок (AI)», which ships 'removeStands: true'",
+  byId("clean_stands").cfg.removeStands === true && defaultsNow.every((p) => hair.norm(p.cfg).removeStands === false),
+  defaultsNow.map((p) => [p.id, hair.norm(p.cfg).removeStands]));
+hair.stands(true);
+moveCase("the tick on: what a preset would send removes the stands - every preset, although all but one ship 'removeStands: false'",
+  defaultsNow.filter((p) => p.cfg.removeStands === false).length === defaultsNow.length - 1 && defaultsNow.every((p) => hair.norm(p.cfg).removeStands === true),
+  defaultsNow.map((p) => [p.id, hair.norm(p.cfg).removeStands]));
+moveCase("the values of a preset put on the controls leave the tick as it is: on stays on",
+  defaultsNow.every((p) => (hair.apply(p.cfg), hair.read().removeStands === true)), null);
+moveCase("a preset applied by the program (the automatic choice) leaves the tick on, a preset clicked by hand too",
+  defaultsNow.every((p) => hair.preset(p, false).stands === true && hair.preset(p, true).stands === true && hair.read().removeStands === true), null);
+hair.stands(false);
+moveCase("the tick off: the values of a preset - also of «Без стійок (AI)» - do not put it",
+  defaultsNow.every((p) => (hair.apply(p.cfg), hair.read().removeStands === false)), null);
+moveCase("...nor does a preset applied by the program, «Без стійок (AI)» among them",
+  defaultsNow.every((p) => hair.preset(p, false).stands === false) && hair.read().removeStands === false, null);
+moveCase("...nor a click by hand on any preset but «Без стійок (AI)»",
+  defaultsNow.filter((p) => p.id !== "clean_stands").every((p) => hair.preset(p, true).stands === false) && hair.read().removeStands === false, null);
+r = hair.preset(byId("clean_stands"), true);
+moveCase("a click by hand on «Без стійок (AI)» puts the tick, and what is sent says so",
+  r.stands === true && r.active === "clean_stands" && hair.read().removeStands === true, r);
+r = hair.preset(byId("std"), true);
+moveCase("...and it stays when another preset is clicked afterwards",
+  r.stands === true && r.active === "std" && hair.read().removeStands === true, r);
+moveCase("a preset that is saved holds no word of the stands, with the tick on or off",
+  !("removeStands" in hair.toSave()) && (hair.stands(false), !("removeStands" in hair.toSave())) && "spots" in hair.toSave() && "fracAuto" in hair.toSave(),
+  Object.keys(hair.toSave()));
+moveCase("a preset saved by an older version with 'removeStands: true' - the user's own, or a built-in one saved with the tick - does not put it",
+  [{ id: "usr_1700000000000", builtin: false, cfg: { spots: 70, removeStands: true } }, { id: "wide_shot", builtin: true, cfg: { spots: 85, removeStands: true } }]
+    .every((p) => hair.preset(p, true).stands === false && hair.preset(p, false).stands === false), null);
+
+const total = cases.length + newKeys.length + detailKeys.length + mixKeys.length + standsKeys.length + brushKeys.length + moveCases;
 console.log(failed ? `plugin settings migration: ${failed} of ${total} cases FAILED` : `plugin settings migration: ${total} cases pass`);
 process.exit(failed ? 1 : 0);

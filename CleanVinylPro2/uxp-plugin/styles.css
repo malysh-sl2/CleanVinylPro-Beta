@@ -83,6 +83,21 @@ html, body {
   color: #ffffff;
 }
 
+/* The version under the name (since 4.18.0): which version is installed can be read on the panel itself */
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.brand-version {
+  margin-top: 1px;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #9fb4c9;
+  white-space: nowrap;
+}
+
 .header-right {
   display: flex;
   align-items: center;

@@ -3670,12 +3670,21 @@ def check_server():
     # The name. Up to 4.7.0 the program was shown as "Чистий Вініл Pro 2", to tell it from the original program
     # next to which it was installed. The owner removed the original and asked for the name without the 2
     # (4.8.0). Only what a person reads was renamed; everything the two programs register stays apart (below).
+    # Since 4.18.0 the version stands next to the name wherever the plugin is named for a person - the Plugins menu
+    # and the tab of the panel (manifest.json, written by hand with every version), the header of the panel and the
+    # title of the big window (main.js builds both from PLUGIN_VERSION). The owner: «у назві плагіна пиши версію бо
+    # деколи не розумію чи установ нову чи то стара».
     shown_name = "Чистий Вініл Pro"
+    named = f"{shown_name} {srv.APP_VERSION}"
     html = text(root, "uxp-plugin", "index.html")
     main_js = text(root, "uxp-plugin", "main.js")
     name_problems = [where for where, ok in (
-        ("manifest name", manifest["name"] == shown_name),
-        ("panel label", manifest["entrypoints"][0]["label"]["default"] == shown_name),
+        ("manifest name carries the version", manifest["name"] == named),
+        ("panel label carries the version", manifest["entrypoints"][0]["label"]["default"] == named),
+        ("the version on the panel", '<div class="brand-version" id="brandVersion"></div>' in html
+         and 'el("brandVersion").textContent = "версія " + PLUGIN_VERSION;' in main_js),
+        ("the version in the title of the window", f'const PLUGIN_NAME = "{shown_name}";' in main_js
+         and 'const PLUGIN_TITLE = PLUGIN_NAME + " " + PLUGIN_VERSION;' in main_js and "title: PLUGIN_TITLE," in main_js),
         ("index.html", "Pro 2" not in html and f"<title>{shown_name}</title>" in html),
         ("main.js strings", not re.search(r'["`][^"`\n]*Вініл (Pro )?2[^"`\n]*["`]', main_js)),
         (".bat files", not any("Pro 2" in text(root, bat) for bat in os.listdir(root) if bat.endswith(".bat"))),
@@ -3683,7 +3692,7 @@ def check_server():
         ("server banner", "Clean Vinyl Pro 2" not in text(root, "server", "server.py")),
     ) if not ok]
     if name_problems:
-        bad.append(f"the name still carries the 2: {name_problems}")
+        bad.append(f"the name (no 2; the version {srv.APP_VERSION} next to it): {name_problems}")
     # The layers: made under the new names; a document that holds a layer of 4.7.0 or older is still recognised
     for want in ('const LAYER_NAME_AI = "Чистий вініл (AI)";', 'const LAYER_NAME_SELECTION = "Чистий вініл (Виділення)";',
                  '"Чистий вініл 2 (AI)", "Чистий вініл 2 (Виділення)"];', "PLUGIN_LAYER_NAMES.includes(l.name)"):
@@ -3759,7 +3768,8 @@ def check_server():
     n = struct.unpack_from("<I", resp.body, 0)[0]
     if json.loads(resp.body[4:4 + n].decode("utf-8")) != {"ok": True, "текст": "ї"} or resp.body[4 + n:] != np.arange(6, dtype=np.uint16).tobytes() + b"\x07\x08":
         bad.append("_binary_response layout")
-    report("server", not bad, f"settings migration, packet parsing, version {srv.APP_VERSION} everywhere, the name without the 2, an opaque plugin icon, "
+    report("server", not bad, f"settings migration, packet parsing, version {srv.APP_VERSION} everywhere - also next to the name of the plugin (the Plugins menu, "
+           f"the panel, the window) -, the name without the 2, an opaque plugin icon, "
            f"nothing registered in common with the original program (port {srv.APP_PORT})"
            if not bad else f"wrong: {bad}")
 

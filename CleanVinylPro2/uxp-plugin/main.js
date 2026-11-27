@@ -6,7 +6,14 @@ const uxpShell = uxp.shell;
 const CANDIDATE_URLS = ["http://127.0.0.1:18746", "http://localhost:18746"];
 // The same number as in manifest.json and server.py. A server of another version still answers (for example the
 // previous one that was left running after an update) - the panel then says how to restart it.
-const PLUGIN_VERSION = "4.17.0";
+const PLUGIN_VERSION = "4.18.0";
+// The name as a person reads it. Since 4.18.0 the version stands next to it wherever the plugin is named: in the
+// Plugins menu and on the tab of the panel (manifest.json - "name" and the label of the panel, written there by
+// hand), in the header of the panel and in the title of the big window (below). The owner: «у назві плагіна пиши
+// версію бо деколи не розумію чи установ нову чи то стара». What goes into a document keeps the plain name - the
+// layers and the steps of the History panel.
+const PLUGIN_NAME = "Чистий Вініл Pro";
+const PLUGIN_TITLE = PLUGIN_NAME + " " + PLUGIN_VERSION;
 let SERVER_URL = CANDIDATE_URLS[0];
 
 const DEFAULT_PRESETS = [
@@ -114,6 +121,15 @@ let dressSmoothEnabled = false;
 // a wide soft mixer brush. The switch and its strength (slider gSlMix) are the user's own, like "Make Mask": no
 // preset changes them, so the tick stays as it was put for every frame and every preset.
 let mixEnabled = false;
+// "Прибирати стійки" (the tick «Стійки» at the top of the big window). Up to 4.17.0 it was a value of the preset,
+// and every built-in preset but one carries it off: each new photo with the automatic preset, and each click on a
+// preset, took the tick away. The owner: «дивися я ставлю галочку щзі стойками а вона відключається зроби як я
+// посллідніраз ш так би вона і другий раз була». Since 4.18.0 it is the user's own switch, like the mixer brush:
+// it stays the way it was left - for the next photo, for every preset, after Photoshop is started again - and
+// every set of values that is sent carries it. One thing besides the tick itself puts it: a click BY HAND on a
+// preset of STANDS_PRESET_IDS («Без стійок (AI)» - its name promises that). Nothing takes it off but the user.
+let standsEnabled = false;
+const STANDS_PRESET_IDS = ["clean_stands"];
 let cleanPasses = 1;
 // How the found defects are closed. One way is left: the full AI fill (what used to be the mode "✦ Якісний").
 // The fast mode and its button were removed in 4.7.0 at the owner's request; a "fast" kept in settings or presets
@@ -575,7 +591,7 @@ function readCurrentConfig() {
     smokeFaint: true,
     grain: getSliderVal("gSlGrain"),
     shadow: el("gChkShadow") ? el("gChkShadow").checked : true,
-    removeStands: el("dlgChkStands") ? el("dlgChkStands").checked : false,
+    removeStands: standsEnabled,
     master: getSliderVal("gSlTurbo"),
     fracFine,
     fracMed,
@@ -619,7 +635,8 @@ function normalizedPresetConfig(cfg) {
     smokeFaint: true,
     grain: clampSliderVal("gSlGrain", c.grain ?? 90),
     shadow: flag(c.shadow, true),
-    removeStands: !!c.removeStands,
+    // (the stands are not a matter of the preset either: every set carries the tick as the user left it)
+    removeStands: standsEnabled,
     master: clampSliderVal("gSlTurbo", Math.max(100, c.master ?? 100)),
     fracFine: flag(c.fracFine, true),
     fracMed: flag(c.fracMed, true),
@@ -646,7 +663,6 @@ function applyConfig(cfg) {
   setSliderVal("gSlSmoke", c.smoke);
   setSliderVal("gSlGrain", c.grain);
   if (el("gChkShadow")) el("gChkShadow").checked = c.shadow;
-  if (el("dlgChkStands")) el("dlgChkStands").checked = c.removeStands;
   setSliderVal("gSlTurbo", c.master);
 
   fracFine = c.fracFine;
@@ -674,8 +690,10 @@ function presetFracAuto(p) {
   return null;
 }
 
-function applyPreset(p) {
+// byHand: the user clicked this preset (or reset it). Only then may it put the tick «Стійки» - see standsEnabled.
+function applyPreset(p, byHand = false) {
   activePresetId = p.id;
+  if (byHand && STANDS_PRESET_IDS.includes(p.id)) standsEnabled = true;
   applyConfig(p.cfg);
   const auto = presetFracAuto(p);
   fracAuto = auto === null ? fracAutoUser : auto;
@@ -687,6 +705,7 @@ function presetConfigToSave() {
   const cfg = Object.assign(readCurrentConfig(), { fracAuto });
   delete cfg.mixOn;  // (the mixer brush is the user's own switch, not a part of any preset - see mixEnabled)
   delete cfg.mix;
+  delete cfg.removeStands;  // (...and so are the stands - see standsEnabled)
   return cfg;
 }
 
@@ -879,7 +898,8 @@ function updateSliderVisuals() {
   if (el("dlgChkMix")) el("dlgChkMix").checked = mixEnabled;
   if (el("dlgWrapMix")) el("dlgWrapMix").classList.toggle("active", mixEnabled);
   setSliderDisabled("gSlMix", !mixEnabled);
-  if (el("dlgWrapStands")) el("dlgWrapStands").classList.toggle("active", !!(el("dlgChkStands") && el("dlgChkStands").checked));
+  if (el("dlgChkStands")) el("dlgChkStands").checked = standsEnabled;
+  if (el("dlgWrapStands")) el("dlgWrapStands").classList.toggle("active", standsEnabled);
 
   if (el("gBtnDress")) {
     el("gBtnDress").textContent = dressSmoothEnabled ? "Увімк." : "Вимк.";
@@ -923,6 +943,7 @@ function buildSettingsSnapshot() {
     detailPreview,
     mixOn: mixEnabled,
     mixStrength: getSliderVal("gSlMix"),
+    standsOn: standsEnabled,
     brushSize: sessState.brushSize,
     brushSoft: sessState.brushSoft,
     deletedDefaultIds: Array.from(new Set(deletedDefaultIds)),
@@ -963,6 +984,10 @@ function applySettingsSnapshot(s) {
   if (typeof s.brushSoft === "boolean") setBrushSoft(s.brushSoft, false);
   if (typeof s.mixOn === "boolean") mixEnabled = s.mixOn;
   if (typeof s.mixStrength === "number" && Number.isFinite(s.mixStrength)) setSliderVal("gSlMix", s.mixStrength);
+  // The stands. Settings saved up to 4.17.0 hold the tick among the values of the controls - the way it stood when
+  // they were last saved, which is the way the user left it.
+  if (typeof s.standsOn === "boolean") standsEnabled = s.standsOn;
+  else if (s.cfg && typeof s.cfg === "object" && typeof s.cfg.removeStands === "boolean") standsEnabled = s.cfg.removeStands;
   if (s.activePresetId && presetsList.some((p) => p.id === s.activePresetId)) activePresetId = s.activePresetId;
   if (s.cfg && typeof s.cfg === "object") applyConfig(s.cfg);
   else updateSliderVisuals();
@@ -1212,7 +1237,7 @@ function renderPresets() {
     btn.appendChild(dot);
     btn.appendChild(lbl);
     btn.addEventListener("click", async () => {
-      applyPreset(p);
+      applyPreset(p, true);
       renderPresets();
       scheduleSaveSettings();
       if (el("dlgPresetsPopover")) el("dlgPresetsPopover").classList.remove("visible");
@@ -2438,7 +2463,7 @@ async function resetActivePresetToDefault() {
   resetPresetTimer = null;
   resetPresetArmedId = null;
   active.cfg = JSON.parse(JSON.stringify(shipped.cfg));
-  applyPreset(active);
+  applyPreset(active, true);
   renderPresets();
   sayInWindow(`✓ Пресет «${active.name}» скинуто до стандартних значень.`);
   announcePresetClick(active);
@@ -3263,7 +3288,11 @@ async function openInteractiveWorkspace() {
       // (a server from 4.11.0 on takes the switch on trust: then it is also said when it keeps nothing)
       if (untouched && smokeSeen && smokeSeen.on && (smokeSeen.protected > 0 || smokeSeen.faint)) smokeNote = smokeNoteText(smokeSeen);
       else if (untouched && smokeSeen && !smokeSeen.on && smokeSeen.found) smokeNote = smokeOffHintText(smokeSeen);
-      if (autoNote || smokeNote) showPreviewNote([autoNote, smokeNote].filter(Boolean).join(" "), smokeNote ? 12000 : 8000);
+      // The stands tick is remembered from the last photo (4.18.0): when the window opens with it, that is said -
+      // things at the borders of the frame are gone, and the user did not ask for it this time.
+      const standsNote = untouched && standsEnabled ? "Стійки прибираються: галочка «Стійки» стоїть, як ви її лишили." : "";
+      const openNote = [autoNote, standsNote, smokeNote].filter(Boolean).join(" ");
+      if (openNote) showPreviewNote(openNote, smokeNote ? 12000 : 8000);
       // what the first scan took - and a warning when its AI fill ran on the processor (it goes before the note)
       noteComputeStats(res.stats);
 
@@ -3298,7 +3327,7 @@ async function openInteractiveWorkspace() {
 
   try {
     await dlg.uxpShowModal({
-      title: "Чистий Вініл Pro",
+      title: PLUGIN_TITLE,
       resize: "both",
       size: { width: 1020, height: 740 }
     });
@@ -4202,14 +4231,15 @@ function initEvents() {
   });
 
   // "Прибирати стійки" - on the top bar since 4.13.0, next to the other ticks (the owner asked for it there; up to
-  // 4.12.0 it was a row of the settings). A value of the preset, as before.
+  // 4.12.0 it was a row of the settings). The user's own switch since 4.18.0 (see standsEnabled): kept with the
+  // settings, the next photo opens with it.
   onCheck("dlgChkStands", () => {
-    const on = !!el("dlgChkStands").checked;
+    standsEnabled = !!el("dlgChkStands").checked;
     updateSliderVisuals();
     scheduleSaveSettings();
-    sayInWindow(on
-      ? "✓ Прибирати стійки: штативи, дроти, чорні штори й паркет по краях кадру буде стерто. Тіні людини лишаються."
-      : "Стійки, дроти й прилади лишаються в кадрі недоторканими.");
+    sayInWindow(standsEnabled
+      ? "✓ Прибирати стійки: штативи, дроти, чорні штори й паркет по краях кадру буде стерто. Тіні людини лишаються. Галочка стоятиме й на наступних фото, доки ви її не знімете."
+      : "Стійки, дроти й прилади лишаються в кадрі недоторканими. Галочка лишиться знятою й на наступних фото, доки ви її не поставите.");
     recomputeExactNow();
   });
 
@@ -4648,6 +4678,7 @@ function initEvents() {
 }
 
 (async function bootstrap() {
+  if (el("brandVersion")) el("brandVersion").textContent = "версія " + PLUGIN_VERSION;
   initEvents();
 
   const [localPresets, localSettings, serverMeta] = await Promise.all([
