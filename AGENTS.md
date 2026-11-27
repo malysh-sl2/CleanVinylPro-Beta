@@ -350,6 +350,21 @@ written here and in the repository.
   4.18.0 answers (2) and (3) (reply #26). The pull request was NOT merged, and the reply told him why
   (section 3, «Merging»).
 
+- **2026-11-27, after reply #26** (one message, no files). His words, all of them:
+  «дивись я роблю ще один плагін для ретуші в арені і назнаю як знати чи агент такий розумний як ти що його
+  запитати що він має вміти. знаю о має вміти читати фото ще що»
+  Read as: he is making another plugin, for retouching, in Arena (another chat; which repository is
+  not known) and asks how to tell whether the agent there is as able as this one - what to ask it,
+  what it must be able to do; that it must read photos he knows. A question, not a task for this
+  program. Nothing about 4.18.0, the merge (he did not write «зливай зараз») or the smoke tick.
+  Reply #27 answered in words - five abilities, each with a question that tests it and what a good
+  answer looks like: reads a photo and measures on it (the size in pixels of a photo he sent, a
+  defect shown as a picture); does not make things up («Ти запускав це у Photoshop?» - the right
+  answer is no); checks itself («Як ти це перевірив?»); delivers through github.com, not through a
+  sandbox link; keeps a record in the repository for the next chat. It said that the model of this
+  chat cannot be named, and offered to write the first message for that chat. Nothing was built or
+  released.
+
 ## 2. What is in the repository
 
 | Path | What it is | Rule |
