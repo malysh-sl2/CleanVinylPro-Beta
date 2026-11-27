@@ -305,6 +305,23 @@ written here and in the repository.
   was still there, with its `/tmp`. The work went on from where it stood, and 4.16.0 was released
   (reply #24).
 
+- **2026-11-27, on reply #24** (one message, no files. Written down before any work on it). His words,
+  all of them:
+  «1. Чи зникла пляма біля подолу на 0Q5A3610? я не розумію про що ти.2 неважливо.3 все ок. 4 я поставив
+  10 став одразу»
+  Read as - his answers to the four questions of reply #24, by their numbers (he copied the first
+  question and answered it):
+  (1) he does not understand which smear is meant. The reply had told it in words only ("right of the
+  dress, where the line of the paper meets the hem, about 90 x 40 px"). He does not say whether
+  4.16.0 is installed;
+  (2) whether «До» gives way after a slider and a preset too does not matter to him;
+  (3) in Photoshop 28.0 everything is all right;
+  (4) he had set «Глибина» to 10, and: «став одразу» - the imperative of «ставити», in the words of the
+  question ("чи ставити її в темних пресетах одразу, і скільки?"): the dark presets should come with
+  «Глибина» 10. ("Став" is also the past of «стати»; "it became so at once" answers nothing that was
+  asked.) That reading is the agent's.
+  He did not write «зливай».
+
 ## 2. What is in the repository
 
 | Path | What it is | Rule |
