@@ -3731,7 +3731,23 @@ class CleanVinylEngine:
             excess = cv2.GaussianBlur(excess * fg_f, (0, 0), sig_tex) / np.maximum(cv2.GaussianBlur(fg_f, (0, 0), sig_tex), 0.05)
             tex_out = np.clip((excess - 0.004) / 0.006, 0.0, 1.0)
             dress_f *= 1.0 - tex_out * tex_out * (3.0 - 2.0 * tex_out)
-        return np.clip(dress_f, 0.0, 1.0).astype(np.float32)
+        dress_f = np.clip(dress_f, 0.0, 1.0).astype(np.float32)
+        # Scraps - a bit of a collar between two locks of hair, a gap between fingers - are no garment. Since the
+        # layer covers the whole mask evenly (4.19.0), each of them would be a dot of the layer. A piece smaller
+        # than about 2% of the frame across, or one that is faint all over, is dropped.
+        n_p, lbl_p, st_p, _ = cv2.connectedComponentsWithStats((dress_f > 0.02).astype(np.uint8), connectivity=8)
+        if n_p > 1:
+            min_area = (0.02 * max(sw, sh)) ** 2
+            keep_p = st_p[:, cv2.CC_STAT_AREA] >= min_area
+            for i in np.flatnonzero(keep_p[1:]) + 1:
+                x_p, y_p, w_p, h_p = (int(v) for v in st_p[i, :4])
+                box = dress_f[y_p:y_p + h_p, x_p:x_p + w_p]
+                if float(box[lbl_p[y_p:y_p + h_p, x_p:x_p + w_p] == i].max()) < 0.5:
+                    keep_p[i] = False
+            keep_p[0] = True
+            if not bool(keep_p.all()):
+                dress_f *= keep_p[lbl_p].astype(np.float32)
+        return dress_f
 
     # The ironing. Up to 4.18.0 it was a band-pass of the brightness ("dodge & burn" between two blurs): everything
     # of a certain width was weakened a little, wherever it was - creases and the roundness of the body alike, in
@@ -3752,9 +3768,11 @@ class CleanVinylEngine:
     #   * Only the low layer is moved (a gain per channel, smooth); weave, grain and every fine detail ride on it.
     #   * The layer covers the garment evenly, whatever was changed in it.
     DRESS_WIDTH = 0.45      # the widest window, in half-widths of the garment, at strength 100
-    DRESS_EPS = 0.10        # departures (log units, RMS inside a window) that are half kept at strength 100 ...
+    DRESS_EPS = 0.122       # departures (log units, RMS inside a window) that are half kept at strength 100 ...
     DRESS_EPS_REF = 0.075   # ... in a window this wide (half-widths of the garment); wider windows are stricter
     DRESS_RUNGS = 4         # how many widths, each half of the former
+    DRESS_DEEP = 0.25       # cloth that departs from the surface of the garment by more (log units) at strength 100
+                            # is a fold, not a crease: it stays
     DRESS_TINT = 0.05       # a tint up to about this (log units) is a stain to even out at strength 100, not a colour
 
     @staticmethod
@@ -3769,7 +3787,7 @@ class CleanVinylEngine:
 
     @staticmethod
     def _cloth_surface(low: np.ndarray, wgt: np.ndarray, lum_w: np.ndarray, sigma: float, eps_std: float,
-                       band_guard: float = 0.0, tint_std: float = 0.05):
+                       band_guard: float = 0.0, tint_std: float = 0.05, deep_cut: float = 2.0, want_keep: bool = True):
         """
         low: H x W x 3, the low layer of the cloth (log units); wgt: H x W, 0..1, where there is cloth;
         lum_w: H x W x 3, the share of every channel in the brightness (sums to 1).
@@ -3779,20 +3797,26 @@ class CleanVinylEngine:
         no colour is carried across).
         band_guard (0..1): how much a departure that runs as a BAND - a long soft fold - is taken for structure
         whatever its strength. A blotch or a stain has no direction; a fold has one.
+        deep_cut: a departure this many times eps_std is a fold; the surface is fitted to the rest of the cloth.
+        want_keep=False: only the surface is wanted (the two other results are None).
         Works on a copy reduced so that the window is a few pixels wide: the cost does not grow with the window.
         """
         h, w = low.shape[:2]
         f = 1
-        while sigma / (f * 2) >= 2.5 and min(h, w) / (f * 2) > 24:
+        while sigma / (f * 2) >= 1.8 and min(h, w) / (f * 2) > 24:
             f *= 2
         sw, sh = max(4, w // f), max(4, h // f)
+        ft = np.float32
         if f > 1:
-            m = cv2.resize(wgt, (sw, sh), interpolation=cv2.INTER_AREA).astype(np.float64)
-            lo = cv2.resize(low, (sw, sh), interpolation=cv2.INTER_AREA).astype(np.float64)
-            lw = cv2.resize(lum_w, (sw, sh), interpolation=cv2.INTER_AREA).astype(np.float64)
+            m = cv2.resize(wgt, (sw, sh), interpolation=cv2.INTER_AREA).astype(ft)
+            lo = cv2.resize(low, (sw, sh), interpolation=cv2.INTER_AREA).astype(ft)
+            lw = cv2.resize(lum_w, (sw, sh), interpolation=cv2.INTER_AREA).astype(ft)
         else:
-            m, lo, lw = wgt.astype(np.float64), low.astype(np.float64), lum_w.astype(np.float64)
-        yy, xx = np.mgrid[0:sh, 0:sw].astype(np.float64)
+            m, lo, lw = wgt.astype(ft), low.astype(ft), lum_w.astype(ft)
+        # (coordinates from the middle of the box: their squares stay small enough for single precision)
+        yy, xx = np.mgrid[0:sh, 0:sw].astype(ft)
+        xx -= ft(0.5 * sw)
+        yy -= ft(0.5 * sh)
         sg = sigma * sw / float(w)
 
         def blur(x):
@@ -3800,66 +3824,74 @@ class CleanVinylEngine:
 
         def fitter(mw):
             """The plane fit for the weights `mw`: a function channel -> the value of its plane at every pixel."""
-            wsum = blur(mw) + 1e-9
-            mx, my = blur(mw * xx) / wsum, blur(mw * yy) / wsum
-            reg = 1e-3 * sg * sg
-            sxx = blur(mw * xx * xx) / wsum - mx * mx + reg
-            sxy = blur(mw * xx * yy) / wsum - mx * my
-            syy = blur(mw * yy * yy) / wsum - my * my + reg
-            det = sxx * syy - sxy * sxy
+            inv = 1.0 / (blur(mw) + ft(1e-6))
+            mwx, mwy = mw * xx, mw * yy
+            mx, my = blur(mwx) * inv, blur(mwy) * inv
+            reg = ft(1e-3 * sg * sg)
+            sxx = blur(mwx * xx) * inv - mx * mx + reg
+            sxy = blur(mwx * yy) * inv - mx * my
+            syy = blur(mwy * yy) * inv - my * my + reg
+            idet = 1.0 / np.maximum(sxx * syy - sxy * sxy, ft(1e-6))
             dx, dy = xx - mx, yy - my
+            ax = (syy * dx - sxy * dy) * idet
+            ay = (sxx * dy - sxy * dx) * idet
+            del sxx, sxy, syy, idet, dx, dy
 
             def fit(fc):
-                mf = blur(mw * fc) / wsum
-                sxf = blur(mw * xx * fc) / wsum - mx * mf
-                syf = blur(mw * yy * fc) / wsum - my * mf
-                return mf + ((syy * sxf - sxy * syf) * dx + (sxx * syf - sxy * sxf) * dy) / det
+                mf = blur(mw * fc) * inv
+                return mf + ax * (blur(mwx * fc) * inv - mx * mf) + ay * (blur(mwy * fc) * inv - my * mf)
             return fit
 
+        def twice(fit, fc):
+            s1 = fit(fc)
+            return 2.0 * s1 - fit(s1)
+
         e2 = float(eps_std) ** 2
-        # first look: what departs strongly (a fold, a seam, a hand, a lock of hair) must not bend the surface
-        fit0 = fitter(m)
-        q = np.zeros((sh, sw), np.float64)
-        for c in range(3):
-            r0 = lo[..., c] - fit0(lo[..., c])
-            q += lw[..., c] * r0 * r0
-        robust = 1.0 / (1.0 + (q / (9.0 * e2)) ** 2)
-        fit = fitter(m * robust)
+        # First looks: what departs strongly (a fold, a seam, a hand, a lock of hair) must not bend the surface -
+        # else the cloth next to a dark fold would lie "above" a surface the fold has pulled down, and be darkened
+        # onto it: a halo along every fold. Two rounds (the first is still bent by the fold itself), on the
+        # brightness alone.
+        cut = float(deep_cut) ** 2 * e2
+        lo_lum = (lo * lw).sum(axis=2)
+        fit = fitter(m)
+        for _ in range(2):
+            r0 = lo_lum - twice(fit, lo_lum)
+            q = cv2.dilate(r0 * r0, np.ones((3, 3), np.uint8))    # (the flanks of a fold go with it)
+            fit = fitter(m / (1.0 + (q / ft(cut)) ** 2))
         surf = np.empty_like(lo)
-        q = np.zeros((sh, sw), np.float64)
-        r_lum = np.zeros((sh, sw), np.float64)
         for c in range(3):
-            s1 = fit(lo[..., c])
-            surf[..., c] = 2.0 * s1 - fit(s1)
-            r = lo[..., c] - surf[..., c]
-            q += lw[..., c] * r * r
-            r_lum += lw[..., c] * r
-        wsum = blur(m) + 1e-9
+            surf[..., c] = twice(fit, lo[..., c])
+        if not want_keep:
+            del fit
+            return (cv2.resize(surf, (w, h), interpolation=cv2.INTER_LINEAR) if f > 1 else surf), None, None
+        r = lo - surf
+        q = (lw * r * r).sum(axis=2)
+        r_lum = (lw * r).sum(axis=2)
+        del r, fit
+        wsum = blur(m) + ft(1e-6)
         energy = blur(m * q) / wsum
-        keep = energy * energy / (energy * energy + e2 * e2)
+        keep = energy * energy / (energy * energy + ft(e2 * e2))
         # the colour alone: sum of w r^2 - (sum of w r)^2 is the part of the departure that is not brightness
         t2 = float(tint_std) ** 2
         energy_col = blur(m * np.maximum(q - r_lum * r_lum, 0.0)) / wsum
-        keep_col = energy_col * energy_col / (energy_col * energy_col + t2 * t2)
+        keep_col = energy_col * energy_col / (energy_col * energy_col + ft(t2 * t2))
         if band_guard > 0.0:
             # which way the departures of this width run (structure tensor): 1 = all one way, 0 = no way at all
-            r_s = cv2.GaussianBlur(r_lum * m, (0, 0), 0.5 * sg) / (cv2.GaussianBlur(m, (0, 0), 0.5 * sg) + 1e-3)
-            gx = cv2.Sobel(r_s, cv2.CV_64F, 1, 0, ksize=3)
-            gy = cv2.Sobel(r_s, cv2.CV_64F, 0, 1, ksize=3)
+            r_s = cv2.GaussianBlur(r_lum * m, (0, 0), 0.5 * sg) / (cv2.GaussianBlur(m, (0, 0), 0.5 * sg) + ft(1e-3))
+            gx = cv2.Sobel(r_s, cv2.CV_32F, 1, 0, ksize=3)
+            gy = cv2.Sobel(r_s, cv2.CV_32F, 0, 1, ksize=3)
             jxx, jxy, jyy = blur(m * gx * gx), blur(m * gx * gy), blur(m * gy * gy)
-            one_way = np.sqrt((jxx - jyy) ** 2 + 4.0 * jxy * jxy) / (jxx + jyy + 1e-12)
+            one_way = np.sqrt((jxx - jyy) ** 2 + 4.0 * jxy * jxy) / (jxx + jyy + ft(1e-12))
             one_way = np.clip((one_way - 0.35) / 0.40, 0.0, 1.0)
-            keep = 1.0 - (1.0 - keep) * (1.0 - band_guard * one_way * one_way * (3.0 - 2.0 * one_way))
+            keep = 1.0 - (1.0 - keep) * (1.0 - ft(band_guard) * one_way * one_way * (3.0 - 2.0 * one_way))
         # a window that sees hardly any cloth has nothing to fit a surface to
         keep = 1.0 - (1.0 - keep) * np.clip((wsum - 0.30) / 0.30, 0.0, 1.0)
         keep_col = np.maximum(keep_col, keep)
         if f > 1:
-            surf = cv2.resize(surf.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
-            keep = cv2.resize(keep.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
-            keep_col = cv2.resize(keep_col.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
-        else:
-            surf, keep, keep_col = surf.astype(np.float32), keep.astype(np.float32), keep_col.astype(np.float32)
-        return surf, keep, keep_col
+            surf = cv2.resize(surf, (w, h), interpolation=cv2.INTER_LINEAR)
+            keep = cv2.resize(keep, (w, h), interpolation=cv2.INTER_LINEAR)
+            keep_col = cv2.resize(keep_col, (w, h), interpolation=cv2.INTER_LINEAR)
+        return surf, keep.astype(np.float32, copy=False), keep_col.astype(np.float32, copy=False)
 
     @classmethod
     def _smooth_dress_fabric(
@@ -3898,13 +3930,18 @@ class CleanVinylEngine:
         sig_fine = max(0.8, 0.0009 * ref)            # everything finer is weave and grain: never touched
         half = cls._dress_scale(dress_mask_small) * ref
         sig_ref = max(2.0 * sig_fine, cls.DRESS_EPS_REF * half)
-        sig_max = max(2.0 * sig_fine, cls.DRESS_WIDTH * half * (0.4 + 0.6 * s))
-        eps_ref = cls.DRESS_EPS * (0.35 + 0.65 * s)
+        sig_wide = max(2.0 * sig_fine, cls.DRESS_WIDTH * half)
+        sig_max = sig_wide * (0.4 + 0.6 * s)
+        # The slider: the widths and the share that is evened grow with it steadily; what counts as shallow grows
+        # slowly (x0.73 at 45, x0.82 at 60, x1.18 at 150) - the top of the slider is a heavier iron, not a press.
+        shape = s ** 0.4
+        eps_ref = cls.DRESS_EPS * shape
+        deep_lim = cls.DRESS_DEEP * shape
         amount = 1.0 - float(np.exp(-3.0 * s))
         tint = cls.DRESS_TINT * (0.5 + 0.5 * s)
 
         # work only inside the box around the clothing
-        mg = int(3.0 * sig_max) + 4
+        mg = int(3.0 * max(sig_max, sig_wide)) + 4
         bx0, bx1 = max(0, int(xs.min()) - mg), min(dw, int(xs.max()) + 1 + mg)
         by0, by1 = max(0, int(ys.min()) - mg), min(dh, int(ys.max()) + 1 + mg)
         fx0, fx1 = int(bx0 / sc), min(w, int(np.ceil(bx1 / sc)))
@@ -3922,6 +3959,25 @@ class CleanVinylEngine:
         lum_w = np.exp(low) * np.float32([0.299, 0.587, 0.114])
         lum_w /= lum_w.sum(axis=2, keepdims=True)
 
+        # How deep is every spot of the cloth, all in all? Its departure from the smooth surface of the garment as
+        # a whole (the widest window, the same at every strength). What is deep - a fold, drapery, gathers, a seam,
+        # an edge - stays at every width: a fold is not ironed "a little at each width" until it is gone. A fold
+        # is deep along its whole profile: the depth is read from the deepest spot nearby (about one narrow
+        # window), so the flanks of a fold stay with its bottom.
+        surf, _, _ = cls._cloth_surface(low, m_src, lum_w, sig_wide, 0.5 * deep_lim, deep_cut=2.0, want_keep=False)
+        depth = np.abs(((low - surf) * lum_w).sum(axis=2))
+        del surf
+        # 0 up to 0.8 of the limit, 1 from 1.2 of it: what is clearly a fold is not touched AT ALL (a gate that
+        # only weakens would let every width take its share, and four shares are a third of the fold)
+        deep = np.clip((depth / deep_lim - 0.8) / 0.4, 0.0, 1.0)
+        deep = deep * deep * (3.0 - 2.0 * deep)
+        del depth
+        # the flanks of a fold, and a soft border: the shoulders of a fold are not shaved off, no crease ends at a line
+        kd = int(np.clip(round(2.0 * sig_ref), 3, 81)) | 1
+        near = cv2.GaussianBlur(cv2.dilate(deep, np.ones((kd, kd), np.uint8)), (0, 0), 0.5 * kd)
+        np.maximum(deep, near, out=deep)
+        del near
+
         cur = low.copy()
         for k in range(cls.DRESS_RUNGS - 1, -1, -1):          # from narrow to wide
             sg = sig_max / (2.0 ** k)
@@ -3937,10 +3993,11 @@ class CleanVinylEngine:
             r = cur - surf
             r_lum = (r * lum_w).sum(axis=2)
             r_col = r - r_lum[..., None]
-            # by the pixel: a deep fold, an edge, a hand on the cloth is no crease; a strong tint is no stain
-            g_lum = 1.0 / (1.0 + (r_lum * r_lum / (9.0 * eps * eps)) ** 2) * (1.0 - keep)
+            # brightness: what is not deep (the spot) and lies in calm cloth (the piece) is pulled onto the surface
+            g_lum = (1.0 - deep) * (1.0 - keep)
+            # colour: a strong tint is a colour of the cloth - a print, a second garment - and no stain
             col2 = (r_col * r_col * lum_w).sum(axis=2)
-            g_col = 1.0 / (1.0 + (col2 / (t_col * t_col)) ** 2) * (1.0 - keep_col)
+            g_col = (1.0 - deep) * (1.0 - keep_col) / (1.0 + (col2 / (t_col * t_col)) ** 2)
             pull = r_lum[..., None] * g_lum[..., None] + r_col * g_col[..., None]
             cur -= pull * (rung * amount)
             del surf, keep, keep_col, r, r_lum, r_col, g_lum, g_col, col2, pull
