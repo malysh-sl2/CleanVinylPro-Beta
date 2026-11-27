@@ -320,7 +320,9 @@ written here and in the repository.
   question ("чи ставити її в темних пресетах одразу, і скільки?"): the dark presets should come with
   «Глибина» 10. ("Став" is also the past of «стати»; "it became so at once" answers nothing that was
   asked.) That reading is the agent's.
-  He did not write «зливай».
+  He did not write «зливай». No option card was shown. 4.17.0 answers this message (reply #25); for
+  (1) a picture of the place was made from his own frame and result and opened in his viewer beside
+  the chat (section 4, «A question about a place needs a picture»).
 
 ## 2. What is in the repository
 
@@ -1385,13 +1387,69 @@ second plugin next to the installed one and lose his presets.
     pass); `tests/try_defects.py` holds the 26 defects of 4.16.0 (12 «paint: …» in the engine, 14
     «view: …» in the panel).
 
+- **4.17.0** — «Глибина» 10 in the dark presets; after his answer of 2026-11-27 to the questions of
+  reply #24 (section 1). The engine did not change; no new control.
+  - **The presets.** `cycDepth` is 10 instead of 0 in the three dark presets that have the corner
+    tool - «Темний ключ» (`lowkey`), «Темний середній план» (`lowkey_medium`), «Темний дальній план»
+    (`lowkey_wide`) - in `DEFAULT_PRESETS` of `main.js` and in `server/presets_defaults.json` (the two
+    lists must say the same; the settings test compares them). «Темний ближній план» (`lowkey_close`)
+    stays at 0: its corner tool is off, the row is greyed and the value does nothing - like the
+    light close-up. The light presets stay at 60.
+  - **The move.** `darkDepth10` of `PRESET_DEFAULT_MOVES` (0 -> 10, slider `gSlDepth`) carries it to
+    a PC that holds its presets: once; only where the stored value is still 0 (a missing key counts
+    as 0); the slider of the active dark preset follows when it stands at 0. A built-in preset
+    saved with another depth, the user's own presets and a slider that stands elsewhere are left.
+    It cannot tell a 0 he saved on purpose from the former default: such a preset gets 10 (the
+    manual says "a number you saved stays" - true of every number but 0).
+  - **Why he needed it.** With «Авто: підбирати пресет під кадр» (on by default) every frame is
+    cleaned with the values of the preset the server picks (`buildScenePresets`): a 10 put on the
+    slider by hand is gone with the next photo unless he presses «Зберегти у …». The new scenario,
+    run on the plugin of 4.16.0, shows it: with 10 on the slider and 0 in the preset the next dark
+    frame is cleaned with 0. Whether the automatic choice is on at his PC is not known; the wish
+    fits either way.
+  - **The hint** of the row «Глибина» (`index.html`) names 60 % for the light presets and 10 % for
+    the dark ones.
+  - **What 10 does on his frames.** Six of his ten frames are dark for the server (`_scene_info` with
+    the stand-in silhouettes; the backdrop under 40 of 255): `2.jpg` 31.1, `3.jpg` 13.5, `0Q5A3417`
+    20.9, `0Q5A3411` 11.7, `0Q5A3413` 13.1, `0Q5A3610` 14.9 - all full-length, so «Темний дальній
+    план». The other four are light: `0Q5A2507` 68.2, `1.jpg` 78.1, `0Q5A3384` 53.4, `0Q5A3534` 42.0
+    (right at the limit). On the six, with «Темний дальній план», «Стійки» and «Мікс» 50, depth 10
+    against depth 0 (brightness of the result: share of the frame moved by more than 1 level / by
+    more than 2 / the largest darker and lighter; the rows where it moves, in % of the height):
+    `2.jpg` 7.1 % / 0.05 % / -1.0 +2.3 (43-80); `3.jpg` 2.2 % / 0.20 % / -2.6 +3.0 (47-77);
+    `0Q5A3417` 4.0 % / 0.13 % / -4.0 +4.0 (60-92); `0Q5A3411` 3.3 % / 0.11 % / -3.0 +3.7 (57-89);
+    `0Q5A3413` 3.5 % / 0.90 % / -1.3 +4.0 (54-75); `0Q5A3610` 7.1 % / 2.99 % / -1.7 +4.0 (40-77).
+    Nowhere more than 4 levels. Inside the stand-in person (matte over 0.9) nothing changes on five
+    frames and one pixel by one level on `0Q5A3417`; in the soft edge of the matte (0.5 to 0.9) up
+    to 3.5 levels (`3.jpg`), as with every tone stage since 4.9.0. All six pairs were looked at,
+    opened up with gamma 0.5: the difference can hardly be seen.
+    Why the dark presets shipped 0 before (4.14.0): at 60 the pool of light is carried up a black
+    wall. On the drawn frame "pool" of `check_depth` that is +14.5 levels an eighth of the frame
+    above the line and up to 24.3 for a pixel; at 10 it is +1.5 and 5.7 (the cove is 1.25 times as
+    wide instead of 2.5 times).
+  - **The manual** said that a backdrop counts as dark under 26 of 255 - stale since 4.6.0. It says 40
+    now and names his frames on both sides of it.
+  - **The smear he did not understand** (question 1 of reply #24): answered with a picture of his own
+    frame and result (section 4). Nothing new in the program for it; 4.16.0 is the cure, still
+    not seen with the real network.
+  - NOT built: anything for the light presets (60 stays - he said nothing of them); a depth for
+    «Темний ближній план».
+  - Checks: the settings test has 85 cases (11 new: a PC of 4.16.0; his own case - 10 on the slider,
+    0 in the preset; another depth on the slider; a depth he saved; the dark close-up; a light
+    preset; his own dark preset; 0 put back; a fresh install; what the server is sent for every
+    kind of frame) and reads `presets_defaults.json` from next to the plugin under test; the window
+    test has 127 scenarios (two new «'Глибина' 10 in the dark presets: …»; three older ones follow
+    the new numbers); the group `depth` asks that a small depth is a small step;
+    `tests/try_defects.py` holds the 18 defects of 4.17.0 (3 «depth: …» in the engine, 15 in the
+    panel).
+
 ## 3. Current state — update this at the end of every session
 
-_Last updated: by the agent of the first session, after releasing 4.16.0 (the answer to his message of
-2026-11-26 on 4.15.0)._
+_Last updated: by the agent of the first session, after releasing 4.17.0 (the answer to his message of
+2026-11-27 on the questions of reply #24)._
 
-- **Released:** 4.16.0, tag `cvp2-v4.16.0`, as a pre-release. Direct download:
-  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.16.0/CleanVinylPro2.zip`
+- **Released:** 4.17.0, tag `cvp2-v4.17.0`, as a pre-release. Direct download:
+  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.17.0/CleanVinylPro2.zip`
 - **Owner's progress:** 4.2.0 to 4.12.0 have been installed and work on his PC (program in
   `D:\Plugin Photoshop\CleanVinylPro2`, models in `D:\model AI fotoshop`, LaMa on `CUDAExecutionProvider`,
   Python 3.12.10). So the `.bat` files, the installer, the GPU, the real models and the panel HAVE run on
@@ -1430,49 +1488,45 @@ _Last updated: by the agent of the first session, after releasing 4.16.0 (the an
   them, and with his real silhouette they are gone); `[` and `]` work; he set «Глибина» to 10 on
   that dark frame, which too was shot about five metres from the wall; «Мікс» is ticked. One wish:
   when the bar reaches its end, show the photo «після». 4.16.0 answers that message (reply #24).
-  **He has not reported on 4.16.0 yet.**
+  On the questions of reply #24 (2026-11-27, section 1): he did not understand which smear was
+  meant (a picture went with reply #25); whether «До» gives way after a slider does not matter to
+  him; Photoshop 28.0 is all right; the dark presets should come with «Глибина» 10 - 4.17.0 does
+  that (reply #25). WHETHER 4.16.0 IS INSTALLED HE DID NOT SAY: nothing of his is known about its
+  two changes yet.
+  **He has not reported on 4.16.0 or 4.17.0 yet.**
   The path to the plugin list of Creative Cloud (Stock & Marketplace → Plugins → Manage plugins → the three
   dots → Uninstall; the same list opens from Photoshop with Plugins → Manage Plugins) is in section 6 of
   the manual since 4.8.0. Whether his Creative Cloud shows these names in English or in Ukrainian is not
   known.
 - **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (50 results in
-  2388 s; 125 scenarios of the panel test and 74 cases of the settings test among them) on
-  2026-11-26 (the clock of the sandbox), with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4, with
+  2152 s; 127 scenarios of the panel test and 85 cases of the settings test among them) on
+  2026-11-27 (the clock of the sandbox), with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4, with
   nothing running next to it.
-  Deliberate defects for what is new in 4.16.0 (`tests/try_defects.py`), put in one by one: 26 - 12 in
-  the engine («paint: …»: 11 asked of the group `edge`, one of `process`) and 14 in the panel («view:
-  …», asked of the scenarios «a new result leaves 'До'»; the last one is the hint of the button, in
-  `index.html`). All are caught by the checks as they are now, each by the line of the rule it
-  breaks. They ran in a copy of the tree after the last change of the engine, the panel and the
-  checks: 26 in one run of 1342 s.
-  Holes found while 4.16.0 was built, all closed:
-  - a scenario of the panel test failed for a mistake of its own: it put a slider "back" to 90 after a
-    preset click that had left it elsewhere, so the "unchanged" value was a change. It reads the
-    slider first now. The six new scenarios all FAIL on the `main.js` of 4.15.0, as they must;
-  - the first drawn frame for the paint was too mild: the dark wall ended 90 px above the line, and
-    where the line met the skirt the former paint was 4 levels off, not 25 - the smear did not show.
-    The line must END AT THE BAND where the paint is wrong (kind "dark": the light begins right
-    there; kind "shade": the skirt shades the floor beside it);
-  - "a marked place counts as backdrop" made every number of that frame BETTER: the mark of the line
-    is 15 px tall around a line of 3, so leaving it out hides true backdrop right where the repair
-    needs it. The rule is right all the same - a marked THING beside the band must not colour the
-    paint - and is asked where that shows: a light spot of +45 right beside the skirt (the paint
-    beside it -0.8 levels off the floor; with the defect +3.6), and by listening to both calls of
-    the paint (no marked pixel of the copy may count as backdrop, in either pass);
-  - a DARK mark beside the skirt was never marked - it reads as the shadow of the person, a trap
-    already paid for - and a light one of +80 was not marked either (the dust search does not take
-    it): the spot is +45;
-  - "only the narrowest step" was caught by ONE line and by 0.005 of a level, once `HEAL_SRC_SEEN`
-    had gone from 0.25 to 0.12: nothing in the frame was wide enough to blind the narrow window. The
-    rule is asked on a drawn copy now (`painted` in `_check_edge_source`: marks 4 and 10 px tall
-    beside the band), and that defect fails by 11.5 against a limit of 5;
-  - a message of the new check printed `('left', 'right')[i]` literally (braces inside an f-string).
-  Not in the list, because the checks cannot tell: "a run that the SERVER stopped for a request of
-  another window leaves «До»" (the scripted server of the panel test stops a run only for a newer
-  request of the same window).
-  Holes found while earlier versions were built are told in the history of this file (4.15.0: at
-  `f60cf37`; 4.14.0: at `2fd2d21`; 4.13.0: at `155e1ce`; 4.12.0: at `8b620e2`; 4.11.0: at `07e8995`;
-  4.10.0: at `64700aa`; 4.9.0: at `78a08b8`; 4.8.0: at `0f4cb46`).
+  Deliberate defects for what is new in 4.17.0 (`tests/try_defects.py`), put in one by one: 18 - 3 in
+  the engine («depth: …», asked of the group `depth`: the engine did not change, its check did) and
+  15 in the panel (what each of the three dark presets ships in the plugin's list, what the
+  server's list holds, the move and its parts, the two rules every move obeys, the hint of the
+  row), asked of the settings test and of the scenarios «'Глибина' …», «automatic preset: a dark
+  frame takes …» and «restoring a backup made by an older version …». All are caught by the checks
+  as they are now, each by the line of the rule it breaks. They ran in a copy of the tree after
+  the last change of the panel and the checks: 18 in one run of 340 s.
+  Holes found while 4.17.0 was built, all closed:
+  - "the widening is twice what the slider says" was caught by a hair. The first shape of the new
+    line of `depth` allowed "a fifth of what 60 does", and with that defect 60 does what 100
+    should: 4.3 against a fifth of 20.5. The limits are levels of the drawn frame now (0.7 to 3.0
+    on the wall, 8.0 for a pixel); 4.3 and 10.7 fail them plainly;
+  - a defect in the server's list of presets could not be tried at all: the settings test read
+    `presets_defaults.json` from the repository, whatever plugin it was pointed at. It reads the
+    file next to the plugin under test now (the runner had always put a copy there);
+  - a new case of the settings test ("a fresh install: nothing moves") failed for the helper's own
+    start: without a settings file its sliders stand at 0, and the moves then move the SLIDERS of
+    the active preset. A case that asks for "nothing moves" puts the values of the preset on the
+    controls first.
+  Not in the list, because it is no rule of the program: which number is right on a dark frame. 10
+  is his own choice; what it does on his six dark frames was measured and looked at (section 2).
+  Holes found while earlier versions were built are told in the history of this file (4.16.0: at
+  `b27ccd3`; 4.15.0: at `f60cf37`; 4.14.0: at `2fd2d21`; 4.13.0: at `155e1ce`; 4.12.0: at `8b620e2`;
+  4.11.0: at `07e8995`; 4.10.0: at `64700aa`; 4.9.0: at `78a08b8`; 4.8.0: at `0f4cb46`).
   Their lessons stay rules: read the reason after "<-" of every caught defect - when it names another rule
   than the one the defect breaks, the check that should have noticed is too weak (the runner shows only
   the FIRST failed rule: put the defect in by hand and read the whole list when in doubt); read the
@@ -1493,11 +1547,32 @@ _Last updated: by the agent of the first session, after releasing 4.16.0 (the an
   From 4.16.0: a defect that makes the numbers BETTER says something about the rule or about the
   frame - find out which before touching either; a defect caught by a hair is not caught - give
   the rule a case where it decides; after a constant was tuned, every defect is run again.
-  The runners of earlier versions are gone or replaced (4.15.0: 63 defects, in the history at `f60cf37`;
-  4.14.0: 42, at `2fd2d21`; 4.13.0: 43, at `155e1ce`;
+  From 4.17.0: the limit of a check is a number of its own frame, never a share of what the same
+  code does elsewhere - a fault that scales everything scales such a limit with it.
+  The runners of earlier versions are gone or replaced (4.16.0: 26 defects, in the history at `b27ccd3`;
+  4.15.0: 63, at `f60cf37`; 4.14.0: 42, at `2fd2d21`; 4.13.0: 43, at `155e1ce`;
   4.12.0: 45, at `8b620e2`; 4.11.0: 30, at `07e8995`; 4.10.0: 54, at `64700aa`; 4.9.0: 35, at `78a08b8`;
   4.8.0: 71, at `0f4cb46`; 4.7.0: 29, at `c3be3ed`; 4.6.0: 34, at `50bae15`; 4.5.0: 71 and 4.4.0: 41, never
   committed); their checks are still in `tests/run_checks.py`.
+- **Decided by the agent alone for 4.17.0** (no option card; change it if he says otherwise):
+  - «став одразу» is read as "put it there from the start" (section 1);
+  - all THREE dark presets with the corner tool get 10. He had put it on «Темний дальній план»; the
+    question had named "the dark presets";
+  - «Темний ближній план» stays at 0 (no corner tool, the value would do nothing), and the light
+    presets stay at 60 (asked twice whether 60 is right, he never said);
+  - his stored presets are changed by a move, once, without a word in the window - as 60 came in
+    4.14.0. The manual and reply #25 say so;
+  - question 1 (the smear) was answered with a picture, and nothing was built for it;
+  - nothing was done for «неважливо» («До» after a slider stays as 4.16.0 made it) and for
+    «все ок» (Photoshop 28.0);
+  - the stale number of the manual (a backdrop is dark under 26) was corrected without his asking.
+- **Not run in Photoshop yet (4.17.0):** all of it. In particular:
+  - the move on his real files: which dark presets he has saved himself, and whether the
+    automatic choice is on (if it is off and the slider stood at 10, nothing visible changes);
+  - 10 with his real silhouette on dark frames other than `0Q5A3610` (there he chose it by eye).
+    Here it moved no frame by more than 4 levels (section 2); a silhouette that misses a light
+    sleeve or hem in front of the backdrop would show there as with any depth;
+  - everything of 4.16.0 as well: whether he installed it is not known.
 - **Decided by the agent alone for 4.16.0** (no option card; change it if he says otherwise):
   - «До» gives way to the result not only when the bar ends (his words) but whenever a new result
     arrives: after a slider, a preset, a fraction button (the light refresh), the clothing tick and
@@ -1509,7 +1584,7 @@ _Last updated: by the agent of the first session, after releasing 4.16.0 (the an
   - the paint under the person (he did not ask: the smear was found in his results). No switch in
     the panel; a request with `srcNear` false gives the former way;
   - nothing was done about «Глибина» in the dark presets (he set 10 by hand and asked for nothing),
-    nor for Photoshop 28.0.
+    nor for Photoshop 28.0. (Asked in reply #24, he wanted the 10: 4.17.0.)
 - **Not run in Photoshop yet (4.16.0):** all of it. In particular:
   - what the REAL network paints beside the hem of `0Q5A3610` now. Here the stand-in fill shows the
     smear nearly gone (356 px -> 4); the real one drew it stronger (976 px), and it reads the whole
@@ -1520,8 +1595,7 @@ _Last updated: by the agent of the first session, after releasing 4.16.0 (the an
     stand-in, his nine older frames changed within 30 px of the band only, and where they did the
     result is no worse (section 2, «4.16.0»); the real fill may answer otherwise;
   - the smaller smear in the corner of the tulle (not reproduced here);
-  - whether «До» giving way after a SLIDER is what he wants - he may compare by dragging a slider
-    with the original on screen (he never said so).
+  - (answered on 2026-11-27: whether «До» gives way after a slider does not matter to him.)
 - **Decided by the agent alone for 4.15.0** (no option card; change it if he says otherwise):
   - the parquet goes only with «Стійки» ticked, like everything that is taken away (he had it ticked);
   - what a parquet is: the colour of wood, at a border of the frame, a sharp edge, not touching the
@@ -1875,18 +1949,21 @@ _Last updated: by the agent of the first session, after releasing 4.16.0 (the an
   - of 4.5.0, still unconfirmed: opening the backup folder from the panel, the look of the new buttons,
     the one-time preset moves. (Ctrl+Z works in Photoshop: he confirmed it.)
 - **Merging:** pull request #1 (`arena/33f1ced8-cleanvinylpro-beta` into `main`) is open and deliberately not
-  merged yet: fixes that follow his report on 4.16.0 should come from the session that knows the code. He
+  merged yet: fixes that follow his report on 4.17.0 should come from the session that knows the code. He
   asked what merging into `main` means and was told: the version is already published and can be downloaded;
   merging only marks it on GitHub as the main one and changes nothing on his PC; he should write «зливай»
   when he wants it. Merge it when he writes that or when the session ends (section 6). If `main` already
   contains this file, that has happened. Merging also removes the folder `CleanVinylPro/` from `main`.
 
-### Open questions (ask when he reports on 4.16.0)
+### Open questions (ask when he reports on 4.17.0)
 
-- New with 4.16.0 (asked in reply #24): is the dark smear beside the hem of `0Q5A3610` gone on his PC
-  (x 2806-2899, y 4583-4623 - told to him as "right of the dress, where the line of the paper meets
-  the hem")? Is it right that «До» gives way after a slider and a preset too? Does anything look
-  different in Photoshop 28.0?
+- New with 4.17.0 (asked in reply #25): is 10 right on his other dark frames, or does he end up
+  with another number?
+- From 4.16.0 (asked in reply #24). Answered on 2026-11-27: «До» after a slider does not matter;
+  Photoshop 28.0 is all right. NOT answered: is the dark smear beside the hem of `0Q5A3610` gone on
+  his PC (x 2806-2899, y 4583-4623)? He did not understand the question as told in words; reply
+  #25 showed the place as a picture and left it to him - "write if you see it there, otherwise
+  forget it". Do not ask a third time unless he brings it up.
 - From 4.15.0 (asked in reply #23). Answered by his result of 2026-11-26: the left side of `0Q5A3610`
   is right, and the dashes under the hem are gone but for a faint remnant at their right end. Not
   answered: did anything he wanted to keep disappear at a border?
@@ -1894,8 +1971,8 @@ _Last updated: by the agent of the first session, after releasing 4.16.0 (the an
   still not named, but `0Q5A3610` is another such frame, and there he set «Глибина» to 10 himself (the
   dark presets ship 0). Not answered: is 60 % right in the light presets - or too much (it takes
   more of the dark belt than his own retouch of `1.jpg`), or not enough of an illusion (then the
-  next things are the texture of the wall and the shadow of the person, section 2)? Should the dark
-  presets ship «Глибина» above 0 (asked in reply #24)?
+  next things are the texture of the wall and the shadow of the person, section 2)? (Whether the
+  dark presets should ship «Глибина» above 0 was answered on 2026-11-27: 10 - done in 4.17.0.)
 - From 4.13.0 (asked in reply #21). Answered in the evening of 2026-11-24: the lighter column in place
   of the curtain does bother him (4.14.0). Answered by the screenshot of 2026-11-25: the rows are apart.
   Not answered: was «Мікс» ticked when he applied `0Q5A3534` (its result shows no mixer brush at all,
@@ -1978,6 +2055,11 @@ _Last updated: by the agent of the first session, after releasing 4.16.0 (the an
 - Presets differ mostly in search sensitivity, so the cleaned photo changes little between them; the difference
   shows in the mask. That is why the note after a preset click gives the share of the frame where defects were
   found (the bright green).
+- With the automatic choice on, what he puts on a slider lasts one photo: the next frame is cleaned
+  with the values of its preset. A value he wants every time belongs IN the preset - «Зберегти у …»
+  on his side, a shipped value with a move in `PRESET_DEFAULT_MOVES` on ours (4.17.0: he had set
+  «Глибина» 10 by hand and asked for it "from the start"). A move cannot tell a value he saved that
+  equals the former default from the default itself.
 
 ### Known limits of the image processing
 
@@ -2239,8 +2321,8 @@ npm install --prefix tests jsdom@24      # for the panel test; the folder is git
 /tmp/cvenv/bin/python tests/run_checks.py install bat    # only the groups named
 /tmp/cvenv/bin/python tests/run_checks.py --full         # more random cases
 
-# the deliberate defects of the latest version: 22 minutes for 4.16.0 (17 for the 12 of the engine - eleven
-# run the group edge, about 90 s each, one runs process - and 5 for the 14 of the panel, 23 s each); it
+# the deliberate defects of the latest version: 6 minutes for 4.17.0 (2 for the 3 of the engine - each runs
+# the group depth, 40 s - and 4 for the 15 of the panel, 15 s each; 22 minutes for the 26 of 4.16.0); it
 # patches engine.py in place - run those in a copy of the tree (below)
 /tmp/cvenv/bin/python tests/try_defects.py               # ends with "N of N defects caught"
 /tmp/cvenv/bin/python tests/try_defects.py "called a line" "the slider"   # only the defects whose name or group has these words
@@ -2370,6 +2452,28 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   softbox in the air on `0Q5A3413`, the foot of a stand on `0Q5A3411` - showed only in the cleaned
   pictures, side by side with the same stand-in under the former rules. The former rules in one dict:
   `_BORDER_OFF` of `tests/run_checks.py` plus `PERSON_EDGE_REACH=0.0`.
+- **A question about a place needs a picture** (4.17.0). Reply #24 asked «Чи зникла пляма біля подолу
+  на 0Q5A3610?» with the place told in words ("right of the dress, where the line of the paper
+  meets the hem, about 90 x 40 px"). His answer: «я не розумію про що ти». Make the picture BEFORE
+  asking and put it into the reply: his frame and his result at that place, the same crop of
+  350 x 390 px enlarged twice (cubic), side by side, the place circled on the result only; beside
+  them the whole result small, with a rectangle where the crop lies; a title, a caption over each
+  part and two lines under them that say what is to be seen. Text in Ukrainian needs Pillow and a
+  font with Cyrillic (`/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf` is here; `cv2.putText`
+  writes question marks).
+  It is his client's photo: save it under `_local/` (git-ignored; `_local/0Q5A3610_plyama.jpg` that
+  time), open it in his viewer with `present_file` - the viewer holds one file, so present it LAST
+  in the turn - name the file in the reply, and never commit it or put it into a release or the
+  pull request. Try `present_file` on it before the documents say "shown". Look at the plain crop
+  first - that smear needed no boost of contrast; when a boost is needed, the caption says so.
+- **Which of his frames are dark, and what a small change of a default does there** (4.17.0): the
+  server's own measure is `eng._scene_info(eng._predict_fg_raw(frame, fast_mode=False), frame, w, h)`
+  with the stand-in silhouette (the numbers of his ten frames are in section 2, «4.17.0»). Two runs
+  of `process` with the same `stage_cache` dict and `cached_fg_raw_1024` cost 13 s + 8 s per frame
+  here when only a tone value differs: the repair is taken ready. Compare the brightness of the
+  two results, say how much of the frame moved by more than a level and the largest step, count
+  what moved inside the matte over 0.9, and look at both opened up with gamma 0.5 beside the
+  difference times 16.
 - **Look for what he did NOT circle** (4.16.0). His result against his frame, the pixels that differ
   by more than 10 levels, as connected pieces, largest first: the pieces that are neither a removed
   thing nor a tone stage are the program's own marks. The smear beside the hem of `0Q5A3610` was in
@@ -2724,6 +2828,22 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
 - **His words in quotation marks are his words, letter for letter** (4.16.0). The first draft of
   the manual had «коли доходить до кінця смужка завантаження…» after «Ви написали:» - a tidy
   paraphrase. A paraphrase goes without the marks; a quotation is copied from section 1.
+- **A limit that is a share of another measurement moves with the fault** (4.17.0). "At depth 10 the
+  wall may move by a fifth of what 60 does" let a slider twice as strong through by a hair: with
+  that defect 60 does what 100 should. Limits are numbers of the drawn frame; the other
+  measurement goes into the message, for the reader.
+- **A test can only see a defect in a file it reads from the place the defect is put** (4.17.0). The
+  runner copies `presets_defaults.json` next to the copy of the plugin; the window test read it
+  there, the settings test read the repository's. A defect in that file "passed" until the
+  settings test was pointed at the same place.
+- **A case that asks for "nothing moves" must start from the state it claims** (4.17.0). The helper
+  of the settings test starts with every slider at 0 when no settings file is given; the moves
+  then move the sliders of the active preset, and "a fresh install: nothing moves" was false for
+  the helper's own reason. Give the case the settings of that state.
+- **Do not touch the tree while the long run is going - and read the documents you are about to ship
+  BEFORE starting it** (4.17.0). A stale sentence of the manual (a backdrop is dark under 26) was
+  noticed a few minutes into the release run; the manual is in the ZIP, the run compares the ZIP
+  with the folder, so the run was stopped and started again.
 - **`pkill -f "tests/run_checks.py"` inside a `bash` call kills that call too** (its own command line
   matches). Stop a background run with the process tool; a background run that writes to a file
   shows an empty log there - read the file.
