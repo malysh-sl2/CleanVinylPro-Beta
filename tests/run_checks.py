@@ -1416,11 +1416,11 @@ def check_dress():
            f"broad soft marks x{mark_close:.2f} and x{mark_wide:.2f}" if not bad else "wrong:\n  " + "\n  ".join(bad))
 
     # ---- 5. the numbers stay inside single precision --------------------------------------------------------------
-    # (Found on the owner's 0Q5A3522: the server window filled with "RuntimeWarning: overflow encountered in square".
-    # The rim of a garment whose weights fade and are then cut off - the stage cuts them at the outline - far from
-    # the middle of the working copy: the windows just outside see next to no cloth, the plane fitted there is a
-    # wild guess, and the square of its departure left single precision. Nothing of it reached the picture, but a
-    # warning in the window of the server is a line the owner may send in as a fault.)
+    # (Found on the owner's 0Q5A3522: run here, the stage made NumPy warn "RuntimeWarning: overflow encountered in
+    # square". The rim of a garment whose weights fade and are then cut off - the stage cuts them at the outline -
+    # far from the middle of the working copy: the windows just outside see next to no cloth, the plane fitted
+    # there is a wild guess, and the square of its departure left single precision. Nothing of it reached the
+    # picture, but on his PC such a line lands in the window of the server, and he may send it in as a fault.)
     bad = []
     sh_, sw_ = 1868, 1333                                   # the working copy of a frame of the camera
     yy, xx = np.mgrid[0:sh_, 0:sw_].astype(np.float32)

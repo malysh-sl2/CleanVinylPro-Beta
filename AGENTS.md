@@ -416,6 +416,38 @@ written here and in the repository.
   own, `#panelRoot`, next to the `<dialog>`; `styles.css`: `.r4m-viewport`, one field without
   outlines). Nothing was built or released; 4.19.0 stays the latest.
 
+- **2026-11-28, after reply #29** (about 13:05 UTC; two JPEGs and two words): «ой перепутав.»
+  The files: `0Q5A3522 копия.jpg` (3703 x 5554, saved by Photoshop 28.0 at 15:02:49 of his clock - the
+  frame as shot: a woman in a red dress on a stool and a man in a white shirt, low key; a lit lamp in the
+  upper right corner, a light stand at the right border, a black wedge at the left border, up to 50 px
+  wide, rows 1900-2960) and `0Q5A3522 копия2.jpg` (saved 19 s later - the same frame cleaned). Both were
+  saved AFTER reply #29: they are no attachment he had meant for the message before.
+  What the pair is, measured: the second file is what 4.19.0 makes of the first by itself. The engine of
+  `cvp2-v4.19.0` with «Темний дальній план», «Стійки», «Рівняти одяг» at 40 and «Мікс» 50 gives his
+  picture here: the changes on the shirt correlate 0.995 with his, on the dress 0.986, at both borders
+  0.99, and 1.2 % of the frame differs by more than 2 levels - with a silhouette read from his own
+  result (`tools/owner_frames.py protected`, section 4). So **4.19.0 is installed and works in his
+  Photoshop**, the new clothing tool with it, with the tick of the clothing on. The wedge and the stand
+  are gone, the corner line is softened, the creases of the dress and of the shirt are weaker; no dots,
+  no change of colour. Nothing wrong was found in the result: no dark band along any border (where the
+  wedge stood the wall is 2 levels LIGHTER than above it, 15 against 13 of 255), no dark rim around the
+  clothes; the lamp stays, as it always did.
+  What he meant is not known. «I mixed up» the chats - the message before was for the chat of Retouch
+  Studio, which is what reply #29 took it for. Or the windows of the two plugins: the screenshot showed
+  this very frame, uncleaned, in the window of Retouch Studio, with the black wedge at its left edge -
+  which he may have called «рамка» - and the pair shows that this program does remove it. He asked for
+  nothing. The agent measured the pair for a long time before saying a word; he stopped that answer
+  and wrote the next message (the traps of section 4).
+- **2026-11-28, right after** (the answer in progress stopped by him; no files), in his words: «ще
+  дивись коли запукаю фотошоп плагін сам грузе зроби щоб поки не нажму на ярлик він не запускається»
+  Read as: when he starts Photoshop, the plugin starts loading by itself - the panel is loaded with
+  Photoshop and started the server at once (its window in the taskbar, Python, the AI models in the
+  video memory); it must not start until he clicks. «Ярлик» is taken for the icon of the panel in
+  the dock of Photoshop - his panels are folded to icons, the screenshot of that day shows the strip;
+  it could be a shortcut of Windows as well, the change answers both. 4.20.0 answers this (reply #30).
+  The same reply says in two sentences what the pair of `0Q5A3522` is, and asks him to circle the
+  place if something in it is wrong.
+
 ## 2. What is in the repository
 
 | Path | What it is | Rule |
@@ -424,7 +456,7 @@ written here and in the repository.
 | `tests/baseline_v321/` | six files of the ORIGINAL program, v3.2.1, byte for byte: `engine.py`, `server.py`, `setup_launcher.py`, `manifest.json`, `install_windows.bat`, `pyvenv.cfg` | **Never modify.** They are the reference the checks compare with. |
 | `CleanVinylPro2.zip` | the download for the owner: the folder `CleanVinylPro2`, zipped | never edit by hand; rebuild with `tools/build_zip.py` |
 | `tests/` | self-checks that need no GPU, no models and no Photoshop; `tests/README.md` (Ukrainian) describes them | keep them passing |
-| `tools/` | `build_ccx.py`, `build_zip.py`, `serve_download.py`; `owner_frames.py` - a look at the owner's frames and results (section 4) | |
+| `tools/` | `build_ccx.py`, `build_zip.py`, `serve_download.py`; `owner_frames.py` - a look at the owner's frames and results, his silhouette read from his own result (section 4) | |
 | `README.md` | the owner's own instruction (Ukrainian): download, install, how to continue with an agent | keep it true |
 
 The original program (folder `CleanVinylPro/`, 7,812 files, 666 MB with a committed Windows `.venv`) was removed
@@ -1690,14 +1722,77 @@ second plugin next to the installed one and lose his presets.
     tulle or ruching from a crumpled shirt; a verdict on texture per garment (the jeans); a new
     default strength (35-45 stays). Two rules have no check that fails without them (section 3).
 
+- **4.20.0** — the server is started by a button, not by Photoshop; after his message of 2026-11-28
+  («коли запукаю фотошоп плагін сам грузе…», section 1). The panel, and one cap in the engine.
+  - **What it was.** `bootstrap()` at the end of `main.js` asked the server for its health and, when
+    nothing answered, called `launchServerViaProtocol(true)` - «Автозапуск...». Photoshop loads the
+    page of a panel when it starts, also of a panel folded to an icon (he sees it happen; nothing of
+    UXP runs here), so every start of Photoshop started the server: a minimised console window
+    «Clean Vinyl Pro GPU Server», Python, both AI models.
+  - **What it is now.** `bootstrap()` probes once. A server that answers is shown as before. When
+    nothing answers: `showServerOff` (the status «Вимк.» with ▶ - cut out of `checkServerHealth`,
+    which uses it too) and `SERVER_SLEEPS_NOTE` in the footer: «Сервер вимкнено. Він запуститься,
+    коли натиснете «Очистити фон» або ▶ угорі панелі.» The note goes when a start is asked for and
+    when any probe finds the server (`dropServerSleepsNote`). A server that runs without its
+    models: «Моделі!» and the card, no note. The server is started by ▶ (`btnPlayServer`,
+    `btnRetryPlay`) and by the buttons that need it (`ensureServerForAction`: «Очистити фон», «У
+    виділенні», «Формат 5:7», the two backup buttons); such a press is remembered and goes on by
+    itself, as before. `launchServerViaProtocol` lost its quiet mode: every start is asked for by
+    a button now, and one that fails shows the card.
+  - **Not by the icon, and why.** He asked for "until I click the icon". A panel is not told that
+    its icon was clicked. What UXP has is `entrypoints.setup({panels: {<id>: {show, hide}}})`, and
+    Adobe's own notes say that in Photoshop `show` comes once, when the panel is created, and
+    `hide` never - which would be the start with Photoshop again. THIS WAS NOT TRIED: from memory
+    of the documentation, not verified for Photoshop 28, and this plugin has never called
+    `entrypoints.setup`. If he wants the start on opening the panel, that is the thing to try -
+    in a build that he tests, with the old behaviour one release away.
+  - **Not by any press inside the panel either** (built first, taken out the same hour). Outside
+    the window the panel holds few controls: next to the buttons that need the server there are
+    the status, «До / Після», «Довідка» and «Звільнити VRAM», and a server started by one of these
+    is a surprise (by the last one, absurd); a first press on a button that needs it starts it
+    anyway. The mouse over the panel was never an option: an open panel is crossed all the time.
+  - **The cost**, told in the reply and in the manual: the first cleaning after the server was
+    started waits for its cold start (half a minute and more after the PC was switched on).
+    Before, that wait passed while he opened his photo.
+  - **Texts.** The help box of the panel (step 1); the manual (the block «ЩО ЗМІНИЛОСЯ У ВЕРСІЇ
+    4.20.0», step 5 of the update, step 2 of the daily work, what was and what was not checked);
+    `README.md` (the top, the update steps).
+  - **The cap in the clothing stage** (`_cloth_surface`, `_smooth_dress_fabric`). On `0Q5A3522`,
+    run here, the stage made NumPy warn "RuntimeWarning: overflow encountered in square" - on his
+    PC that is a line in the window of the server, once per place and start of the server.
+    Where: at the rim of a garment whose weights fade and are then cut to zero (the stage cuts
+    them at the outline of the mask), far from the middle of the working copy. The windows just
+    outside hold next to no cloth, the plane fitted there is a wild guess (departures of 1e9 log
+    units were seen), and `(q / cut) ** 2` left single precision. Those pixels weigh nothing; the
+    picture was never touched (his frame: not one pixel differs with and without the cap). The
+    ratio is capped at 1e9 before it is squared, in both places. The root is the plane fit:
+    moments of GLOBAL coordinates in single precision and a determinant floored at 1e-6. Moments
+    taken with kernels of local offsets (i g(i), i i g(i)) would cure it for the same number of
+    blurs - NOT built: every number of the stage would move by rounding.
+  - **Checks.** The window test has 137 scenarios: six are new (the panel loaded with the server
+    off; the mouse, the status, «До / Після», the help and «unload» start nothing; ▶; a server
+    that runs already; a server started by hand later; a server without its models), one was
+    rewritten («Очистити фон» with the server off starts it - up to 4.19.0 the load of the panel
+    had started the server before any press, and the launch inside `ensureServerForAction` had no
+    check that failed without it), one is gone (the status turning green "without any press").
+    `check_dress` has a fifth result: a small garment with a soft rim far from the middle raises
+    no NumPy warning. Its drawn case was found by cutting his weights down until only the cause
+    was left: a box blurred by 1.5 or 6 px with everything under 0.05 cut to zero, at x 180-360,
+    y 1450-1700 of a copy of 1333 x 1868. `tests/try_defects.py` holds the 12 defects of 4.20.0
+    (11 in the panel, 1 in the engine).
+  - NOT built: a start on opening the panel (above); a setting that brings the start with
+    Photoshop back; stopping the server when Photoshop closes (it runs until its window is
+    closed or the PC restarts); a probe now and then while the server is off (a server started
+    by hand is found at the next press); anything about the emoji of the small buttons (section
+    3, open questions).
+
 ## 3. Current state — update this at the end of every session
 
-_Last updated: by the agent of the first session, after reply #29 (2026-11-28: a screenshot of his OTHER
-plugin, answered in words). The last release is 4.19.0 (the answer to his message of 2026-11-27 on reply
-#27: clothes as Retouch4me does them)._
+_Last updated: by the agent of the first session, after releasing 4.20.0 (the answer to his message of
+2026-11-28: the server must not start with Photoshop)._
 
-- **Released:** 4.19.0, tag `cvp2-v4.19.0`, as a pre-release. Direct download:
-  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.19.0/CleanVinylPro2.zip`
+- **Released:** 4.20.0, tag `cvp2-v4.20.0`, as a pre-release. Direct download:
+  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.20.0/CleanVinylPro2.zip`
 - **Owner's progress:** 4.2.0 to 4.12.0 have been installed and work on his PC (program in
   `D:\Plugin Photoshop\CleanVinylPro2`, models in `D:\model AI fotoshop`, LaMa on `CUDAExecutionProvider`,
   Python 3.12.10). So the `.bat` files, the installer, the GPU, the real models and the panel HAVE run on
@@ -1753,26 +1848,44 @@ plugin, answered in words). The last release is 4.19.0 (the answer to his messag
   (reply #28). Which version he has installed is not known.
   On 2026-11-28, after reply #28 (section 1): a screenshot of his other plugin, Retouch Studio, with
   «рамка є чорна прибери» - answered in words (reply #29: its code is not here; a text for that chat).
-  **He has not reported on 4.16.0, 4.17.0, 4.18.0 or 4.19.0 yet** - not on the smear, not on «Глибина»
-  10, not on the tick «Стійки», not on the clothes. The questions of replies #25 and #26 got no answer.
+  On 2026-11-28, after reply #29 (section 1): a frame and its result, `0Q5A3522`, with «ой перепутав» -
+  the result is what 4.19.0 makes of the frame, so **4.19.0 runs in his Photoshop** (the first
+  version after 4.15.0 that is known to; preset «Темний дальній план», the ticks «Стійки», the clothing
+  and «Мікс» on). Then the wish that the server must not start with Photoshop - 4.20.0 answers it
+  (reply #30).
+  **He has not said a word about 4.16.0, 4.17.0, 4.18.0 or 4.19.0** - not on the smear, not on «Глибина»
+  10, not on the tick «Стійки», not on the clothes. The questions of replies #25, #26 and #28 got no
+  answer; the pair of `0Q5A3522` shows the clothing tool working and no complaint came with it.
   The path to the plugin list of Creative Cloud (Stock & Marketplace → Plugins → Manage plugins → the three
   dots → Uninstall; the same list opens from Photoshop with Plugins → Manage Plugins) is in section 6 of
   the manual since 4.8.0. Whether his Creative Cloud shows these names in English or in Ukrainian is not
   known.
-- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (53 results in
-  2560 s; 132 scenarios of the panel test and 110 cases of the settings test among them) on
+- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (54 results in
+  2324 s; 137 scenarios of the panel test and 110 cases of the settings test among them) on
   2026-11-28 (the clock of the sandbox), with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4, in a
-  copy of the tree of the commit that holds the ZIP (`358e50b`). Five runs of the group `dress` went next
-  to its first quarter (the trials by hand, below), so a run alone takes less.
-  Deliberate defects for what is new in 4.19.0 (`tests/try_defects.py`), put in one by one: 15, all in
+  copy of the tree of the commit that holds the ZIP (`c6a93d2`). What came after that commit: this
+  file, a command more in `tools/owner_frames.py`, numbers in `tests/README.md` and the wording of one
+  comment in `tests/run_checks.py` (the group `dress` was run once more after it: 5 results, passed).
+  Deliberate defects for what is new in 4.20.0 (`tests/try_defects.py`), put in one by one: 12. Eleven
+  in the panel: the server started by the load of the panel, by any click inside it, by the mouse
+  over it, by a click on the status; «Очистити фон» waiting for a server that nothing starts; the
+  status left at «Перевірка...»; no note; the note staying while the server is started, and next to
+  a server that answers; the note shown although only the models are missing; a server without its
+  models looking switched off. One in the engine: the cap of `_cloth_surface` taken away (asked of
+  `dress`). All are caught by the checks as they are now, each by the line of the rule it breaks.
+  They ran in a copy of the same tree, with nothing next to them: 12 in one run of 117 s.
+  NOT closed: the second cap (`g_col` in `_smooth_dress_fabric`) has no check that fails without it -
+  no drawn frame was found that makes NumPy warn there, only his `0Q5A3522` does.
+  The defects of 4.19.0 (the list is in the history, at `384fee5`), put in one by one: 15, all in
   the engine, each taking one rule of the clothing tool away - the layer opened where the cloth
   changed; nothing taken for a fold; a fold only weakened; the widths a share of the frame; one gain
   for the three channels; two garments ironed as one; every hue given to the nearest garment; skin
   not grown; scraps kept; the texture judged pixel by pixel; no band guard; the calm of the window
   not counted; the low layer the picture itself; the plane fitted once (all asked of `dress`); Apply
-  ironing at half the strength (asked of `sharp`). All are caught by the checks as they are now.
-  They ran in a copy of the tree of `b94e046` (the same program and checks, the list as it is now), with
-  nothing next to them: 15 in one run of 1186 s.
+  ironing at half the strength (asked of `sharp`). All were caught by the checks of 4.19.0.
+  They ran in a copy of the tree of `b94e046` (the program and the checks of 4.19.0), with nothing next
+  to them: 15 in one run of 1186 s. They were NOT run again for 4.20.0: the engine differs by the two
+  caps only, and the results of the group `dress` came out the same to the last digit shown.
   Read what catches each: three are caught by a line that speaks of a neighbour of the rule, and
   that is what the drawn scenes can show. «The texture judged pixel by pixel» - by «the layer does
   not cover the garment evenly (alpha down to 0.83 inside the dress)»: the creases of the drawn
@@ -1836,12 +1949,34 @@ plugin, answered in words). The last release is 4.19.0 (the answer to his messag
   case has a check at all.
   From 4.19.0: try a rule by hand before it goes into the list (one line changed in a copy, the group
   run: two minutes) - and write down the rules that nothing guards instead of leaving them out silently.
-  The runners of earlier versions are gone or replaced (4.18.0: 34 defects, in the history at `0edc70e`;
-  4.17.0: 18, at `ab97249`;
+  From 4.20.0: when a version takes a behaviour away, look for what leaned on it - the start of the
+  server inside `ensureServerForAction` had been covered by the start at the load of the panel, and
+  no scenario failed without it.
+  The runners of earlier versions are gone or replaced (4.19.0: 15 defects, in the history at `384fee5`;
+  4.18.0: 34, at `0edc70e`; 4.17.0: 18, at `ab97249`;
   4.16.0: 26, at `b27ccd3`; 4.15.0: 63, at `f60cf37`; 4.14.0: 42, at `2fd2d21`; 4.13.0: 43, at `155e1ce`;
   4.12.0: 45, at `8b620e2`; 4.11.0: 30, at `07e8995`; 4.10.0: 54, at `64700aa`; 4.9.0: 35, at `78a08b8`;
   4.8.0: 71, at `0f4cb46`; 4.7.0: 29, at `c3be3ed`; 4.6.0: 34, at `50bae15`; 4.5.0: 71 and 4.4.0: 41, never
   committed); their checks are still in `tests/run_checks.py`.
+- **Decided by the agent alone for 4.20.0** (no option card: his wish was plain; change it if he says
+  otherwise):
+  - nothing is started when the panel loads; the server starts with ▶ and with the buttons that
+    need it - NOT with a click on the icon of the panel, which he named (section 2, 4.20.0: a
+    panel is not told of it), and not with any press inside the panel;
+  - the panel says so itself while the server is off (the note in the footer);
+  - no setting that brings the old behaviour back;
+  - the server is not stopped when Photoshop closes - he did not ask, and a server that stays up
+    makes the next start of Photoshop quick;
+  - the cap in the clothing stage went into the same version, unasked: a warning in the window
+    of the server is something he may send in as a fault;
+  - the pair of `0Q5A3522` was answered in two sentences, with no option card, although what he
+    meant by it is not known: nothing in it is wrong, and he had just stopped a long answer.
+- **Not run in Photoshop yet (4.20.0):** all of it. In particular:
+  - whether Photoshop really loads the panel at its start and whether the server now stays off
+    until a button is pressed - the whole point of the version;
+  - the cold start from «Очистити фон»: how long he waits, and whether the window then opens by
+    itself as it does in the test;
+  - what the footer of the panel looks like with the note in it.
 - **Decided by the agent alone for 4.19.0** (no option card, no question: he asked for the tool and
   sent no frame; change it if he says otherwise):
   - «станом на зараз» is read as the clothing tool of this program (section 1);
@@ -1855,11 +1990,14 @@ plugin, answered in words). The last release is 4.19.0 (the answer to his messag
   - garments of different colour are ironed apart; a print belongs to none;
   - textured cloth is left out by regions, not as a garment: jeans out of focus are partly ironed;
   - nothing new in the panel but words: no control for stains.
-- **Not run in Photoshop yet (4.19.0):** all of it. In particular:
-  - the clothing mask with his real silhouette: here every frame had a stand-in (GrabCut), and the
-    mask follows the silhouette;
-  - how the ironed cloth looks at 100 % on his monitor, and whether the dots and the change of
-    colour he complained of are gone - the cause was found by measuring, he showed no frame;
+- **Run in Photoshop by him (4.19.0), one frame:** `0Q5A3522` (section 1, 2026-11-28) - the clothing
+  tool at 40 with his real silhouette did there what it does here, and he did not complain. Still
+  not known:
+  - the clothing mask with his real silhouette on OTHER frames: here every older frame had a
+    stand-in (GrabCut), and the mask follows the silhouette;
+  - how the ironed cloth looks to HIM, and whether the dots and the change of colour he complained
+    of are gone on the frames where he saw them - he never showed one; in the result of `0Q5A3522`
+    there are none;
   - the wait after the slider of the clothing is let go (0.6-1.1 s here);
   - a layer that carries the whole garment: he may see the garment in it where he expected only
     the backdrop.
@@ -2297,8 +2435,18 @@ plugin, answered in words). The last release is 4.19.0 (the answer to his messag
   6). If `main` already contains this file, that has happened. Merging also removes the folder
   `CleanVinylPro/` from `main`.
 
-### Open questions (ask when he reports on 4.19.0)
+### Open questions (ask when he reports on 4.20.0)
 
+- New with 4.20.0 (asked in reply #30): if the window of the server still comes up by itself, what
+  did he press before; and, about the pair of `0Q5A3522`, to circle the place if something is wrong.
+  Not asked, to be read from his next message: does he miss the server being ready at once (then:
+  a start on opening the panel, section 2, or a setting).
+- Seen, not asked (2026-11-28): the small buttons of OUR panel carry emoji («🧹 Звільнити VRAM», «💾
+  Бекап налаштувань», «📂 Відновити», «📁 Відкрити папку», «💾 Зберегти…» in the settings). The
+  screenshot of his other plugin, which copied the labels, shows an empty box in place of «💾» in
+  his Photoshop - so ours very likely show boxes too. No screenshot of our panel is at hand, and
+  he never complained. Look at the next screenshot that shows the panel; if there are boxes, take
+  the emoji out (symbols like ▶ and ↻ are drawn: his screenshot of 2026-11-25 shows «↻»).
 - New with 4.19.0 (asked in reply #28): if dots or a change of colour show again, a frame and the
   number on the slider. Not asked, to be read from his next message: is 45 too weak or too strong;
   does the partly ironed denim show; does tulle matter to him.
@@ -2679,10 +2827,10 @@ npm install --prefix tests jsdom@24      # for the panel test; the folder is git
 /tmp/cvenv/bin/python tests/run_checks.py install bat    # only the groups named
 /tmp/cvenv/bin/python tests/run_checks.py --full         # more random cases
 
-# the deliberate defects of the latest version: 20 minutes for the 15 of 4.19.0, all in the engine (14 run
-# the group dress, about 82 s each; the one of the group sharp takes 34 s). A defect of the engine patches
-# the file in place: run in a copy of the tree (below). For comparison: 14 minutes for the 34 of 4.18.0
-# (all in the panel), 6 for the 18 of 4.17.0, 22 for the 26 of 4.16.0
+# the deliberate defects of the latest version: 2 minutes for the 12 of 4.20.0 (11 in the panel, 1 to 8 s
+# each; the one of the engine runs the group dress, 85 s). A defect of the engine patches the file in
+# place: run in a copy of the tree (below). For comparison: 20 minutes for the 15 of 4.19.0 (all in the
+# engine), 14 for the 34 of 4.18.0 (all in the panel), 6 for the 18 of 4.17.0, 22 for the 26 of 4.16.0
 /tmp/cvenv/bin/python tests/try_defects.py               # ends with "N of N defects caught"
 /tmp/cvenv/bin/python tests/try_defects.py "called a line" "the slider"   # only the defects whose name or group has these words
 /tmp/cvenv/bin/python tests/try_defects.py panel:        # only the defects of the panel (they go into a copy
@@ -2778,6 +2926,18 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   where the corner is). They are close to his, not equal - on `0Q5A2507` the corner finder decided
   otherwise here than on his PC - so a defect seen only here is a defect of the program all the same,
   but not one he saw; say so. What the real fill paints into a large area cannot be seen here at all.
+- Since 4.20.0 `tools/owner_frames.py protected FRAME RESULT OUT.npy [CHECK.jpg] [+ADD.json ...]
+  [-DROP.json ...]` reads HIS silhouette from his own result. He saves the frame and the result from
+  one document, one after the other; the 8 x 8 blocks of the two JPEGs that are equal to the last bit
+  are what the program protected - the people and what stands with them (a stool), also a lit lamp.
+  Far closer to his silhouette than GrabCut, also on a dark frame (the outline is up to one block too
+  small). What his clothing tool changed is missing: draw a polygon loosely inside each such garment
+  and give it as `+file.json`; take a lamp away with `-file.json`. CHECK.jpg shows the outline - a hole
+  or a bay in a garment is a polygon still missing. With this silhouette `run` gives his picture back
+  wherever the stand-in networks play no part, so THE PRESET AND THE TICKS HE USED CAN BE FOUND BY
+  TRYING: on `0Q5A3522` «Темний дальній план» with `removeStands=True dressSmooth=True mixOn=True
+  mix=50` came within 0.2 levels of his result on the clothes and at both borders. That is also the
+  only way to learn which version he runs when he does not say.
 - Since 4.19.0 `tools/owner_frames.py clothes FRAME SILHOUETTE.npy|auto OUT.jpg [strength ...]
   [box=x0,y0,x1,y1]` runs the clothing tool on one of his frames: the frame, the clothing mask, and per
   strength of the slider the result and what it changed (x8), with the numbers - the share of the frame
@@ -3247,6 +3407,23 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   end with a drawn silhouette, showed them partly IN the mask: the thigh and the knee are out of focus
   and have no texture to see. The words were corrected; the rule was not built. Two of the five frames
   had only been run with an earlier state of the engine.
+- **Two words and two files: answer within minutes** (2026-11-28). «ой перепутав.» came with a frame
+  and its result and no request. The agent set out to find what was wrong in the pair - borders,
+  patches, the clothes, a silhouette, a run of the engine - and had said nothing when he stopped the
+  answer and wrote his next wish. An answer reaches him only when the turn ends. When a message asks
+  for nothing that can be named, look for ten minutes (the dates of the files, the map of `zones`, the
+  borders), say what the pair shows, ask him to circle what he means, and stop. The long look paid
+  for itself only by accident (it showed that 4.19.0 runs on his PC).
+- **Try the plain reading of a wish before a clever one** (4.20.0). "Not until I click the icon"
+  became "the first press anywhere inside the panel starts the server" - built, tested, and taken
+  out when the list of the panel's controls was read: every button that is no order to the server
+  would have started it. Read the page before designing for it.
+- **A warning is found by cutting the real case down** (4.20.0). The overflow of the clothing stage
+  showed on his frame and on no drawn one. Blobs, boxes, faint pieces and big frames, guessed one
+  after another, did not make it. What did: his own weights, saved at the moment of the warning
+  (`np.seterr(over="call")` and a walk up the frames to `_cloth_surface`), then cut down - one
+  piece alone, then made 0/1 (the warning went), then without the tiny values (it stayed): the
+  cause was the soft rim cut off at a level. Then the drawn case took one try.
 - **Read the title bar of a screenshot first** (2026-11-28). He has a second plugin, built in another
   chat, whose window looks like ours; he sends its screenshots here too. Whose window it is decides
   everything else: what cannot be changed from here is said in the first line of the reply, and the
