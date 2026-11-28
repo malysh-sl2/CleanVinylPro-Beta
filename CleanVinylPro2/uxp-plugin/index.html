@@ -148,7 +148,7 @@
           <!-- Рівняти одяг: іконка сукні (без слів) + галочка -->
           <!-- (a <div>, not a <label>: Photoshop draws the caption of a <label> in its own size and colour, and a click
                on the box reaches the checkbox through bindCheckBoxes() of main.js) -->
-          <div class="r4m-dress-pill" id="dlgWrapDress" data-check="dlgChkDress" data-tip="Рівняти одяг — розгладжує різкі складки та блиски на сукнях (не чіпає шкіру й волосся). Без галочки повзунок одягу неактивний">
+          <div class="r4m-dress-pill" id="dlgWrapDress" data-check="dlgChkDress" data-tip="Рівняти одяг — вирівнює те, що не випрасуване: зморшки, сліди згинів і плями на гладкій тканині. Глибокі складки, драпірування, шви, малюнок, шкіра й волосся лишаються. Без галочки повзунок одягу неактивний">
             <img src="icons/ui/dress.png" class="ui-icon" alt="" />
             <input type="checkbox" id="dlgChkDress" />
           </div>
@@ -273,7 +273,7 @@
                   <div class="ctrl-label-line"><span>Збереження текстури вінілу</span><span class="ctrl-val" id="gValGrain">90%</span></div>
                   <div class="cv-slider" id="gSlGrain" data-value="90"><div class="cv-slider-track"><div class="cv-slider-fill"></div></div><div class="cv-slider-thumb"></div></div>
                 </div>
-                <div class="g-row" data-tip="Сила рівняння одягу — прибирає саме зморшки й заломи на гладкій тканині: 30–50% дрібні зморшки, 60–90% помітні заломи. Об’єм, колір і фактура тканини, глибокі складки, джинс, мереживо, шкіра й волосся залишаються як були. Активний лише коли стоїть галочка сукні зверху.">
+                <div class="g-row" data-tip="Сила рівняння одягу — що вважати зморшкою, а що складкою: 30–50% зморшки від носіння, сліди згинів і неглибокі плями; 60–100% помітніші заломи; понад 100% — важка праска, може послабити й драпірування. Об’єм, колір і фактура тканини, глибокі складки, малюнок, джинс, мереживо, шкіра й волосся лишаються. Місце, яке рівняти не треба, зітріть Гумкою. Активний лише коли стоїть галочка сукні зверху.">
                   <div class="ctrl-label-line">
                     <span>Сила рівняння одягу</span>
                     <div class="ctrl-right-group"><div role="button" tabindex="0" class="toggle-pill" id="gBtnDress">Вимк.</div><span class="ctrl-val" id="gValDress">45%</span></div>

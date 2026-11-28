@@ -6,7 +6,7 @@ const uxpShell = uxp.shell;
 const CANDIDATE_URLS = ["http://127.0.0.1:18746", "http://localhost:18746"];
 // The same number as in manifest.json and server.py. A server of another version still answers (for example the
 // previous one that was left running after an update) - the panel then says how to restart it.
-const PLUGIN_VERSION = "4.18.0";
+const PLUGIN_VERSION = "4.19.0";
 // The name as a person reads it. Since 4.18.0 the version stands next to it wherever the plugin is named: in the
 // Plugins menu and on the tab of the panel (manifest.json - "name" and the label of the panel, written there by
 // hand), in the header of the panel and in the title of the big window (below). The owner: «у назві плагіна пиши
@@ -447,7 +447,7 @@ const USER_GUIDE_TIPS = [
   "💡 Розводи й сліди на підлозі вирівнюються аж до самих ніг, тіні лишаються. Лінію стіна–підлога прибирає «Циклорама»; щоб лишити її — поставте 0%.",
   "💡 Пресет підбирається сам під кадр: темний фон, ближній, середній план чи повний зріст. Іншої думки — виберіть свій у списку.",
   "💡 Ctrl + Клік по іконці Пензля (B) показує шар на всьому кадрі; Ctrl + Клік по Гумці (E) — повністю очищає маску.",
-  "💡 Увімкніть іконку сукні зверху, щоб AI делікатно розгладив різкі складки на одязі без впливу на шкіру й волосся.",
+  "💡 Іконка сукні зверху вирівнює одяг: зморшки, сліди згинів і плями на гладкій тканині. Глибокі складки, малюнок, шкіра й волосся лишаються; місце, яке рівняти не треба, зітріть Гумкою (E).",
   "💡 Натисніть квадратики фракцій знизу (Дрібна / Середня / Велика), щоб швидко вмикати або вимикати типи чистки.",
   "💡 Зум: колесо миші або Ctrl + «+» / Ctrl + «−», як у Photoshop; Ctrl + 0 — вписати фото у вікно. Рухати наближене фото: затисніть праву кнопку миші й тягніть (або Пробіл + мишка).",
   "💡 Гарячі клавіші [ і ] миттєво зменшують або збільшують розмір пензля й гумки.",

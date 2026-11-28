@@ -3920,11 +3920,13 @@ class CleanVinylEngine:
         whatever its strength. A blotch or a stain has no direction; a fold has one.
         deep_cut: a departure this many times eps_std is a fold; the surface is fitted to the rest of the cloth.
         want_keep=False: only the surface is wanted (the two other results are None).
-        Works on a copy reduced so that the window is a few pixels wide: the cost does not grow with the window.
+        Works on a copy reduced so that the window is a few pixels wide (sigma 2.5 to 5 px): the cost does not
+        grow with the window. Not smaller: at sigma 1.8 px a stain went by half less, and how much of it went
+        jumped as the slider crossed the size at which the copy is halved.
         """
         h, w = low.shape[:2]
         f = 1
-        while sigma / (f * 2) >= 1.8 and min(h, w) / (f * 2) > 24:
+        while sigma / (f * 2) >= 2.5 and min(h, w) / (f * 2) > 24:
             f *= 2
         sw, sh = max(4, w // f), max(4, h // f)
         ft = np.float32
@@ -3978,11 +3980,12 @@ class CleanVinylEngine:
         # onto it: a halo along every fold. Two rounds (the first is still bent by the fold itself), on the
         # brightness alone.
         cut = float(deep_cut) ** 2 * e2
+        kq = 2 * max(1, int(round(0.55 * sg))) + 1               # (half a sigma, whatever the size of the copy)
         lo_lum = (lo * lw).sum(axis=2)
         fit = fitter(m)
         for _ in range(2):
             r0 = lo_lum - twice(fit, lo_lum)
-            q = cv2.dilate(r0 * r0, np.ones((3, 3), np.uint8))    # (the flanks of a fold go with it)
+            q = cv2.dilate(r0 * r0, np.ones((kq, kq), np.uint8))  # (the flanks of a fold go with it)
             fit = fitter(m / (1.0 + (q / ft(cut)) ** 2))
         surf = np.empty_like(lo)
         for c in range(3):

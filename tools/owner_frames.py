@@ -27,6 +27,14 @@ after the sandbox was replaced:
         networks of the checks. Writes [the frame | this result | tone moved here] and, with RESULT, the
         owner's own result and its tone map next to them. Prints the numbers of the run ("stats").
 
+    python tools/owner_frames.py clothes FRAME SILHOUETTE.npy|auto OUT.jpg [STRENGTH ...] [box=x0,y0,x1,y1]
+        The clothing tool («Рівняти одяг») of this checkout on the frame, at each strength of the slider
+        (default 45 and 100). Writes [the frame | the clothing mask | per strength: the result, and what it
+        changed x8] cut to the box (shares of the frame; default: around the clothing) and prints, per strength,
+        how much of the frame moved and how far the hue of the cloth moved. With "auto" the silhouette is a
+        rough stand-in made without a polygon (GrabCut started from the backdrop along the left, right and top
+        edges): good enough on a light backdrop, wrong on dark frames - draw a polygon for those.
+
 What this can and cannot tell. The maps of the engine (what is smoke, gear, shadow; what is marked for removal;
 where the corner is) come from the frame and the silhouette alone, so they are close to his - not equal: his
 silhouette is another, and he opens the document, not its JPEG. The AI fill here is a simple stand-in: what
@@ -137,6 +145,98 @@ def cmd_silhouette(frame_path, polygon_path, out_path, check_path=None):
         save(check_path, view)
 
 
+def auto_silhouette(frame):
+    """A rough stand-in for the silhouette model without a polygon: what is not the backdrop of the frame edges."""
+    s = 1000.0 / frame.shape[0]
+    work = cv2.cvtColor(cv2.resize(frame, None, fx=s, fy=s, interpolation=cv2.INTER_AREA), cv2.COLOR_RGB2BGR)
+    sh, sw = work.shape[:2]
+    lab = cv2.cvtColor(work, cv2.COLOR_BGR2LAB).astype(np.float32)
+    # the backdrop, roughly: the picture with everything smaller than a third of the frame smoothed away
+    back = cv2.GaussianBlur(cv2.medianBlur(work, 2 * int(0.04 * sw) + 1), (0, 0), 0.10 * sw)
+    far = np.linalg.norm(lab - cv2.cvtColor(back, cv2.COLOR_BGR2LAB).astype(np.float32), axis=2)
+    mask = np.full((sh, sw), cv2.GC_PR_BGD, np.uint8)
+    mask[far > 16.0] = cv2.GC_PR_FGD
+    mask[cv2.erode((far > 30.0).astype(np.uint8), np.ones((9, 9), np.uint8)) > 0] = cv2.GC_FGD
+    edge = max(4, int(0.02 * sw))
+    mask[:, :edge] = cv2.GC_BGD
+    mask[:, -edge:] = cv2.GC_BGD
+    mask[:edge, :] = np.where(far[:edge, :] > 30.0, mask[:edge, :], cv2.GC_BGD)   # (a head may reach the top edge)
+    opened = np.clip(255.0 * (work.astype(np.float32) / 255.0) ** 0.5, 0, 255).astype(np.uint8)
+    cv2.grabCut(opened, mask, None, np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64), 5, cv2.GC_INIT_WITH_MASK)
+    cut = ((mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD)).astype(np.uint8)
+    n, lbl, stats, _ = cv2.connectedComponentsWithStats(cut, 8)
+    keep = np.zeros_like(cut)
+    for i in range(1, n):
+        if stats[i, cv2.CC_STAT_AREA] > 0.004 * sh * sw:
+            keep[lbl == i] = 1
+    keep = cv2.morphologyEx(keep, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
+    return cv2.resize(cv2.GaussianBlur(keep.astype(np.float32), (0, 0), 1.2), (1024, 1024), interpolation=cv2.INTER_LINEAR)
+
+
+def cmd_clothes(frame_path, sil_arg, out_path, rest):
+    strengths = [float(a) for a in rest if "=" not in a] or [45.0, 100.0]
+    box = next(([float(v) for v in a.split("=", 1)[1].split(",")] for a in rest if a.startswith("box=")), None)
+    sys.path.insert(0, os.path.join(ROOT, "tests"))
+    import harness as H
+    engine = H.load_engine()
+    frame = load(frame_path)
+    h, w = frame.shape[:2]
+    sil = auto_silhouette(frame) if sil_arg == "auto" else np.load(sil_arg)
+    eng = H.make_engine(engine, sil)
+    params = panel_params("std", [])
+    cache = {}
+
+    def run(p):
+        oc = {}
+        with contextlib.redirect_stdout(io.StringIO()):
+            out, _ = eng.process(frame, 8, p, stage_cache=cache, out_cache=oc)
+        a = out[:, :, 3:4].astype(np.float32) / 255.0
+        return np.clip(frame.astype(np.float32) * (1 - a) + out[:, :, :3].astype(np.float32) * a, 0, 255).astype(np.uint8), oc
+
+    base, _ = run(dict(params, dressSmooth=False))
+    results, mask = [], None
+    for s in strengths:
+        res, oc = run(dict(params, dressSmooth=True, dressStrength=s))
+        mask = oc.get("dress_s")
+        results.append(res)
+    if mask is None:
+        sys.exit("the engine made no clothing mask")
+    m_full = cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR)
+    cloth = m_full > 0.5
+    if box is None:
+        ys, xs = np.where(m_full > 0.05)
+        if ys.size == 0:
+            sys.exit("no clothing found (the mask is empty)")
+        box = [max(0.0, xs.min() / w - 0.02), max(0.0, ys.min() / h - 0.02), min(1.0, xs.max() / w + 0.02), min(1.0, ys.max() / h + 0.02)]
+    x0, y0, x1, y1 = int(box[0] * w), int(box[1] * h), int(box[2] * w), int(box[3] * h)
+
+    def hue(x):
+        x = cv2.GaussianBlur(x.astype(np.float32), (0, 0), 3.0) + 5.0
+        return np.log(x[..., 0] / x[..., 1]), np.log(x[..., 2] / x[..., 1])
+
+    print(f"the clothing mask covers {cloth.mean() * 100:.1f}% of the frame, in "
+          f"{cv2.connectedComponents((mask > 0.02).astype(np.uint8), connectivity=8)[0] - 1} piece(s)")
+    tiles = [frame[y0:y1, x0:x1], grey3(m_full[y0:y1, x0:x1] * 255.0)]
+    hb = hue(base)
+    lit = cloth & (cv2.GaussianBlur(base, (0, 0), 3.0).max(axis=2) > 40)
+    for s, res in zip(strengths, results):
+        d = res.astype(np.int16) - base.astype(np.int16)
+        ad = np.abs(d).max(axis=2)
+        hr = hue(res)
+        moved = np.maximum(np.abs(hr[0] - hb[0]), np.abs(hr[1] - hb[1]))[lit] if lit.any() else np.zeros(1)
+        lab0 = cv2.cvtColor(base, cv2.COLOR_RGB2LAB).astype(np.float32)[cloth].mean(axis=0)
+        lab1 = cv2.cvtColor(res, cv2.COLOR_RGB2LAB).astype(np.float32)[cloth].mean(axis=0)
+        outside = ad[~cv2.dilate(cloth.astype(np.uint8), np.ones((41, 41), np.uint8)).astype(bool)]
+        print(f"strength {s:g}: moved by more than 1 level on {(ad > 1).mean() * 100:.2f}% of the frame, by more than 3 on "
+              f"{(ad > 3).mean() * 100:.2f}%, largest {int(ad.max())}; outside the clothing largest {int(outside.max()) if outside.size else 0}; "
+              f"hue of the cloth moved by more than 2% on {(moved > 0.02).mean() * 100:.2f}% of it; mean of the cloth (Lab, 0..255): "
+              f"L {lab1[0] - lab0[0]:+.2f} a {lab1[1] - lab0[1]:+.2f} b {lab1[2] - lab0[2]:+.2f}")
+        tiles += [res[y0:y1, x0:x1], np.clip(128 + 8 * d[y0:y1, x0:x1], 0, 255).astype(np.uint8)]
+    k = min(1.0, 2400.0 / (len(tiles) * (x1 - x0)), 1300.0 / (y1 - y0))
+    save(out_path, np.hstack([cv2.resize(t_, None, fx=k, fy=k, interpolation=cv2.INTER_AREA) for t_ in tiles]), 90)
+    print(f"written {out_path} (scale {k:.2f}): the frame | the clothing mask | " + " | ".join(f"{s:g}, changed x8" for s in strengths))
+
+
 def panel_params(preset_name, changes):
     """What the panel sends for a built-in preset (readCurrentConfig of main.js), with the given changes."""
     with open(os.path.join(ROOT, "CleanVinylPro2", "server", "presets_defaults.json"), encoding="utf-8") as f:
@@ -188,6 +288,8 @@ def main(argv):
         cmd_silhouette(*argv[1:])
     elif len(argv) >= 5 and argv[0] == "run":
         cmd_run(argv[1], argv[2], argv[3], argv[4], argv[5:])
+    elif len(argv) >= 4 and argv[0] == "clothes":
+        cmd_clothes(argv[1], argv[2], argv[3], argv[4:])
     else:
         print(__doc__.strip())
         return 2

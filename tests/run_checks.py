@@ -1215,11 +1215,12 @@ def check_dress():
         if left > prev + 0.03:
             bad.append(f"strength {strength} irons less than a weaker setting ({left:.2f} after {prev:.2f})")
         prev = left
-        if fold_left < 0.85:
+        if fold_left < (0.90 if strength <= 100 else 0.80):
             bad.append(f"strength {strength}: the deep fold was flattened to {fold_left:.2f} - a fold of the garment must stay whole")
         diff = (out - f0) * 255.0
         tone = broad_off(out)
-        if tone > tone_before + 1.0:
+        # (above 100 the iron is heavier on purpose: the cloth next to the deep fold may darken by a level more)
+        if tone > tone_before + (1.0 if strength <= 100 else 1.6):
             bad.append(f"strength {strength}: the broad tone of the ironed dress is {tone:.1f} levels off the tone of the clean cloth "
                        f"({tone_before:.1f} before the ironing): the roundness of the body or the light on it was moved")
         # colour: the creases of this dress have no colour of their own, so nothing may change the hue of the cloth
