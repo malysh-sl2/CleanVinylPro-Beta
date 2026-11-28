@@ -377,6 +377,15 @@ written here and in the repository.
   first reading is: the clothing tool of «Чистий Вініл Pro» does that to a dress. The other reading:
   the retouching plugin he builds in another chat (his message before this one). No frame came with
   it, no name of a frame, no settings.
+  The first reading was taken, without asking: measured on the frames of his earlier messages, the
+  clothing tool of 4.18.0 does both things he names (section 2, 4.19.0). 4.19.0 makes the tool anew
+  (reply #28). The reply says, in this order: Retouch4me Fabric is a trained network, none can be
+  trained or run here, so this is ordinary image processing; what the tool does now; what it cannot
+  (a crease of middling depth against a fold - the slider decides; a stain not always whole; a
+  hairline crease; crumpled tulle - the eraser); that nothing was tried in Photoshop and that he sent
+  no frame with the dots, so the cause was found by measuring; and it asks for a frame with the number
+  on the slider if dots or a change of colour show again.
+- **2026-11-28** (one word, no files, while 4.19.0 was being built): «Продовж» - "go on". Nothing else.
 
 ## 2. What is in the repository
 
@@ -1546,13 +1555,119 @@ second plugin next to the installed one and lose his presets.
     the tick); the group `server` asks for the version next to the name; `tests/try_defects.py`
     holds the 34 defects of 4.18.0 (23 «stands: …», 11 «name: …»), all in the panel.
 
+- **4.19.0** — «Рівняти одяг» made anew: creases, marks of folding and stains are evened, the rest of
+  the garment is left; after his message of 2026-11-27 on reply #27 (section 1). The panel got new
+  words only; the server did not change. NOT a neural network: Retouch4me Fabric is one (sold as a
+  plugin; its demo is a Windows program), and nothing of the kind can be trained or run in this
+  sandbox - the manual and reply #28 say so first.
+  - **What the tool of 4.18.0 did** (the comment above `DRESS_SLIDER` in `engine.py` keeps it). A
+    band-pass of the brightness: everything of a certain width a little paler, wherever it was -
+    creases and the roundness of the body alike; no crease gone; no stain looked for. Brightness
+    only: where a crease was lightened, a strip of denser colour stayed, and the cloth came out a
+    little darker. The layer was opened where the gain happened to be non-zero - in patches. The
+    texture rule was read 3 px wide: on faded denim and tulle the mask was a cloud of dots, and the
+    ironing and the layer followed it. Those are his «точками заливає» and «колір міняє» as far as
+    measuring on his earlier frames can tell: he sent no frame with the complaint.
+  - **His own retouch as the guide.** On frame `2` (`2 (2).jpg` is his result) he took out single
+    creases and marks - at the armpit, the side, the sleeve, the ripple of a seam, a spot near the
+    hem - and kept the navel, the drapery and the folds of the hem. A score against his result is
+    useless (correlation 0.04-0.11 for any candidate): judge by eye on crops at full size, and by
+    planted defects. `1.jpg` and `1 (2).jpg` are two different shots.
+  - **The stage** (`_smooth_dress_fabric`). The question asked of every spot of cloth: what is the
+    smooth surface this cloth lies on, and does the cloth depart from it a little or a lot?
+    - On a copy of at most 2000 px, in log R, G, B. Only the low layer moves, by a gain per
+      channel: what is finer than 0.0009 of the long side of that copy (about 5 px of a
+      22-megapixel frame) - weave, grain, a hairline - is never touched.
+    - `_cloth_surface`: a plane fitted to the cloth around the spot (a Gaussian window cut at 2.2
+      sigma; cloth only; what departs strongly left out in two rounds), applied twice (2 S - S S):
+      it follows a slope and a bend, so the light on a belly is the surface. It works on a copy
+      reduced until the window is 2.5-5 px (sigma), in single precision.
+    - What departs a lot stays, untouched: deeper than `DRESS_DEEP` (0.25 log units x s^0.4)
+      against the surface at the widest window, or a colour `DRESS_PRINT` (0.20) away from it.
+      Decided ONCE per garment, before any width is worked on; the flanks go with it.
+    - What departs a little is pulled onto the surface at four widths (`DRESS_RUNGS`), narrow to
+      wide, each half of the next; the widest is `DRESS_WIDTH` (0.40) of the half-width of the
+      garment (`_dress_scale`: the 90th percentile of the distance to its outline, holes filled)
+      times min(1, 0.4 + 0.6 s). The calmer the cloth in the window, the more of it is pulled
+      (`DRESS_EPS`, stricter for wider windows); a wide band that runs one way is a fold and
+      stays (`band_guard`).
+    - Colour is judged apart from brightness: a faint tint (`DRESS_TINT`) is evened, a strong one
+      is a colour of the cloth.
+    - `_cloth_colours`: garments of clearly different hue (k-means on the shares of red and blue
+      with a fixed start, a valley test, `DRESS_APART`) are ironed one by one, each with its own
+      low layer; a hue on under 4 % of the clothing belongs to no pass (a print).
+    - Nothing in deep shadow. The layer alpha is the garment itself (`cover`), evenly, at every
+      strength - whatever was changed in it.
+  - **The slider keeps its numbers** (`DRESS_SLIDER` -> `DRESS_SLIDER_S`: 45 -> s 0.6, 100 -> 1.0,
+    150 -> 1.5). The presets still ship 35-45 with the tick off, and what he saved keeps its
+    meaning: 45 is the everyday setting. Above 100 the windows do not grow, only the tolerance.
+  - **The mask** (`_build_dress_mask_small`, 1024 px): the texture verdict is averaged over the
+    person within 1.2 % of the long side (cloth is in or out by regions, with a soft band
+    between); skin the colour rule misses is grown from skin it found (within about 4 % of the
+    frame, nearly its hue, any lightness) - a ruddy hand on a white shirt was ironed as cloth;
+    pieces under about 2 % of the long side across, or faint all over, are dropped (each would be
+    a dot of the even layer).
+  - **Time.** The stage: 0.3-0.8 s on the working copy of the window, 1-2.5 s at 22 megapixels (it
+    was about 12 ms in the window). The panel asks for the window picture when the slider is let
+    go, not while it moves: one release takes 0.6-1.1 s here.
+  - **On his frames** (stand-in silhouettes - `auto` for `2` and `1`, polygons for the rest; preset
+    «Студія»; slider 45 / 100; share of the frame moved by more than 3 levels):
+    - `2.jpg` (light-blue dress) 1.4 % / 2.5 %: the creases at the side, on the sleeve and on the
+      belly weaken; the navel, the drapery and the gathers stay at 45. The hue moves by more than
+      2 % on 15 % / 23 % of the cloth - the tint of the creases is evened, by design.
+    - `1.jpg` (family in white) 3.6 % / 5.2 %: the creases of the polo shirts and the stretch
+      marks go; the hand on the boy's shoulder is out of the mask.
+    - `0Q5A3384` (white top, jeans) 1.5 % / 2.5 %: the pulled crease under the bust (22 levels) and
+      a yellowish spot on the belly go. The faded jeans are OUT where they are in focus and IN
+      where they are not (the thigh at the frame edge, the top of the knee): the mottling of the
+      wash is evened there by up to 17 levels at 45 - mild to the eye and without a border (the
+      mask fades), but «джинс не чіпає» holds by regions only. The manual says so.
+    - `0Q5A2507` (red dress, cake, candles) 0.3 % / 0.6 %: the crease above the slit weakens (24
+      levels), the soft folds of the skirt by up to 8 / 11 levels; cake, candles, hair and skin
+      are untouched (nothing above 2 levels away from the cloth).
+    - `0Q5A3610` (tulle, low key): the tulle is out of the mask but for three patches at the lit
+      rim of the train (0.2 % of the frame), moved by at most 4 levels at 45 and 11 at 100.
+    The mean colour of the cloth moves by under 0.4 of 255 in L (down) and under 0.2 in a and b.
+  - **What it cannot do.** Tell a crease of middling depth from a fold of the cut - the slider
+    decides. Take every stain out: a soft mark 6 % darker on calm cloth goes when it is a quarter
+    of the half-width of the garment across (x0.07 left at 45, none at 60), keeps two thirds at
+    0.4 half-widths and 0.94 at 0.56 (a palm on a torso), at 45, 60 and 100 alike; among creases a
+    stain keeps 13-31 %; a sharp outline keeps a trace (the fine layer). A hairline crease stays
+    (a seam looks the same). Crumpled cloth of low contrast - tulle or gathers out of focus - is
+    ironed like a crumpled shirt; the eraser of the window keeps a zone out. Textured cloth out of
+    focus counts as smooth (the jeans above).
+  - **Tried and dropped** (do not repeat): a guided filter, removal per band, a plane fitted once
+    (the roundness of the belly darkened); every width repeated two or three times (stains go,
+    the shading of the belly and the drapery flatten); a depth gate per width (each width took
+    its share: the deep fold fell to x0.53 / x0.28); surfaces fitted only to cloth that is not
+    deep (larger changes, halos); a rule "a step nearby" by brightness or colour (blocked most of
+    the cloth or cured nothing - the passes per garment replaced it); six widths with step 1.5
+    (the broad tone moved 3.5 levels, the hue 3.4 % at a border of garments); `DRESS_EPS` 0.14
+    (a fold flattened); copies reduced to sigma 1.8 px (a stain went by half less, and jumped
+    from x0.26 at slider 41 to x0.43 at 42).
+  - **Checks.** `check_dress` is new: four results on drawn frames (`_garment_frame` with
+    `coarse`, `_garment_scene`, `_dress_mask`) - the ironing (creases x0.27 at 20, x0.13 at 60,
+    x0.11 at 100, x0.10 at 150; the deep fold x1.00 / 0.98 / 0.95 / 0.89; the broad tone, the hue,
+    the weave; the layer covering the garment evenly); the mask (a second smooth garment in,
+    denim out as a whole, a hand with its ruddy half out, a scrap dropped); stains (four kinds,
+    13-31 % left), an emblem, a hand and a white panel next to blue cloth that must not change;
+    the size of the garment (a frame of the camera; a wide shot with the person half as tall -
+    creases and broad soft marks alike). `check_sharp` also asks that the layer of Apply keeps
+    what the window showed at strength 10 (about half of the creases: at 80 hardly any are left
+    and a wrong strength would not show). `tests/try_defects.py` holds the 15 defects of 4.19.0,
+    all in the engine (14 asked of `dress`, 1 of `sharp`). `tools/owner_frames.py clothes` runs
+    the tool on one of his frames (section 4).
+  - NOT built: a network; removal of hairline creases; a separate stain tool; a rule that tells
+    tulle or ruching from a crumpled shirt; a verdict on texture per garment (the jeans); a new
+    default strength (35-45 stays). Two rules have no check that fails without them (section 3).
+
 ## 3. Current state — update this at the end of every session
 
-_Last updated: by the agent of the first session, after releasing 4.18.0 (the answer to his two messages
-of 2026-11-27 on reply #25)._
+_Last updated: by the agent of the first session, after releasing 4.19.0 (the answer to his message of
+2026-11-27 on reply #27: clothes as Retouch4me does them)._
 
-- **Released:** 4.18.0, tag `cvp2-v4.18.0`, as a pre-release. Direct download:
-  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.18.0/CleanVinylPro2.zip`
+- **Released:** 4.19.0, tag `cvp2-v4.19.0`, as a pre-release. Direct download:
+  `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.19.0/CleanVinylPro2.zip`
 - **Owner's progress:** 4.2.0 to 4.12.0 have been installed and work on his PC (program in
   `D:\Plugin Photoshop\CleanVinylPro2`, models in `D:\model AI fotoshop`, LaMa on `CUDAExecutionProvider`,
   Python 3.12.10). So the `.bat` files, the installer, the GPU, the real models and the panel HAVE run on
@@ -1603,25 +1718,50 @@ of 2026-11-27 on reply #25)._
   request was not merged («Merging», below). Read from that, not said by him: he does install the
   versions (which one he has now is not known), and he works with the automatic preset on or
   clicks presets - the tick went off only then.
-  **He has not reported on 4.16.0, 4.17.0 or 4.18.0 yet** - not on the smear, not on «Глибина» 10.
+  On 2026-11-27, after reply #26 and after reply #27 (section 1): a question about the agent of his
+  other plugin (answered in words, reply #27), then the wish about clothes - 4.19.0 answers it
+  (reply #28). Which version he has installed is not known.
+  **He has not reported on 4.16.0, 4.17.0, 4.18.0 or 4.19.0 yet** - not on the smear, not on «Глибина»
+  10, not on the tick «Стійки», not on the clothes. The questions of replies #25 and #26 got no answer.
   The path to the plugin list of Creative Cloud (Stock & Marketplace → Plugins → Manage plugins → the three
   dots → Uninstall; the same list opens from Photoshop with Plugins → Manage Plugins) is in section 6 of
   the manual since 4.8.0. Whether his Creative Cloud shows these names in English or in Ukrainian is not
   known.
-- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (50 results in
-  2066 s; 132 scenarios of the panel test and 110 cases of the settings test among them) on
-  2026-11-27 (the clock of the sandbox), with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4, with
-  nothing running next to it.
-  Deliberate defects for what is new in 4.18.0 (`tests/try_defects.py`), put in one by one: 34, all in
-  the panel. 23 «stands: …» - what took the tick away up to 4.17.0; the tick itself, its box and
-  its pill; the settings, a file of 4.17.0, a backup; which preset puts the tick and when; what the
-  window says - asked of the settings test and of the six scenarios «'Стійки' …», those of the
-  settings also of the two backup scenarios. 11 «name: …» - the name and the label of the manifest
-  without the version or with the number before, the title of the window, the line on the panel,
-  the step of the History panel - eight asked of the scenario of the name, three of the group
-  `server`. All are caught by the checks as they are now, each by the line of the rule it breaks.
-  They ran in a copy of the tree after the last change of the panel and the checks: 34 in one run
-  of 865 s.
+- **Checks:** the quick run of `tests/run_checks.py` ended with ALL CHECKS PASSED (53 results in
+  2560 s; 132 scenarios of the panel test and 110 cases of the settings test among them) on
+  2026-11-28 (the clock of the sandbox), with NumPy 2.4.6 and OpenCV 5.1.0, set up as in section 4, in a
+  copy of the tree of the commit that holds the ZIP (`358e50b`). Five runs of the group `dress` went next
+  to its first quarter (the trials by hand, below), so a run alone takes less.
+  Deliberate defects for what is new in 4.19.0 (`tests/try_defects.py`), put in one by one: 15, all in
+  the engine, each taking one rule of the clothing tool away - the layer opened where the cloth
+  changed; nothing taken for a fold; a fold only weakened; the widths a share of the frame; one gain
+  for the three channels; two garments ironed as one; every hue given to the nearest garment; skin
+  not grown; scraps kept; the texture judged pixel by pixel; no band guard; the calm of the window
+  not counted; the low layer the picture itself; the plane fitted once (all asked of `dress`); Apply
+  ironing at half the strength (asked of `sharp`). All are caught by the checks as they are now.
+  They ran in a copy of the tree of `b94e046` (the same program and checks, the list as it is now), with
+  nothing next to them: 15 in one run of 1186 s.
+  Read what catches each: three are caught by a line that speaks of a neighbour of the rule, and
+  that is what the drawn scenes can show. «The texture judged pixel by pixel» - by «the layer does
+  not cover the garment evenly (alpha down to 0.83 inside the dress)»: the creases of the drawn
+  dress make the dots; the drawn denim is so coarse that it is out either way, so the dots on FADED
+  denim and tulle, which only his frames showed, have no drawn case. «No band guard» and «the calm
+  of the window not counted» - by the broad tone of the dress (the light on the body moved) and by
+  the deep fold: busy cloth, ruching, has no drawn case either.
+  Holes found while 4.19.0 was built. Closed: «the widths follow the garment» had a check that a
+  window sized by the frame passed (creases go at either width) - broad soft marks were added,
+  which only a window sized by the garment treats alike in a close and in a wide shot; the emblem
+  of the scene had no drawing of its own - it got a darker heart, so an emblem ironed as cloth
+  shows; nothing compared the layer of Apply with what the window showed for clothing (a strength
+  halved in Apply passed `quick`, whose person has no cloth to iron, and is invisible at strength
+  80) - `sharp` does now, at strength 10. A defect «a hue on little cloth is a garment of its own»
+  changed nothing visible (`DRESS_PRINT` keeps the emblem anyway) and was replaced by the rule
+  that does give the emblem to a garment.
+  NOT closed - two rules that no check guards (tried by hand on 2026-11-28, group `dress` passed):
+  the filling of holes in `_dress_scale` (without it the stains of the scene keep 0.33 / 0.41 /
+  0.38 / 0.19 instead of 0.26 / 0.31 / 0.28 / 0.15, inside the limits), and the gate that leaves a
+  strong tint alone (`g_col`: the same numbers without it - `keep_col` and `DRESS_PRINT` hold the
+  colours of the scene). Write a scene for each before changing either.
   Holes found while 4.18.0 was built, all closed:
   - "the settings can only put the tick, never take it off" was caught by one line alone, and that
     line asks which of two words of a settings file wins when they disagree - a pair that no file
@@ -1662,11 +1802,35 @@ of 2026-11-27 on reply #25)._
   From 4.18.0: the name of a defect is a claim about the program - when the line that catches it
   speaks of something else, ask whether the defect does what its name says, and whether the real
   case has a check at all.
-  The runners of earlier versions are gone or replaced (4.17.0: 18 defects, in the history at `ab97249`;
+  From 4.19.0: try a rule by hand before it goes into the list (one line changed in a copy, the group
+  run: two minutes) - and write down the rules that nothing guards instead of leaving them out silently.
+  The runners of earlier versions are gone or replaced (4.18.0: 34 defects, in the history at `0edc70e`;
+  4.17.0: 18, at `ab97249`;
   4.16.0: 26, at `b27ccd3`; 4.15.0: 63, at `f60cf37`; 4.14.0: 42, at `2fd2d21`; 4.13.0: 43, at `155e1ce`;
   4.12.0: 45, at `8b620e2`; 4.11.0: 30, at `07e8995`; 4.10.0: 54, at `64700aa`; 4.9.0: 35, at `78a08b8`;
   4.8.0: 71, at `0f4cb46`; 4.7.0: 29, at `c3be3ed`; 4.6.0: 34, at `50bae15`; 4.5.0: 71 and 4.4.0: 41, never
   committed); their checks are still in `tests/run_checks.py`.
+- **Decided by the agent alone for 4.19.0** (no option card, no question: he asked for the tool and
+  sent no frame; change it if he says otherwise):
+  - «станом на зараз» is read as the clothing tool of this program (section 1);
+  - a classical stage, not a network - there is no other choice here; the reply says so first;
+  - the layer covers the whole garment evenly. He complained of dots; an even cover cannot make
+    any. The cost: the layer holds the garment also where nothing changed (the pixels of the photo);
+  - what is deep is not touched at all, so drapery, gathers and the navel under a maternity dress
+    stay - his own retouch kept them;
+  - the numbers of the slider and of the presets are kept (45 = the everyday setting), the tick is
+    still off in every preset;
+  - garments of different colour are ironed apart; a print belongs to none;
+  - textured cloth is left out by regions, not as a garment: jeans out of focus are partly ironed;
+  - nothing new in the panel but words: no control for stains.
+- **Not run in Photoshop yet (4.19.0):** all of it. In particular:
+  - the clothing mask with his real silhouette: here every frame had a stand-in (GrabCut), and the
+    mask follows the silhouette;
+  - how the ironed cloth looks at 100 % on his monitor, and whether the dots and the change of
+    colour he complained of are gone - the cause was found by measuring, he showed no frame;
+  - the wait after the slider of the clothing is let go (0.6-1.1 s here);
+  - a layer that carries the whole garment: he may see the garment in it where he expected only
+    the backdrop.
 - **Decided by the agent alone for 4.18.0** (no option card; change it if he says otherwise):
   - the tick «Стійки» is the user's own for EVERY preset, not only against the automatic choice: a
     click on a preset no longer takes it off either. His words name no cause («вона відключається»);
@@ -2101,8 +2265,11 @@ of 2026-11-27 on reply #25)._
   6). If `main` already contains this file, that has happened. Merging also removes the folder
   `CleanVinylPro/` from `main`.
 
-### Open questions (ask when he reports on 4.18.0)
+### Open questions (ask when he reports on 4.19.0)
 
+- New with 4.19.0 (asked in reply #28): if dots or a change of colour show again, a frame and the
+  number on the slider. Not asked, to be read from his next message: is 45 too weak or too strong;
+  does the partly ironed denim show; does tulle matter to him.
 - New with 4.18.0 (asked in reply #26): should the smoke tick stay as he leaves it too, like
   «Стійки» now? Not asked, to be read from his next message: is the version shown where he looks
   (the Plugins menu, the tab of the panel); does the tick hold on his PC.
@@ -2436,7 +2603,13 @@ of 2026-11-27 on reply #25)._
   42 % of it was left where 7 % was left on the open floor.
 - The seam search takes the straight lower edge of a silhouette for a line when it is level and long (seen
   only on a drawn frame with a rectangular "dress"); it was so in v3.2.1 too.
-- The clothing tool is delicate: deep folds stay, near-black clothes are not touched.
+- The clothing tool (4.19.0) is ordinary image processing, not a trained network. It cannot tell a
+  crease of middling depth from a fold of the cut (the slider decides; what is deep stays whole); a
+  stain among creases keeps 13-31 %, a soft one wider than 0.4 of the half-width of the garment most
+  of itself, a sharp outline a trace; a hairline crease stays; crumpled cloth of low contrast (tulle
+  or gathers out of focus) is ironed like a crumpled shirt - the eraser of the window keeps a zone
+  out; textured cloth out of focus (jeans in the foreground) counts as smooth and is partly ironed;
+  near-black clothes are not touched.
 - Format 5:7: equipment cut by the frame edge stays cut; the added strips near the feet can look streaky.
 
 ## 4. Working in the sandbox
@@ -2474,10 +2647,10 @@ npm install --prefix tests jsdom@24      # for the panel test; the folder is git
 /tmp/cvenv/bin/python tests/run_checks.py install bat    # only the groups named
 /tmp/cvenv/bin/python tests/run_checks.py --full         # more random cases
 
-# the deliberate defects of the latest version: 14 minutes for the 34 of 4.18.0, all in the panel (23 run
-# the six scenarios «'Стійки'», about 37 s each; 11 of the name take 2 s each). Three of those go through the
-# group server and patch the plugin in place, as every defect of the engine does: run in a copy of the tree
-# (below). For comparison: 6 minutes for the 18 of 4.17.0, 22 for the 26 of 4.16.0
+# the deliberate defects of the latest version: 20 minutes for the 15 of 4.19.0, all in the engine (14 run
+# the group dress, about 82 s each; the one of the group sharp takes 34 s). A defect of the engine patches
+# the file in place: run in a copy of the tree (below). For comparison: 14 minutes for the 34 of 4.18.0
+# (all in the panel), 6 for the 18 of 4.17.0, 22 for the 26 of 4.16.0
 /tmp/cvenv/bin/python tests/try_defects.py               # ends with "N of N defects caught"
 /tmp/cvenv/bin/python tests/try_defects.py "called a line" "the slider"   # only the defects whose name or group has these words
 /tmp/cvenv/bin/python tests/try_defects.py panel:        # only the defects of the panel (they go into a copy
@@ -2573,6 +2746,16 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   where the corner is). They are close to his, not equal - on `0Q5A2507` the corner finder decided
   otherwise here than on his PC - so a defect seen only here is a defect of the program all the same,
   but not one he saw; say so. What the real fill paints into a large area cannot be seen here at all.
+- Since 4.19.0 `tools/owner_frames.py clothes FRAME SILHOUETTE.npy|auto OUT.jpg [strength ...]
+  [box=x0,y0,x1,y1]` runs the clothing tool on one of his frames: the frame, the clothing mask, and per
+  strength of the slider the result and what it changed (x8), with the numbers - the share of the frame
+  that moved, the hue of the cloth, the mean colour. `auto` makes a stand-in silhouette without a polygon
+  (GrabCut from the backdrop): good enough on `2.jpg` and `1.jpg`, wrong on the dark frames - draw a
+  polygon there (`silhouette`). About a minute per run at 22 megapixels with two strengths. Give a box:
+  a crease is judged at full size. «Outside the clothing» in its output means further than 20 px from
+  where the mask is above a half - the faint rim of the mask counts as outside there.
+  A trap when you make your own overview: `cv2.resize(a, None, fx=k, fy=k)` and `cv2.resize(b, (w, h))`
+  do not map alike - the difference of two such pictures shows every outline of the frame as a change.
 - What the real fill paints into a large area can be IMITATED since 4.14.0: `H.LightLama` of
   `tests/harness.py` paints every masked pixel 22 levels lighter than what its tile shows outside the
   mask - what his LaMa did with the curtain of `0Q5A3534`. It is a stand-in for that one fault, made to
@@ -2714,6 +2897,20 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   never starts is lived through in a second.
 - `check_http` compares whole JSON answers of the old and the new server: a new key in an answer must be added
   to the ignore list in its `norm()`.
+- A sandbox that was replaced can come back with the WORKING TREE of the last turn - uncommitted edits of
+  tracked files included - under a `.git` that stands at `daae6ed` (2026-11-28: the new `check_dress` and
+  three engine edits survived that way). Look before anything else: `git status`, then `grep` for the last
+  thing you wrote. `git reset --mixed` onto the fetched branch keeps such edits; `--hard` destroys them.
+  Everything under `/tmp` is gone either way: commit work in progress as «WIP» and push, often.
+- A check group and a defect run read the tree, and the defect run changes it: run them in a copy (`git
+  archive HEAD | tar -x -C /tmp/copy`, then link `tests/node_modules` into it) and go on editing the
+  checkout meanwhile. Create the folder in an earlier step than the `start_process` that uses it as cwd.
+- An array saved with `np.save` under `/tmp` can come back with the start of its first row zeroed (seen on
+  52 files: 1322 pixels of row 0 black). Scratch files only - but do not take such a row for a fault of
+  the engine.
+- Numbers written into this file from memory are wrong sooner or later: before a number goes in, find it
+  in a log, in the code or measure it again (2026-11-28: a draft of the 4.19.0 entry held band factors
+  and shares nobody could trace - they were dropped, the rest was measured again).
 - The built-in presets are stored on the owner's PC (`presets_local.json`, `user_presets.json`) the way they
   were when first seen: changing a value in `DEFAULT_PRESETS` / `presets_defaults.json` does NOT reach an
   existing installation by itself. Either derive the behaviour in code (as `presetFracAuto` does) or add an
@@ -3013,6 +3210,15 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   what that defect did - at a start the tick is off before any file is read. It was caught by a
   line about something that cannot happen, and the real case (a file read while the tick stands)
   had no check.
+- **Run every one of his frames with the final engine before the words about it are final** (4.19.0).
+  The manual said that jeans are left out «цілими речами». The frame with the jeans, run again at the
+  end with a drawn silhouette, showed them partly IN the mask: the thigh and the knee are out of focus
+  and have no texture to see. The words were corrected; the rule was not built. Two of the five frames
+  had only been run with an earlier state of the engine.
+- **A wish with no frame is still a report** (4.19.0). He named two faults («точками заливає», «колір
+  міняє») and sent nothing. Both were found by measuring the old tool on frames he had sent for other
+  reasons (the mask on faded denim and tulle; the layer in patches; brightness moved alone). The reply
+  says that the cause was found that way and asks for a frame if it shows again.
 - **A word of command inside a question is not yet a command** (4.18.0). «а нащо зливати якщо ти можеж
   редагувати далі то зливай …» holds «зливай» and the condition under which he means it. What the
   condition asks was looked up (section 6: a merge ends the pushing), the act that cannot be taken
