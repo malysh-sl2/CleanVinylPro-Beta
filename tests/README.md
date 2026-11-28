@@ -314,7 +314,7 @@ CleanVinylPro2\server\.venv\Scripts\python.exe tests\run_checks.py
 
 ```
 npm install --prefix tests jsdom      # один раз; пакет потрібен лише для цього тесту
-node tests/plugin_preview.test.js     # близько 6 хвилин (131 сценарій)
+node tests/plugin_preview.test.js     # близько 7 хвилин (137 сценаріїв)
 node tests/plugin_preview.test.js "the fast window" "after Apply"   # лише сценарії, у назві яких є ці слова
 ```
 

@@ -21,6 +21,19 @@ after the sandbox was replaced:
         [x, y] corners around the people, in shares of the frame (0..1), drawn by eye - a rough outline is
         enough, the cut follows the real edges. CHECK.jpg shows the outline on the frame.
 
+    python tools/owner_frames.py protected FRAME RESULT OUT.npy [CHECK.jpg] [+ADD.json ...] [-DROP.json ...]
+        HIS silhouette, read from his own result: what his run left exactly as it was. He saves the frame and
+        the result from one document, one after the other, so the 8 x 8 blocks of the two JPEGs that are equal
+        to the last bit are what the program protected - the people and what stands with them (a stool). Far
+        closer to his silhouette than GrabCut, also on a dark frame; up to a block (8 px) too small at the
+        outline. What his clothing tool changed is missing from it: give a polygon drawn loosely INSIDE each
+        such garment as +ADD.json (CHECK.jpg shows the outline: a hole or a bay in a garment is where a polygon
+        is still missing). A lamp or a prop that was protected too is taken away with -DROP.json.
+        (Polygons as for "silhouette": [x, y] corners in shares of the frame.) With this silhouette, `run`
+        gives his picture back wherever the stand-in networks play no part - so the preset and the ticks he
+        used can be found by trying (0Q5A3522: his result and the one made here differ by more than 2 levels
+        on 1.2% of the frame).
+
     python tools/owner_frames.py run FRAME SILHOUETTE.npy "PRESET NAME" OUT.jpg [key=value ...] [RESULT]
         The engine of this checkout on the frame, with what the panel sends for that built-in preset and the
         given changes (for example smokeOn=True removeStands=True mixOn=True mix=50), with the stand-in
@@ -143,6 +156,42 @@ def cmd_silhouette(frame_path, polygon_path, out_path, check_path=None):
         on = cv2.resize(sil, (view.shape[1], view.shape[0])) > 0.5
         view[cv2.morphologyEx(on.astype(np.uint8), cv2.MORPH_GRADIENT, np.ones((3, 3), np.uint8)) > 0] = (0, 255, 0)
         save(check_path, view)
+
+
+def cmd_protected(frame_path, result_path, out_path, rest):
+    frame, result = load(frame_path), load(result_path)
+    if frame.shape != result.shape:
+        sys.exit(f"the two pictures differ in size: {frame.shape[1]} x {frame.shape[0]} and {result.shape[1]} x {result.shape[0]}")
+    h, w = frame.shape[:2]
+    hb, wb = h // 8, w // 8
+    diff = np.abs(frame.astype(np.int16) - result.astype(np.int16)).max(axis=2)
+    same = (diff[:hb * 8, :wb * 8].reshape(hb, 8, wb, 8).max(axis=(1, 3)) == 0).astype(np.uint8)
+    # single equal blocks of the backdrop go, the body stays
+    same = cv2.morphologyEx(same, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(same, 8)
+    keep = np.zeros_like(same)
+    for i in range(1, n):
+        if stats[i, cv2.CC_STAT_AREA] > 0.004 * hb * wb:
+            keep[lab == i] = 1
+    keep = cv2.morphologyEx(keep, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    for arg in rest:
+        if arg[:1] not in "+-":
+            continue
+        with open(arg[1:], encoding="utf-8") as f:
+            poly = json.load(f)
+        area = np.zeros_like(keep)
+        cv2.fillPoly(area, [np.array([(int(x * wb), int(y * hb)) for x, y in poly], np.int32)], 1)
+        keep[area > 0] = 1 if arg[0] == "+" else 0
+    sil = cv2.resize(cv2.GaussianBlur(keep.astype(np.float32), (0, 0), 0.8), (1024, 1024), interpolation=cv2.INTER_LINEAR)
+    np.save(out_path, sil)
+    print(f"written {out_path}: equal to the last bit on {(diff == 0).mean() * 100:.1f}% of the pixels; what was protected covers "
+          f"{(sil > 0.5).mean() * 100:.1f}% of the frame")
+    check = next((a for a in rest if a[:1] not in "+-"), None)
+    if check:
+        view = np.clip(small(frame).astype(np.float32) * 1.8 + 20, 0, 255).astype(np.uint8)
+        on = cv2.resize(sil, (view.shape[1], view.shape[0])) > 0.5
+        view[cv2.morphologyEx(on.astype(np.uint8), cv2.MORPH_GRADIENT, np.ones((3, 3), np.uint8)) > 0] = (0, 255, 0)
+        save(check, view)
 
 
 def auto_silhouette(frame):
@@ -286,6 +335,8 @@ def main(argv):
         cmd_zones(*argv[1:])
     elif len(argv) in (4, 5) and argv[0] == "silhouette":
         cmd_silhouette(*argv[1:])
+    elif len(argv) >= 4 and argv[0] == "protected":
+        cmd_protected(argv[1], argv[2], argv[3], argv[4:])
     elif len(argv) >= 5 and argv[0] == "run":
         cmd_run(argv[1], argv[2], argv[3], argv[4], argv[5:])
     elif len(argv) >= 4 and argv[0] == "clothes":
