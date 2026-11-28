@@ -1745,7 +1745,9 @@ second plugin next to the installed one and lose his presets.
     `hide` never - which would be the start with Photoshop again. THIS WAS NOT TRIED: from memory
     of the documentation, not verified for Photoshop 28, and this plugin has never called
     `entrypoints.setup`. If he wants the start on opening the panel, that is the thing to try -
-    in a build that he tests, with the old behaviour one release away.
+    in a build that he tests, with the old behaviour one release away. The manual and `README.md`
+    of 4.20.0 say it flatly («Photoshop не повідомляє плагіну, що його значок натиснули»); reply
+    #30 and the notes of the release say "as far as I know". Correct the two files when it is known.
   - **Not by any press inside the panel either** (built first, taken out the same hour). Outside
     the window the panel holds few controls: next to the buttons that need the server there are
     the status, «До / Після», «Довідка» and «Звільнити VRAM», and a server started by one of these
