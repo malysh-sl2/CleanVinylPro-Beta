@@ -1100,7 +1100,7 @@ def _garment_scene(seed=5):
     The drawn garment of _garment_frame with, on it, everything the ironing must even out next to everything it
     must leave alone - each ingredient known exactly:
       stains sized by the garment (a grey mark, a brown one, a tint without darkening, a small dark spot);
-      an emblem of another colour (a print); a white panel down the side (a second garment, as smooth as the
+      an emblem of another colour with a darker heart (a print); a white panel down the side (a second garment, as smooth as the
       dress); a hand lying on the dress, half of it of a colour the skin rule knows and half ruddy, which the
       rule misses; a scrap of the same cloth away from the person (a cuff seen between two fingers).
     Returns (frame, silhouette, ingredients).
@@ -1130,7 +1130,8 @@ def _garment_scene(seed=5):
     for _, field, k in stains:
         f *= 1.0 + field[..., None] * (np.float32(k) - 1.0)
     emblem = disc(cx + 0.58 * half, 0.47 * h, 0.13 * half, 2.0)
-    f = f * (1.0 - emblem[..., None]) + np.float32([196, 52, 64])[None, None, :] * emblem[..., None]
+    heart = disc(cx + 0.58 * half, 0.47 * h, 0.05 * half, 0.03 * half)      # (a print has a drawing of its own)
+    f = f * (1.0 - emblem[..., None]) + np.float32([196, 52, 64])[None, None, :] * (1.0 - 0.10 * heart[..., None]) * emblem[..., None]
     hand = np.zeros((h, w), np.uint8)
     cv2.ellipse(hand, (cx - int(0.35 * half), int(0.31 * h)), (int(0.20 * half), int(0.10 * half)), 20, 0, 360, 255, -1)
     hand = hand > 0

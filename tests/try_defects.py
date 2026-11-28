@@ -52,113 +52,42 @@ def panel(*texts):
     return ("panel",) + tuple(texts)
 
 
-# The scenarios of the tick «Стійки» (six, their names begin with 'Стійки'), and with them the two of the backup.
-STANDS = ("'Стійки'",)
-STANDS_BACKUP = ("'Стійки'", "backup: everything is saved", "restoring a backup made by an older version")
-# The scenario of the name ("the name has no 2 and carries the version: ...").
-NAME = ("the name has no 2",)
-MANIFEST = PLUGIN + "/manifest.json"
-INDEX = PLUGIN + "/index.html"
-_BY_HAND = "  if (byHand && STANDS_PRESET_IDS.includes(p.id)) standsEnabled = true;\n"
-_READ_NEW = '  if (typeof s.standsOn === "boolean") standsEnabled = s.standsOn;\n'
-_READ_OLD = '  else if (s.cfg && typeof s.cfg === "object" && typeof s.cfg.removeStands === "boolean") standsEnabled = s.cfg.removeStands;\n'
-_NOTE = '      const standsNote = untouched && standsEnabled ? "Стійки прибираються: галочка «Стійки» стоїть, як ви її лишили." : "";\n'
-_TICK = '    standsEnabled = !!el("dlgChkStands").checked;\n    updateSliderVisuals();\n    scheduleSaveSettings();\n'
-_SAID_ON = "Тіні людини лишаються. Галочка стоятиме й на наступних фото, доки ви її не знімете."
-_SAID_OFF = "Галочка лишиться знятою й на наступних фото, доки ви її не поставите."
-_TIP = (" Галочка не належить пресету: як поставили, так і лишається — для наступних фото, для будь-якого пресета й після перезапуску "
-        "Photoshop. Ставить її ще тільки пресет «Без стійок (AI)», коли ви клацаєте його самі; знімаєте її лише ви.")
-
-
 # (name, check groups - or panel(<text>, ...), file, exact text, replacement)
 DEFECTS = [
-    # ---- The tick «Стійки» is the user's own (4.18.0). The owner, 2026-11-27: «дивися я ставлю галочку щзі стойками
-    #      а вона відключається зроби як я посллідніраз ш так би вона і другий раз була».
-    # What took the tick away up to 4.17.0: a preset put on the controls, and the sets offered to the server.
-    ("stands: a preset put on the controls sets the tick from its own values, as up to 4.17.0 - the next photo takes it off", panel(*STANDS), MAINJS,
-     '  if (el("gChkShadow")) el("gChkShadow").checked = c.shadow;\n  setSliderVal("gSlTurbo", c.master);\n',
-     '  if (el("gChkShadow")) el("gChkShadow").checked = c.shadow;\n  standsEnabled = !!(cfg && cfg.removeStands);\n  setSliderVal("gSlTurbo", c.master);\n'),
-    ("stands: the sets offered to the server carry the preset's own value - with the automatic preset the next photo is cleaned with the stands", panel(*STANDS), MAINJS,
-     "    // (the stands are not a matter of the preset either: every set carries the tick as the user left it)\n    removeStands: standsEnabled,\n",
-     "    // (the stands are not a matter of the preset either: every set carries the tick as the user left it)\n    removeStands: !!c.removeStands,\n"),
-    ("stands: the first scan of a photo does not carry the tick (the values of the controls say 'keep the stands')", panel(*STANDS), MAINJS,
-     '    shadow: el("gChkShadow") ? el("gChkShadow").checked : true,\n    removeStands: standsEnabled,\n',
-     '    shadow: el("gChkShadow") ? el("gChkShadow").checked : true,\n    removeStands: false,\n'),
-    # The tick itself.
-    ("stands: the tick is not taken from the box - it jumps back, the stands stay", panel(*STANDS), MAINJS,
-     _TICK, "    updateSliderVisuals();\n    scheduleSaveSettings();\n"),
-    ("stands: the tick is not written to the settings when it is put (closing Photoshop right away loses it)", panel(*STANDS), MAINJS,
-     _TICK, '    standsEnabled = !!el("dlgChkStands").checked;\n    updateSliderVisuals();\n'),
-    ("stands: the box does not follow the switch - after a restart the stands go, the box is empty", panel(*STANDS), MAINJS,
-     '  if (el("dlgChkStands")) el("dlgChkStands").checked = standsEnabled;\n', ""),
-    ("stands: the pill of the tick is never lit", panel(*STANDS), MAINJS,
-     '  if (el("dlgWrapStands")) el("dlgWrapStands").classList.toggle("active", standsEnabled);\n',
-     '  if (el("dlgWrapStands")) el("dlgWrapStands").classList.toggle("active", false);\n'),
-    # Kept with the settings; a file of 4.17.0; a backup.
-    ("stands: the settings are read without the tick - Photoshop started again opens with the stands in the frame", panel(*STANDS_BACKUP), MAINJS,
-     _READ_NEW + _READ_OLD, ""),
-    ("stands: only the new word of the settings is read - on a PC of 4.17.0 the tick that stood there is lost", panel(*STANDS_BACKUP), MAINJS,
-     _READ_OLD, ""),
-    ("stands: the settings can only put the tick, never take it off - a backup made with the tick off leaves it on", panel(*STANDS_BACKUP), MAINJS,
-     _READ_NEW + _READ_OLD, '  if (s.cfg && typeof s.cfg === "object" && s.cfg.removeStands === true) standsEnabled = true;\n'),
-    ("stands: a preset that is saved holds the tick again", panel(*STANDS), MAINJS,
-     "  delete cfg.removeStands;  // (...and so are the stands - see standsEnabled)\n", ""),
-    # Which preset puts the tick, and when.
-    ("stands: a click by hand on 'Без стійок (AI)' no longer puts the tick", panel(*STANDS), MAINJS,
-     _BY_HAND, ""),
-    ("stands: 'Без стійок (AI)' puts the tick whoever applies it - the program too (a restart, the automatic choice off)", panel(*STANDS), MAINJS,
-     _BY_HAND, "  if (STANDS_PRESET_IDS.includes(p.id)) standsEnabled = true;\n"),
-    ("stands: every preset clicked by hand puts the tick", panel(*STANDS), MAINJS,
-     _BY_HAND, "  if (byHand) standsEnabled = true;\n"),
-    ("stands: a preset clicked by hand sets the tick from its own values - any preset takes it off, as up to 4.17.0", panel(*STANDS), MAINJS,
-     _BY_HAND, "  if (byHand) standsEnabled = !!(p.cfg && p.cfg.removeStands);\n"),
-    ("stands: any preset saved with 'removeStands: true' puts the tick when clicked - also the user's own of 4.17.0", panel(*STANDS), MAINJS,
-     _BY_HAND, "  if (byHand && p.cfg && p.cfg.removeStands === true) standsEnabled = true;\n"),
-    ("stands: the click on a preset is not passed on as the user's act - no preset puts the tick in the window", panel(*STANDS), MAINJS,
-     "      applyPreset(p, true);\n", "      applyPreset(p);\n"),
-    ("stands: 'Скинути пресет' is not the user's act - resetting 'Без стійок (AI)' puts nothing", panel(*STANDS), MAINJS,
-     "  applyPreset(active, true);\n", "  applyPreset(active);\n"),
-    # What the window says.
-    ("stands: a window that opens with the tick left on does not say so", panel(*STANDS), MAINJS,
-     _NOTE, '      const standsNote = "";\n'),
-    ("stands: every opening speaks of the stands, also with the tick off", panel(*STANDS), MAINJS,
-     _NOTE, _NOTE.replace("untouched && standsEnabled ?", "untouched ?")),
-    ("stands: the hint line does not say that the tick will stay", panel(*STANDS), MAINJS,
-     _SAID_ON, "Тіні людини лишаються."),
-    ("stands: ...nor that a tick taken off stays off", panel(*STANDS), MAINJS,
-     " " + _SAID_OFF, ""),
-    ("stands: the hint of the tick does not say whose it is", panel(*STANDS), INDEX,
-     _TIP, ""),
-    # ---- The version next to the name (4.18.0). The owner: «і ще у назві плагіна пиши версію бо деколи не розумію чи
-    #      установ нову чи то стара». manifest.json is written by hand with every version: the likely mistake there
-    #      is a number that was not moved on - asked of the window test and of the group `server`.
-    ("name: the manifest names the plugin without the version (the Plugins menu)", panel(*NAME), MANIFEST,
-     '  "name": "Чистий Вініл Pro 4.18.0",\n', '  "name": "Чистий Вініл Pro",\n'),
-    ("name: the tab of the panel carries no version (the label in the manifest)", panel(*NAME), MANIFEST,
-     '        "default": "Чистий Вініл Pro 4.18.0"\n', '        "default": "Чистий Вініл Pro"\n'),
-    ("name: the manifest name still carries the version before - the number was moved on, the name was not", panel(*NAME), MANIFEST,
-     '  "name": "Чистий Вініл Pro 4.18.0",\n', '  "name": "Чистий Вініл Pro 4.17.0",\n'),
-    ("name: the manifest name still carries the version before, asked of the group server", "server", MANIFEST,
-     '  "name": "Чистий Вініл Pro 4.18.0",\n', '  "name": "Чистий Вініл Pro 4.17.0",\n'),
-    ("name: the label of the panel still carries the version before, asked of the group server", "server", MANIFEST,
-     '        "default": "Чистий Вініл Pro 4.18.0"\n', '        "default": "Чистий Вініл Pro 4.17.0"\n'),
-    ("name: the title of the big window has no version", panel(*NAME), MAINJS,
-     "      title: PLUGIN_TITLE,\n", "      title: PLUGIN_NAME,\n"),
-    ("name: the title of the big window has no version, asked of the group server", "server", MAINJS,
-     "      title: PLUGIN_TITLE,\n", "      title: PLUGIN_NAME,\n"),
-    ("name: no version under the name on the panel (main.js does not write it)", panel(*NAME), MAINJS,
-     '  if (el("brandVersion")) el("brandVersion").textContent = "версія " + PLUGIN_VERSION;\n', ""),
-    ("name: the version on the panel is a number written by hand - the one of the version before", panel(*NAME), MAINJS,
-     '"версія " + PLUGIN_VERSION;\n', '"версія 4.17.0";\n'),
-    ("name: the panel has no place for the version (index.html)", panel(*NAME), INDEX,
-     '          <div class="brand-version" id="brandVersion"></div>\n', ""),
-    ("name: the step of the History panel carries the version - it goes into the document", panel(*NAME), MAINJS,
-     '        documentID: doc.id,\n        name: "Чистий Вініл Pro"\n', "        documentID: doc.id,\n        name: PLUGIN_TITLE\n"),
-    # (Not in the list, because the checks cannot tell: how Photoshop shows the name of the manifest - in the Plugins
-    #  menu, on the tab, in the list of Creative Cloud - and whether a panel whose label changes with every version
-    #  keeps its place in his workspace. And which of two words of a settings file wins when they disagree: a file
-    #  written by the program never holds such a pair.)
+    # ---- «Рівняти одяг» made anew (4.19.0). The owner, 2026-11-27: «має ріняти не доглажене зморшки і пятна як є а
+    #      станом на зари ужаш усе плаття точками заливає і колір міняє». Each defect takes one of the rules away.
+    ("layer: opened where the cloth happened to change, as up to 4.18.0 - it lies over the dress in spots", "dress", ENGINE,
+     "        alpha_full[fy0:fy1, fx0:fx1] = cv2.resize(cover, size, interpolation=cv2.INTER_LINEAR)\n",
+     "        alpha_full[fy0:fy1, fx0:fx1] = cv2.resize(cover * np.clip(np.abs(d).max(axis=2) / 0.006, 0.0, 1.0), size, interpolation=cv2.INTER_LINEAR)\n"),
+    ("fold: nothing is taken for a fold - what is deep is ironed like a crease", "dress", ENGINE,
+     "                g_lum = (1.0 - deep) * (1.0 - keep)\n", "                g_lum = 1.0 - keep\n"),
+    ("fold: a fold is weakened at every width instead of being left alone (the gate keeps 60% of it out)", "dress", ENGINE,
+     "            deep = deep * deep * (3.0 - 2.0 * deep)\n            del depth, tinted\n",
+     "            deep = 0.6 * deep * deep * (3.0 - 2.0 * deep)\n            del depth, tinted\n"),
+    ("size: the widths are a share of the frame, whatever the size of the garment", "dress", ENGINE,
+     "        half_all = cls._dress_scale(dress_mask_small) * ref\n", "        half_all = 0.11 * ref\n"),
+    ("colour: one gain for red, green and blue again - a tinted stain keeps its tint", "dress", ENGINE,
+     "                pull = r_lum[..., None] * g_lum[..., None] + r_col * g_col[..., None]\n",
+     "                pull = r_lum[..., None] * g_lum[..., None] + 0.0 * r_col\n"),
+    ("garments: two garments of different colour are ironed as one - a plane is laid across their border", "dress", ENGINE,
+     "        for m_src in cls._cloth_colours(low, m_all):\n", "        for m_src in [m_all]:\n"),
+    ("print: a hue on little cloth is a garment of its own - an emblem is ironed within itself", "dress", ENGINE,
+     "        is_garment = share >= 0.04\n", "        is_garment = share >= 0.0\n"),
+    ("mask: skin is what the colour rule finds and nothing more - the ruddy half of a hand is cloth", "dress", ENGINE,
+     "                skin_all = (np.isin(lbl_g, touching[touching > 0]) & (cand | (skin > 0))).astype(np.uint8)\n",
+     "                skin_all = skin\n"),
+    ("mask: scraps of cloth are kept - each is a dot of the layer", "dress", ENGINE,
+     "            min_area = (0.02 * max(sw, sh)) ** 2\n", "            min_area = 0.0\n"),
+    ("weave: the low layer is the picture itself - grain and weave are ironed with the creases", "dress", ENGINE,
+     "        sig_fine = max(0.8, 0.0009 * ref)            # everything finer is weave and grain: never touched\n",
+     "        sig_fine = 0.3\n"),
+    ("form: the surface is a plane fitted once - it does not follow the roundness of the body", "dress", ENGINE,
+     "            return 2.0 * s1 - fit(s1)\n", "            return s1\n"),
+    ("apply: Apply irons at half the strength the window was given", "quick", ENGINE,
+     "                    cleaned_f32, dress_alpha_full = self._smooth_dress_fabric(cleaned_f32, ds, float(dress_strength), fast_mode=fast_mode)\n",
+     "                    cleaned_f32, dress_alpha_full = self._smooth_dress_fabric(cleaned_f32, ds, 0.5 * float(dress_strength), fast_mode=fast_mode)\n"),
 ]
+
 
 def _label(groups) -> str:
     return groups if isinstance(groups, str) else groups[0]
