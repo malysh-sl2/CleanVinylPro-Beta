@@ -3767,7 +3767,7 @@ class CleanVinylEngine:
     #   * Brightness and colour are judged apart: a tint is evened only while it is faint.
     #   * Only the low layer is moved (a gain per channel, smooth); weave, grain and every fine detail ride on it.
     #   * The layer covers the garment evenly, whatever was changed in it.
-    DRESS_WIDTH = 0.45      # the widest window, in half-widths of the garment, at strength 100
+    DRESS_WIDTH = 0.40      # the widest window, in half-widths of the garment, from strength 100 on
     DRESS_EPS = 0.122       # departures (log units, RMS inside a window) that are half kept at strength 100 ...
     DRESS_EPS_REF = 0.075   # ... in a window this wide (half-widths of the garment); wider windows are stricter
     DRESS_RUNGS = 4         # how many widths, each half of the former
@@ -3781,11 +3781,15 @@ class CleanVinylEngine:
     @staticmethod
     def _dress_scale(dress_mask_small: np.ndarray) -> float:
         """The half-width of the widest parts of the clothing (or of one garment of it, given its own mask), as a
-        share of the long side of the mask (0 = none)."""
+        share of the long side of the mask (0 = none). A hole in the garment - a hand lying on it, a print, a
+        buckle - does not make it narrower: holes are filled first."""
         solid = (dress_mask_small > 0.5).astype(np.uint8)
         if not np.any(solid):
             return 0.0
         solid = cv2.copyMakeBorder(solid, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)  # the frame edge is an outline too
+        n_out, lbl_out = cv2.connectedComponents(1 - solid, connectivity=4)
+        if n_out > 2:
+            solid = (lbl_out != lbl_out[0, 0]).astype(np.uint8)   # everything the outside does not reach
         dt = cv2.distanceTransform(solid, cv2.DIST_L2, 3)
         return float(np.percentile(dt[solid > 0], 90)) / float(max(dress_mask_small.shape[:2]))
 
@@ -4076,7 +4080,9 @@ class CleanVinylEngine:
             half = cls._dress_scale(m_src) * float(max(cw, ch)) if m_src is not m_all else half_all
             sig_ref = max(2.0 * sig_fine, cls.DRESS_EPS_REF * half)
             sig_wide = max(2.0 * sig_fine, cls.DRESS_WIDTH * half)
-            sig_max = sig_wide * (0.4 + 0.6 * s)
+            # (above 100 the windows do not grow any more: a wider one would start to flatten the roundness of
+            # the body - a plane fitted twice follows a bend only so far)
+            sig_max = sig_wide * min(1.0, 0.4 + 0.6 * s)
             if half <= 0.0:
                 continue
             # How deep is every spot of the cloth, all in all? Its departure from the smooth surface of the garment

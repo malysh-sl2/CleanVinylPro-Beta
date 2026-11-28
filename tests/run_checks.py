@@ -1053,10 +1053,11 @@ def check_depth():
            f"without the corner tool; the reduced copy within {off:.1f} levels" if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
-def _garment_frame(w=1400, h=2000, seed=5):
+def _garment_frame(w=1400, h=2000, seed=5, coarse=1.0):
     """
     A 'person' in a smooth blue dress with a pair of jeans-like trousers under it. Returns the frame and the
     separate ingredients, so that every promise of the ironing can be measured on its own.
+    `coarse`: how many times wider the creases are drawn (1 = as always; the same creases in the same places).
     """
     rng = np.random.default_rng(seed)
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
@@ -1076,8 +1077,8 @@ def _garment_frame(w=1400, h=2000, seed=5):
         ang, length = rng.uniform(0, np.pi), rng.uniform(60, 220)
         x1, y1 = int(x0 + np.cos(ang) * length), int(y0 + np.sin(ang) * length)
         layer = np.zeros((h, w), np.float32)
-        cv2.line(layer, (int(x0), int(y0)), (x1, y1), 1.0, int(rng.integers(3, 8)), cv2.LINE_AA)
-        wrinkles += cv2.GaussianBlur(layer, (0, 0), float(rng.uniform(2.0, 4.0))) * float(rng.choice([-1, 1]) * rng.uniform(0.04, 0.08))
+        cv2.line(layer, (int(x0), int(y0)), (x1, y1), 1.0, max(1, int(round(int(rng.integers(3, 8)) * coarse))), cv2.LINE_AA)
+        wrinkles += cv2.GaussianBlur(layer, (0, 0), float(rng.uniform(2.0, 4.0)) * coarse) * float(rng.choice([-1, 1]) * rng.uniform(0.04, 0.08))
     fold = np.zeros((h, w), np.float32)                                         # one deep fold: part of the shape
     cv2.line(fold, (cx - int(w * 0.18), int(h * 0.50)), (cx + int(w * 0.12), int(h * 0.30)), 1.0, 9, cv2.LINE_AA)
     fold = cv2.GaussianBlur(fold, (0, 0), 4.0) * -0.45
@@ -1094,25 +1095,89 @@ def _garment_frame(w=1400, h=2000, seed=5):
     return img_u8, core, dict(dress=dress, denim=denim, head=head, wrinkles=wrinkles, fold=fold, clean=clean_dress)
 
 
+def _garment_scene(seed=5):
+    """
+    The drawn garment of _garment_frame with, on it, everything the ironing must even out next to everything it
+    must leave alone - each ingredient known exactly:
+      stains sized by the garment (a grey mark, a brown one, a tint without darkening, a small dark spot);
+      an emblem of another colour (a print); a white panel down the side (a second garment, as smooth as the
+      dress); a hand lying on the dress, half of it of a colour the skin rule knows and half ruddy, which the
+      rule misses; a scrap of the same cloth away from the person (a cuff seen between two fingers).
+    Returns (frame, silhouette, ingredients).
+    """
+    img, core, g = _garment_frame(seed=seed)
+    h, w = img.shape[:2]
+    cx = w // 2
+    rng = np.random.default_rng(seed + 100)
+    f = img.astype(np.float32)
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    half = 0.22 * w                                             # the half-width of the dress, pixels
+
+    def disc(x, y, r, soft):
+        return np.clip((r - np.hypot(xx - x, yy - y)) / max(soft, 1e-3) + 0.5, 0.0, 1.0)
+
+    def grain(n):
+        return rng.standard_normal((n, 3)).astype(np.float32) * 1.5
+
+    panel = np.zeros((h, w), bool)
+    panel[int(h * 0.38):int(h * 0.66), cx - int(w * 0.22):cx - int(w * 0.15)] = True
+    volume = 0.55 + 0.45 * np.cos((xx - cx) / (w * 0.22) * 1.35)
+    f[panel] = (np.float32([226, 226, 230])[None, None, :] * volume[..., None])[panel] + grain(int(panel.sum()))
+    stains = [("grey mark", disc(cx - 0.40 * half, 0.565 * h, 0.075 * half, 0.04 * half), (0.92, 0.92, 0.92)),
+              ("brown mark", disc(cx + 0.02 * half, 0.580 * h, 0.10 * half, 0.05 * half), (0.93, 0.90, 0.85)),
+              ("tint", disc(cx + 0.50 * half, 0.570 * h, 0.09 * half, 0.05 * half), (1.03, 1.00, 0.93)),
+              ("small spot", disc(cx + 0.20 * half, 0.615 * h, 0.035 * half, 0.02 * half), (0.86, 0.86, 0.86))]
+    for _, field, k in stains:
+        f *= 1.0 + field[..., None] * (np.float32(k) - 1.0)
+    emblem = disc(cx + 0.58 * half, 0.47 * h, 0.13 * half, 2.0)
+    f = f * (1.0 - emblem[..., None]) + np.float32([196, 52, 64])[None, None, :] * emblem[..., None]
+    hand = np.zeros((h, w), np.uint8)
+    cv2.ellipse(hand, (cx - int(0.35 * half), int(0.31 * h)), (int(0.20 * half), int(0.10 * half)), 20, 0, 360, 255, -1)
+    hand = hand > 0
+    known = hand & (xx < cx - 0.35 * half)
+    ruddy = hand & ~known
+    f[known] = np.float32([198, 150, 140]) + grain(int(known.sum()))
+    f[ruddy] = np.float32([190, 136, 138]) + grain(int(ruddy.sum()))
+    scrap = np.zeros((h, w), bool)
+    scrap[int(h * 0.50):int(h * 0.50) + 34, int(w * 0.13):int(w * 0.13) + 34] = True
+    f[scrap] = np.float32([70, 125, 190]) * 0.8 + grain(int(scrap.sum()))
+    core = core.copy()
+    core[scrap] = 255
+    return np.clip(f, 0, 255).astype(np.uint8), core, dict(g, panel=panel, stains=stains, emblem=emblem > 0.5, hand=hand,
+                                                         ruddy=ruddy, scrap=scrap)
+
+
+def _dress_mask(img, core):
+    """The clothing mask the engine builds for a frame and its silhouette (1024 px, as in the program)."""
+    h, w = img.shape[:2]
+    sc = min(1.0, 1024.0 / max(h, w))
+    small = cv2.resize(img, (int(round(w * sc)), int(round(h * sc))), interpolation=cv2.INTER_AREA)
+    return ENG._build_dress_mask_small(small, core, max_dim=1024, tex_rms=ENG._fabric_texture_small(img))
+
+
 def check_dress():
+    er = lambda z, k: cv2.erode(z.astype(np.uint8), np.ones((k, k), np.uint8)) > 0
+    di = lambda z, k: cv2.dilate(z.astype(np.uint8), np.ones((k, k), np.uint8)) > 0
+
+    def hue(x):
+        """the colour of the cloth apart from its brightness: log R/G and log B/G of the picture, grain averaged out"""
+        x = cv2.GaussianBlur(x, (0, 0), 3.0) + 0.02
+        return np.log(x[..., 0] / x[..., 1]), np.log(x[..., 2] / x[..., 1])
+
+    def hue_moved(a, b):
+        ha, hb = hue(a), hue(b)
+        return np.maximum(np.abs(hb[0] - ha[0]), np.abs(hb[1] - ha[1]))
+
+    # ---- 1. the plain garment: creases go, the fold stays, tone, colour, weave, everything else ----------------
     bad = []
     img, core, g = _garment_frame()
     h, w = img.shape[:2]
-    sc = 1024.0 / max(h, w)
-    small = cv2.resize(img, (int(round(w * sc)), int(round(h * sc))), interpolation=cv2.INTER_AREA)
-    mask = ENG._build_dress_mask_small(small, core, max_dim=1024, tex_rms=ENG._fabric_texture_small(img))
+    mask = _dress_mask(img, core)
     m_full = cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR)
-    inner = cv2.erode(g["dress"].astype(np.uint8), np.ones((61, 61), np.uint8)) > 0
-    inner_denim = cv2.erode(g["denim"].astype(np.uint8), np.ones((61, 61), np.uint8)) > 0
-    if float(m_full[inner].mean()) < 0.9:
-        bad.append(f"smooth cloth is not in the clothing mask ({m_full[inner].mean():.2f})")
-    if float(m_full[inner_denim].mean()) > 0.15:
-        bad.append(f"denim is in the clothing mask ({m_full[inner_denim].mean():.2f})")
-    outside = cv2.dilate(core, np.ones((9, 9), np.uint8)) == 0       # the backdrop
-    head_in = cv2.erode(g["head"].astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
-    if float(m_full[head_in].max()) > 0.05 or float(m_full[outside].max()) > 0.0:
-        bad.append("head or backdrop is in the clothing mask")
-
+    body = g["dress"] & (np.arange(h)[:, None] > int(h * 0.26))      # (the top of the dress lies in the head zone)
+    inner = er(body, 61)
+    inner_denim = er(g["denim"], 61)
+    backdrop = cv2.dilate(core, np.ones((9, 9), np.uint8)) == 0
     f0 = img.astype(np.float32) / 255.0
     same, alpha0 = ENG._smooth_dress_fabric(f0.copy(), mask, 0.0)
     if not np.array_equal(same, f0) or float(alpha0.max()) != 0.0:
@@ -1126,46 +1191,60 @@ def check_dress():
         f = f - cv2.GaussianBlur(f, (0, 0), 25)
         return float((resid[where] * f[where]).sum() / (f[where] * f[where]).sum())
 
-    near_fold = cv2.dilate((np.abs(g["fold"]) > 0.02).astype(np.uint8), np.ones((41, 41), np.uint8)) > 0
+    def broad_off(image):
+        """How far the broad tone of the dress is from the tone of the dress as it was drawn without creases."""
+        truth = g["clean"] * (1.0 + g["fold"])[..., None]
+        wgt = body.astype(np.float32)
+        num = cv2.GaussianBlur((image * 255.0 - truth) * wgt[..., None], (0, 0), 45)
+        return float((np.abs(num) / np.maximum(cv2.GaussianBlur(wgt, (0, 0), 45), 1e-3)[..., None])[inner].max())
+
+    near_fold = di(np.abs(g["fold"]) > 0.02, 41)
     crease_zone = inner & ~near_fold
     fold_zone = inner & (np.abs(g["fold"]) > 0.05)
-    notes = []
-    prev = amount(f0, g["wrinkles"], crease_zone)
-    for strength, max_left in ((40, 0.80), (80, 0.55), (120, 0.45)):
+    hp = lambda x: x[:, :, 1] - cv2.GaussianBlur(x[:, :, 1], (0, 0), 1.2)
+    notes, prev, alphas, outs = [], 1.0, {}, {}
+    tone_before = broad_off(f0)
+    for strength, max_left in ((20, 0.60), (60, 0.30), (100, 0.25), (150, 0.25)):
         out, alpha = ENG._smooth_dress_fabric(f0.copy(), mask, float(strength))
+        outs[strength], alphas[strength] = out, alpha
         left = amount(out, g["wrinkles"], crease_zone) / amount(f0, g["wrinkles"], crease_zone)
         fold_left = amount(out, g["fold"], fold_zone) / amount(f0, g["fold"], fold_zone)
         notes.append(f"{strength}: creases x{left:.2f}, deep fold x{fold_left:.2f}")
         if left > max_left:
             bad.append(f"strength {strength}: {left:.2f} of the creases left (limit {max_left})")
-        if left > prev + 0.02:
-            bad.append(f"strength {strength} irons less than a weaker setting")
+        if left > prev + 0.03:
+            bad.append(f"strength {strength} irons less than a weaker setting ({left:.2f} after {prev:.2f})")
         prev = left
-        if fold_left < 0.70:
-            bad.append(f"strength {strength}: the deep fold was flattened to {fold_left:.2f}")
+        if fold_left < 0.85:
+            bad.append(f"strength {strength}: the deep fold was flattened to {fold_left:.2f} - a fold of the garment must stay whole")
         diff = (out - f0) * 255.0
-        # volume and light: the broad picture of the garment stays
-        broad = np.abs(cv2.GaussianBlur(diff, (0, 0), 45))[inner].max()
-        if broad > 1.5:
-            bad.append(f"strength {strength}: broad brightness of the garment moved by {broad:.1f} levels")
-        # colour: all three channels get the same factor
-        ratio = (out[inner] + 0.02) / (f0[inner] + 0.02)
-        if float(np.abs(ratio - ratio[:, 1:2]).max()) > 1e-4:
-            bad.append(f"strength {strength}: the colour changed")
-        # fine texture and grain stay
-        hp = lambda x: x[:, :, 1] - cv2.GaussianBlur(x[:, :, 1], (0, 0), 1.2)
+        tone = broad_off(out)
+        if tone > tone_before + 1.0:
+            bad.append(f"strength {strength}: the broad tone of the ironed dress is {tone:.1f} levels off the tone of the clean cloth "
+                       f"({tone_before:.1f} before the ironing): the roundness of the body or the light on it was moved")
+        # colour: the creases of this dress have no colour of their own, so nothing may change the hue of the cloth
+        moved = float(np.percentile(hue_moved(f0, out)[crease_zone], 99.5))
+        if moved > 0.012:
+            bad.append(f"strength {strength}: the hue of plain cloth moved by {100 * moved:.1f}% (creases without a colour were ironed)")
         tex = float(hp(out)[crease_zone].std() / hp(f0)[crease_zone].std())
         if not 0.95 < tex < 1.05:
             bad.append(f"strength {strength}: fine texture x{tex:.2f}")
-        # everything that is not smooth cloth stays exactly
         if float(np.abs(diff)[core == 0].max()) > 0.0 or float(np.abs(diff)[g["head"]].max()) > 0.0:
             bad.append(f"strength {strength}: backdrop or head changed "
                        f"({np.abs(diff)[core == 0].max():.2f} / {np.abs(diff)[g['head']].max():.2f} levels)")
         if float(np.abs(diff)[inner_denim].mean()) > 0.15:
             bad.append(f"strength {strength}: denim changed by {np.abs(diff)[inner_denim].mean():.2f} levels on average")
+        # the layer: the garment itself, evenly - not the spots that happened to change
+        if float(alpha[inner].min()) < 0.999:
+            bad.append(f"strength {strength}: the layer does not cover the garment evenly (alpha down to {alpha[inner].min():.2f} inside the dress)")
+        if float(alpha[backdrop].max()) > 0.0 or float(alpha[er(g['head'], 9)].max()) > 0.0 or float(alpha[inner_denim].max()) > 0.3:
+            bad.append(f"strength {strength}: the layer covers more than the smooth cloth (backdrop {alpha[backdrop].max():.2f}, "
+                       f"head {alpha[er(g['head'], 9)].max():.2f}, denim {alpha[inner_denim].max():.2f})")
         if float(alpha[np.abs(diff).max(axis=2) > 1.0].min(initial=1.0)) < 0.15:
             bad.append(f"strength {strength}: a changed pixel is not covered by the layer alpha")
-    # the live preview (small copy) and the full-size result must look alike
+    if not np.array_equal(alphas[20], alphas[150]):
+        bad.append("the layer alpha depends on the strength: it must be the garment itself")
+    # the picture of the window (a small copy) and the full-size result must look alike
     prev_small = cv2.resize(img, (w * 1080 // h, 1080), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
     out_small, _ = ENG._smooth_dress_fabric(prev_small.copy(), mask, 80.0, fast_mode=True)
     out_full, _ = ENG._smooth_dress_fabric(f0.copy(), mask, 80.0)
@@ -1175,7 +1254,143 @@ def check_dress():
     corr = float(np.corrcoef(d_small[sel], d_full[sel])[0, 1])
     if corr < 0.75:
         bad.append(f"preview and full-size ironing disagree (correlation {corr:.2f})")
-    report("dress", not bad, "clothing: " + "; ".join(notes) + f"; volume, colour, texture, denim, head, backdrop kept; preview~final {corr:.2f}"
+    report("dress", not bad, "ironing: " + "; ".join(notes) + f"; the broad tone, the hue, the weave, denim, head and backdrop kept; the layer covers the "
+           f"garment evenly at every strength; preview~final {corr:.2f}" if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+    # ---- 2. the mask: what is clothing to iron ------------------------------------------------------------------
+    bad = []
+    simg, score, s = _garment_scene()
+    smask = _dress_mask(simg, score)
+    sm = cv2.resize(smask, (w, h), interpolation=cv2.INTER_LINEAR)
+    stained = np.zeros((h, w), bool)
+    for _, field, _k in s["stains"]:
+        stained |= field > 0.01
+    plain = body & ~di(s["panel"], 61) & ~di(s["hand"], 61) & ~di(s["emblem"], 61) & ~di(stained, 41)
+    s_inner = er(plain, 61)
+    if float(m_full[inner].mean()) < 0.97 or float(sm[s_inner].mean()) < 0.97:
+        bad.append(f"smooth cloth is not in the clothing mask ({m_full[inner].mean():.2f} / {sm[s_inner].mean():.2f})")
+    if float(sm[er(s['panel'], 31)].mean()) < 0.95:
+        bad.append(f"a second smooth garment is not in the clothing mask ({sm[er(s['panel'], 31)].mean():.2f})")
+    den = m_full[inner_denim]
+    if float(den.mean()) > 0.10 or float((den > 0.3).mean()) > 0.01:
+        bad.append(f"denim must be out of the mask as a whole: mean {den.mean():.2f}, {100 * (den > 0.3).mean():.1f}% of it above 0.3 (dots)")
+    head_in = er(g["head"], 9)
+    if float(m_full[head_in].max()) > 0.05 or float(m_full[backdrop].max()) > 0.0:
+        bad.append("head or backdrop is in the clothing mask")
+    hand_known, hand_ruddy = er(s["hand"] & ~s["ruddy"], 15), er(s["ruddy"], 15)
+    if float(sm[hand_known].max()) > 0.05:
+        bad.append(f"a hand on the dress is in the clothing mask ({sm[hand_known].max():.2f})")
+    if float(sm[hand_ruddy].max()) > 0.05:
+        bad.append(f"the ruddy half of the hand, which the skin rule alone misses, is in the clothing mask ({sm[hand_ruddy].max():.2f})")
+    if float(sm[s["scrap"]].max()) > 0.0:
+        bad.append(f"a scrap of cloth 34 px across is in the clothing mask ({sm[s['scrap']].max():.2f}): it would be a dot of the layer")
+    n_pieces = cv2.connectedComponents((smask > 0.02).astype(np.uint8), connectivity=8)[0] - 1
+    if n_pieces != 1:
+        bad.append(f"the clothing mask of the scene has {n_pieces} pieces, one is expected")
+    report("dress", not bad, f"the mask: smooth cloth and a second smooth garment are in ({sm[s_inner].mean():.2f} / {sm[er(s['panel'], 31)].mean():.2f}); "
+           f"denim is out as a whole (mean {den.mean():.2f}, no dots); a hand on the dress is out, its ruddy half too; a scrap 34 px across is "
+           f"dropped; head and backdrop out" if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+    # ---- 3. stains go; a print, a hand, a second garment stay ---------------------------------------------------
+    bad = []
+    sf0 = simg.astype(np.float32) / 255.0
+    clean = simg.astype(np.float32)
+    for _, field, k in s["stains"]:
+        clean /= 1.0 + field[..., None] * (np.float32(k) - 1.0)
+    clean = np.clip(clean, 0, 255) / 255.0                         # the same scene without the stains
+
+    def stain_left(res, ref, field, k):
+        """how much of a stain is in the ironed picture, against the ironed picture of the scene without stains"""
+        sel = field > 0.02
+        drawn = np.log1p(field[sel, None] * (np.float32(k) - 1.0))
+        got = np.log(res[sel] + 0.02) - np.log(ref[sel] + 0.02)
+        return float((got * drawn).sum() / (drawn * drawn).sum())
+
+    ring = lambda z: di(z, 81) & ~di(z, 13) & body
+    panel_side = (di(s["panel"], 81) & ~di(s["panel"], 9) & body) | (er(s["panel"], 9) & ~er(s["panel"], 81))
+    notes = []
+    limits = {40: 0.65, 100: 0.50}
+    for strength in (40, 100):
+        out, alpha = ENG._smooth_dress_fabric(sf0.copy(), smask, float(strength))
+        ref, _ = ENG._smooth_dress_fabric(clean.copy(), smask, float(strength))
+        lefts = {name: stain_left(out, ref, field, k) for name, field, k in s["stains"]}
+        notes.append(f"{strength}: " + ", ".join(f"{n} x{v:.2f}" for n, v in lefts.items()))
+        for name, v in lefts.items():
+            if v > limits[strength]:
+                bad.append(f"strength {strength}: {v:.2f} of the {name} left (limit {limits[strength]})")
+        ad = np.abs(out - sf0).max(axis=2) * 255.0
+        for name, zone, lim in (("the hand", er(s["hand"], 5), 0.5), ("the emblem", er(s["emblem"], 5), 0.5), ("the scrap", s["scrap"], 0.0)):
+            if float(ad[zone].max()) > lim:
+                bad.append(f"strength {strength}: {name} changed by {ad[zone].max():.1f} levels")
+        if float(ad[er(s["panel"], 31)].mean()) > 0.6:
+            bad.append(f"strength {strength}: the white panel, smooth and without a crease, changed by {ad[er(s['panel'], 31)].mean():.2f} levels on average")
+        moved = hue_moved(sf0, out)
+        for name, zone, lim in (("around the hand", ring(s["hand"]), 0.015), ("around the emblem", ring(s["emblem"]), 0.03),
+                                ("on both sides of the border between the two garments", panel_side, 0.025),
+                                ("on plain cloth", s_inner, 0.015)):
+            v = float(np.percentile(moved[zone], 99.5))
+            if v > lim:
+                bad.append(f"strength {strength}: the hue moved by {100 * v:.1f}% {name} (limit {100 * lim:.1f}%)")
+        if float(alpha[er(s["hand"], 31)].max()) > 0.0:
+            bad.append(f"strength {strength}: the layer covers the hand (alpha {alpha[er(s['hand'], 31)].max():.2f})")
+    report("dress", not bad, "stains: " + "; ".join(notes) + "; the emblem, the hand on the dress, the white panel next to the blue cloth and "
+           "the scrap stay, and the hue next to them" if not bad else "wrong:\n  " + "\n  ".join(bad))
+
+    # ---- 4. the size of the garment decides, not the size of the frame ------------------------------------------
+    # (What is finer than about 5 px of a 22-megapixel frame is weave and grain to the stage and is never touched,
+    # whatever the garment. The wide shot is therefore drawn with creases twice as wide: half as tall, they are the
+    # creases of the dress as drawn above.)
+    bad = []
+    rng = np.random.default_rng(11)
+    cimg, ccore, cg = _garment_frame(coarse=2.0)
+
+    def small_person(a, fill, interp=cv2.INTER_AREA, k=0.5):
+        """the same person half as tall, in the middle of a frame of the same size"""
+        hs, ws = int(h * k), int(w * k)
+        y0, x0 = (h - hs) // 2, (w - ws) // 2
+        out_ = np.full((h, w) + a.shape[2:], fill, a.dtype)
+        out_[y0:y0 + hs, x0:x0 + ws] = cv2.resize(a, (ws, hs), interpolation=interp)
+        return out_
+
+    def crease_left(fr, co, wr, cl, zone, blur):
+        mk = _dress_mask(fr, co)
+        ff = fr.astype(np.float32) / 255.0
+        t0 = time.perf_counter()
+        out, _ = ENG._smooth_dress_fabric(ff.copy(), mk, 60.0)
+        took = time.perf_counter() - t0
+
+        def amt(image):
+            resid = np.log(image[:, :, 1] + 0.02) - np.log(cl[:, :, 1] / 255.0 + 0.02)
+            f = np.log1p(wr)
+            resid = resid - cv2.GaussianBlur(resid, (0, 0), blur)
+            f = f - cv2.GaussianBlur(f, (0, 0), blur)
+            return float((resid[zone] * f[zone]).sum() / (f[zone] * f[zone]).sum())
+        return amt(out) / amt(ff), took
+
+    left_drawn, _ = crease_left(img, core, g["wrinkles"], g["clean"], crease_zone, 25.0)
+    # a frame of the camera: the frame as drawn, 2.74 times larger (3840 x 5486)
+    k_cam = 3840.0 / w
+    size = (3840, int(round(h * k_cam)))
+    big = lambda a, interp: cv2.resize(a, size, interpolation=interp)
+    left_cam, took_cam = crease_left(big(img, cv2.INTER_CUBIC), big(core, cv2.INTER_NEAREST), big(g["wrinkles"], cv2.INTER_LINEAR),
+                                     big(g["clean"], cv2.INTER_LINEAR), big(crease_zone.astype(np.uint8), cv2.INTER_NEAREST) > 0, 25.0 * k_cam)
+    if abs(left_cam - left_drawn) > 0.10:
+        bad.append(f"a frame of the camera (3840 x {size[1]}): {left_cam:.2f} of the creases left at strength 60, {left_drawn:.2f} in the same "
+                   f"frame at 1400 x 2000")
+    if took_cam > 30.0:
+        bad.append(f"the clothing stage took {took_cam:.0f} s on a frame of the camera")
+    c_zone = er(cg["dress"] & (np.arange(h)[:, None] > int(h * 0.26)), 61) & ~di(np.abs(cg["fold"]) > 0.02, 41)
+    left_coarse, _ = crease_left(cimg, ccore, cg["wrinkles"], cg["clean"], c_zone, 50.0)
+    canvas = np.clip(118.0 + rng.standard_normal((h, w, 3)) * 1.5, 0, 255).astype(np.uint8)
+    inside = small_person(np.ones((h, w), np.uint8), 0, cv2.INTER_NEAREST) > 0
+    canvas[inside] = small_person(cimg, 0)[inside]
+    left_wide, _ = crease_left(canvas, small_person(ccore, 0, cv2.INTER_NEAREST), small_person(cg["wrinkles"], 0.0), small_person(cg["clean"], 118.0),
+                               small_person(c_zone.astype(np.uint8), 0, cv2.INTER_NEAREST) > 0, 25.0)
+    if abs(left_wide - left_coarse) > 0.12:
+        bad.append(f"the same dress in a wide shot (the person half as tall): {left_wide:.2f} of its creases left at strength 60, {left_coarse:.2f} "
+                   f"in the close shot - the widths must follow the size of the garment, not of the frame")
+    report("dress", not bad, f"the size of the garment decides: at strength 60 creases x{left_drawn:.2f} in the frame as drawn and x{left_cam:.2f} in a "
+           f"frame of the camera ({took_cam:.1f} s); wide creases x{left_coarse:.2f} in a close shot and x{left_wide:.2f} with the person half as tall"
            if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
