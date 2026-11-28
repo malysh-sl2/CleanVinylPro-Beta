@@ -1391,9 +1391,29 @@ def check_dress():
     if abs(left_wide - left_coarse) > 0.12:
         bad.append(f"the same dress in a wide shot (the person half as tall): {left_wide:.2f} of its creases left at strength 60, {left_coarse:.2f} "
                    f"in the close shot - the widths must follow the size of the garment, not of the frame")
+    # Broad soft marks, a quarter of the half-width of the dress across and 6% darker: only a window sized by the
+    # garment sees them alike in both shots (windows sized by the frame took a third too much of them in the wide
+    # shot, or left four tenths of them in the close one).
+    cx, half = w // 2, 0.22 * w
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    marks = np.zeros((h, w), np.float32)
+    for mx, my in ((-0.45, 0.36), (0.42, 0.45), (-0.12, 0.56)):
+        marks += np.clip((0.13 * half - np.hypot(xx - (cx + mx * half), yy - my * h)) / (0.104 * half) + 0.5, 0.0, 1.0) * -0.06
+    mimg = np.clip(cimg.astype(np.float32) * np.where(cg["dress"], 1.0 + marks, 1.0)[..., None], 0, 255).astype(np.uint8)
+    m_zone = er(cg["dress"] & (np.arange(h)[:, None] > int(h * 0.26)), 61)
+    mark_close, _ = crease_left(mimg, ccore, marks, cg["clean"], m_zone, 0.39 * half)
+    canvas = np.clip(118.0 + rng.standard_normal((h, w, 3)) * 1.5, 0, 255).astype(np.uint8)
+    canvas[inside] = small_person(mimg, 0)[inside]
+    mark_wide, _ = crease_left(canvas, small_person(ccore, 0, cv2.INTER_NEAREST), small_person(marks, 0.0), small_person(cg["clean"], 118.0),
+                               small_person(m_zone.astype(np.uint8), 0, cv2.INTER_NEAREST) > 0, 0.195 * half)
+    if mark_close > 0.35:
+        bad.append(f"{mark_close:.2f} of a broad soft mark (a quarter of the half-width of the dress across, 6% darker) is left at strength 60")
+    if abs(mark_wide - mark_close) > 0.15:
+        bad.append(f"the same broad marks in a wide shot (the person half as tall): {mark_wide:.2f} of them left at strength 60, {mark_close:.2f} "
+                   f"in the close shot - the widths must follow the size of the garment, not of the frame")
     report("dress", not bad, f"the size of the garment decides: at strength 60 creases x{left_drawn:.2f} in the frame as drawn and x{left_cam:.2f} in a "
-           f"frame of the camera ({took_cam:.1f} s); wide creases x{left_coarse:.2f} in a close shot and x{left_wide:.2f} with the person half as tall"
-           if not bad else "wrong:\n  " + "\n  ".join(bad))
+           f"frame of the camera ({took_cam:.1f} s); wide creases x{left_coarse:.2f} in a close shot and x{left_wide:.2f} with the person half as tall; "
+           f"broad soft marks x{mark_close:.2f} and x{mark_wide:.2f}" if not bad else "wrong:\n  " + "\n  ".join(bad))
 
 
 def check_speed():
@@ -6212,8 +6232,23 @@ def check_sharp():
         deep = cv2.erode(cloth.astype(np.uint8), np.ones((65, 65), np.uint8)) > 0
         if c_off.shape != c_g.shape or not np.array_equal(c_off[deep], o_g[deep]):
             bad.append("clothing switched off: the cloth must be the photo again, at the size of the other pictures")
+        # Apply gives the layer the window showed. Compared at a low strength, where the share of the creases that
+        # is left answers every step of the slider (about half at 10, seven tenths at 5; at 80 hardly any are left
+        # whatever the strength, and an Apply that irons with another one would not show).
+        r_low = _quiet(e_g.dress_preview_session, r_g["session_id"], True, 10.0)
+        left_low = creases(dec(r_low["comp_jpg_b64"])) / creases(o_g)
+        lay = _quiet(e_g.apply_session, r_g["session_id"], 100.0, False, True, 10.0)[0]
+        la = lay[:, :, 3:4].astype(np.float32) / 255.0
+        applied = np.clip(gimg.astype(np.float32) * (1.0 - la) + lay[:, :, :3].astype(np.float32) * la, 0, 255).astype(np.uint8)
+        left_app = creases(applied) / creases(gimg)
+        if not 0.25 <= left_low <= 0.75:
+            bad.append(f"test frame: at strength 10 the window shows {left_low:.0%} of the creases left - too few or too many to compare with Apply")
+        if not abs(left_app - left_low) <= 0.10:
+            bad.append(f"ironed clothing: the layer of Apply keeps {left_app:.0%} of the creases, the window showed {left_low:.0%} at the same "
+                       f"strength - Apply must iron as the window did")
         notes.append(f"ironed clothing keeps {kept:.0%} of the weave (the photo's own: correlation {own:.2f}) and shows the same ironing "
-                     f"({left_d:.0%} of the creases left; working picture: {left_w:.0%})")
+                     f"({left_d:.0%} of the creases left; working picture: {left_w:.0%}); at strength 10 the window leaves {left_low:.0%}, "
+                     f"the layer of Apply {left_app:.0%}")
 
     # ---- 5. a small frame: the working pictures are the frame
     simg, ssil = H.make_studio_image(900, 600, n_dust=20, n_hair=2, seed=3)
