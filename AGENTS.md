@@ -387,6 +387,35 @@ written here and in the repository.
   on the slider if dots or a change of colour show again.
 - **2026-11-28** (one word, no files, while 4.19.0 was being built): «Продовж» - "go on". Nothing else.
 
+- **2026-11-28, after reply #28** (one message, about 12:50 UTC, with one screenshot, `Знімок екрана
+  2026-11-28 144619.png`, 3048 x 1048 px). His words, all of them: «рамка є чорна прибери»
+  The screenshot shows NOT this program but «Retouch Studio v1.0.0-beta · build 1.1.7» - the retouching
+  plugin he builds in another chat (his message after reply #26). Its big window is modelled on ours
+  (the title bar, «До / Після», «Маска», «Змішування», a column of tools, the settings at the right).
+  Two things in the picture can be his "black frame"; he does not say which:
+  - the docked panel of that plugin, open right of the window and EMPTY - a black rectangle (#202020)
+    of about 840 x 720 px under the tab «Retouch Studio v1.0.0-beta». The screenshot starts at the top
+    left corner of the window and ends just under the bottom of this panel and right of it, while the
+    window is cut off in the middle of the photo - so the panel is the likelier one;
+  - the box around the photo inside the window: the photo, 884 px wide, stands in the middle of a
+    box 1430 px wide (#1A1C21) with a thin lighter outline (#363A41) - 273 px of near-black on each
+    side - and that box lies in a darker band (#14161A, with the tabs «Лице + шия», «Оглядове
+    прев’ю») with an outline of its own; the window is #202329.
+  Also seen, not named by him: two buttons show an empty box in place of an icon («▯ Бекап
+  налаштувань» - an emoji Photoshop does not draw).
+  Read as: remove the black frame in THAT plugin. Nothing about 4.19.0.
+  The code of Retouch Studio cannot be reached from here: it is not in this repository, his account
+  shows two repositories (`CleanVinylPro-Beta`, and `Top-films` - film lists and `top-plugin.js`), a
+  code search for "Retouch Studio" in his account finds nothing, and this session pushes to this
+  branch only. Reply #29 said so in its first lines; said what the two things are; and gave a text to
+  paste into the chat where Retouch Studio is built: no empty panel next to the window (open the
+  window by a command of the Plugins menu, or keep content in the panel), the photo on one even field
+  without outlines as in our window, the two icons, and "say what you changed and how you checked".
+  It added that our window has neither, and where that agent can look how it is done: the folder
+  `CleanVinylPro2/uxp-plugin` at the tag `cvp2-v4.19.0` (`index.html`: the panel has a block of its
+  own, `#panelRoot`, next to the `<dialog>`; `styles.css`: `.r4m-viewport`, one field without
+  outlines). Nothing was built or released; 4.19.0 stays the latest.
+
 ## 2. What is in the repository
 
 | Path | What it is | Rule |
@@ -1663,8 +1692,9 @@ second plugin next to the installed one and lose his presets.
 
 ## 3. Current state — update this at the end of every session
 
-_Last updated: by the agent of the first session, after releasing 4.19.0 (the answer to his message of
-2026-11-27 on reply #27: clothes as Retouch4me does them)._
+_Last updated: by the agent of the first session, after reply #29 (2026-11-28: a screenshot of his OTHER
+plugin, answered in words). The last release is 4.19.0 (the answer to his message of 2026-11-27 on reply
+#27: clothes as Retouch4me does them)._
 
 - **Released:** 4.19.0, tag `cvp2-v4.19.0`, as a pre-release. Direct download:
   `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.19.0/CleanVinylPro2.zip`
@@ -1721,6 +1751,8 @@ _Last updated: by the agent of the first session, after releasing 4.19.0 (the an
   On 2026-11-27, after reply #26 and after reply #27 (section 1): a question about the agent of his
   other plugin (answered in words, reply #27), then the wish about clothes - 4.19.0 answers it
   (reply #28). Which version he has installed is not known.
+  On 2026-11-28, after reply #28 (section 1): a screenshot of his other plugin, Retouch Studio, with
+  «рамка є чорна прибери» - answered in words (reply #29: its code is not here; a text for that chat).
   **He has not reported on 4.16.0, 4.17.0, 4.18.0 or 4.19.0 yet** - not on the smear, not on «Глибина»
   10, not on the tick «Стійки», not on the clothes. The questions of replies #25 and #26 got no answer.
   The path to the plugin list of Creative Cloud (Stock & Marketplace → Plugins → Manage plugins → the three
@@ -3215,6 +3247,12 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   end with a drawn silhouette, showed them partly IN the mask: the thigh and the knee are out of focus
   and have no texture to see. The words were corrected; the rule was not built. Two of the five frames
   had only been run with an earlier state of the engine.
+- **Read the title bar of a screenshot first** (2026-11-28). He has a second plugin, built in another
+  chat, whose window looks like ours; he sends its screenshots here too. Whose window it is decides
+  everything else: what cannot be changed from here is said in the first line of the reply, and the
+  help is a precise text for the chat that can change it - what is seen, measured on the screenshot.
+  When two things in the picture fit his word, look at how the screenshot was cut: its corners are
+  usually the corners of what he wanted to show.
 - **A wish with no frame is still a report** (4.19.0). He named two faults («точками заливає», «колір
   міняє») and sent nothing. Both were found by measuring the old tool on frames he had sent for other
   reasons (the mask on faded denim and tulle; the layer in patches; brightness moved alone). The reply
