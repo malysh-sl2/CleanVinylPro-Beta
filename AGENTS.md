@@ -447,6 +447,31 @@ written here and in the repository.
   it could be a shortcut of Windows as well, the change answers both. 4.20.0 answers this (reply #30).
   The same reply says in two sentences what the pair of `0Q5A3522` is, and asks him to circle the
   place if something in it is wrong.
+- **2026-11-28, after reply #30** (about 15:20 UTC; one screenshot, `Знімок екрана 2026-11-28
+  171823.png`, 1516 x 1294), in his words: «це я просто вибрав фото а воно виштрикло саме» - "I only
+  chose a photo and it popped out by itself".
+  The screenshot: Photoshop with `0Q5A3522` as shot, and OUR panel open as a flyout of the icon strip
+  at the right (its icon is pressed): the tab «Чистий Вініл Pro 4.20.0», under the name «версія
+  4.20.0», the status «Вимк.» with ▶, the note «Сервер вимкнено. Він запуститься, коли натиснете
+  «Очистити фон» або ▶ угорі панелі.» So 4.20.0 is installed (within three hours), the server did NOT
+  start, the note stands where it should, and the emoji of the small buttons ARE drawn (the broom, the
+  diskette, the folder).
+  Read as: «воно» is the panel - Photoshop unfolded it when he opened a photo, he had not clicked its
+  icon. This is what his message before meant as well («плагін сам грузе … поки не нажму на ярлик»):
+  the PANEL comes up by itself; the server starting was a consequence, not the complaint. The agent
+  had answered the consequence (4.20.0).
+  What the plugin can do about it: nothing. Its code shows no panel and asks for no focus outside the
+  big window, it listens to no event of Photoshop; and by Adobe's documentation (read this time - the
+  facts of section 4, «UXP») a plugin is not even loaded until Photoshop shows its panel, and a panel
+  can be made visible by code but never hidden. Photoshop unfolds the flyout from its own state: most
+  likely it was left unfolded when Photoshop was closed (he had used the plugin at 15:02 of his clock
+  and updated it afterwards), or Photoshop unfolds the panel of a plugin that was just updated - which
+  of the two is not known.
+  Reply #31, in words, no release: the panel is opened by Photoshop, not by the plugin; fold it with
+  one click on its icon; the setting that folds such panels by itself (Ctrl + K, «Робоче середовище»,
+  Auto-Collapse Iconic Panels); the screenshot shows that 4.20.0 works; the correction of what reply
+  #30 said (the panel is NOT loaded with Photoshop); and one question - does it still come up after a
+  plain restart of Photoshop, with no update in between. `README.md` got a section about it.
 
 ## 2. What is in the repository
 
@@ -1725,10 +1750,13 @@ second plugin next to the installed one and lose his presets.
 - **4.20.0** — the server is started by a button, not by Photoshop; after his message of 2026-11-28
   («коли запукаю фотошоп плагін сам грузе…», section 1). The panel, and one cap in the engine.
   - **What it was.** `bootstrap()` at the end of `main.js` asked the server for its health and, when
-    nothing answered, called `launchServerViaProtocol(true)` - «Автозапуск...». Photoshop loads the
-    page of a panel when it starts, also of a panel folded to an icon (he sees it happen; nothing of
-    UXP runs here), so every start of Photoshop started the server: a minimised console window
-    «Clean Vinyl Pro GPU Server», Python, both AI models.
+    nothing answered, called `launchServerViaProtocol(true)` - «Автозапуск...». So the server was
+    started whenever the plugin was loaded: a minimised console window «Clean Vinyl Pro GPU
+    Server», Python, both AI models. WHEN a plugin is loaded was believed wrongly while 4.20.0 was
+    built ("with Photoshop, also when the panel is folded to an icon"). Adobe's documentation, read
+    after his next message: a plugin is loaded when its panel becomes VISIBLE (the default
+    `loadEvent`, section 4). The server started "with Photoshop" because Photoshop unfolded the
+    panel by itself - and that, not the server, is what he complains of (section 1).
   - **What it is now.** `bootstrap()` probes once. A server that answers is shown as before. When
     nothing answers: `showServerOff` (the status «Вимк.» with ▶ - cut out of `checkServerHealth`,
     which uses it too) and `SERVER_SLEEPS_NOTE` in the footer: «Сервер вимкнено. Він запуститься,
@@ -1739,15 +1767,18 @@ second plugin next to the installed one and lose his presets.
     виділенні», «Формат 5:7», the two backup buttons); such a press is remembered and goes on by
     itself, as before. `launchServerViaProtocol` lost its quiet mode: every start is asked for by
     a button now, and one that fails shows the card.
-  - **Not by the icon, and why.** He asked for "until I click the icon". A panel is not told that
-    its icon was clicked. What UXP has is `entrypoints.setup({panels: {<id>: {show, hide}}})`, and
-    Adobe's own notes say that in Photoshop `show` comes once, when the panel is created, and
-    `hide` never - which would be the start with Photoshop again. THIS WAS NOT TRIED: from memory
-    of the documentation, not verified for Photoshop 28, and this plugin has never called
-    `entrypoints.setup`. If he wants the start on opening the panel, that is the thing to try -
-    in a build that he tests, with the old behaviour one release away. The manual and `README.md`
-    of 4.20.0 say it flatly («Photoshop не повідомляє плагіну, що його значок натиснули»); reply
-    #30 and the notes of the release say "as far as I know". Correct the two files when it is known.
+  - **Not by the icon, and why** (rewritten after the documentation was read; the first wording
+    came from memory). The load of the plugin IS the first showing of its panel in a session, so
+    up to 4.19.0 the server did start "when the icon was clicked" - whenever the panel was shown
+    for the first time, by his click or by Photoshop itself. A later click on the icon is not
+    told to the plugin: `show` (the event `uxpshowpanel`) comes once, `hide` never (Adobe's known
+    issues, PS-57284). As long as Photoshop unfolds the panel by itself on his PC, a start at the
+    load is a start he did not ask for; when that is cured (section 1, reply #31), the start at
+    the load is exactly what he asked for and saves him the wait at the first cleaning - offer it
+    then. WRONG IN WHAT WAS SHIPPED: the manual of 4.20.0 (the block «ЩО ЗМІНИЛОСЯ У ВЕРСІЇ 4.20.0»)
+    says that Photoshop loads the panel with itself, also when it is folded, and that Photoshop
+    does not tell the plugin of the click. Correct both sentences in the next version (the manual
+    is inside the ZIP). `README.md`, the notes of the release and the pull request were corrected.
   - **Not by any press inside the panel either** (built first, taken out the same hour). Outside
     the window the panel holds few controls: next to the buttons that need the server there are
     the status, «До / Після», «Довідка» and «Звільнити VRAM», and a server started by one of these
@@ -1790,8 +1821,8 @@ second plugin next to the installed one and lose his presets.
 
 ## 3. Current state — update this at the end of every session
 
-_Last updated: by the agent of the first session, after releasing 4.20.0 (the answer to his message of
-2026-11-28: the server must not start with Photoshop)._
+_Last updated: by the agent of the first session, after reply #31 (2026-11-28: the panel unfolds by
+itself - answered in words). The last release is 4.20.0 (the server is started by a button)._
 
 - **Released:** 4.20.0, tag `cvp2-v4.20.0`, as a pre-release. Direct download:
   `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.20.0/CleanVinylPro2.zip`
@@ -1855,6 +1886,10 @@ _Last updated: by the agent of the first session, after releasing 4.20.0 (the an
   version after 4.15.0 that is known to; preset «Темний дальній план», the ticks «Стійки», the clothing
   and «Мікс» on). Then the wish that the server must not start with Photoshop - 4.20.0 answers it
   (reply #30).
+  On 2026-11-28, after reply #30 (section 1): a screenshot of our panel, unfolded by Photoshop when he
+  opened a photo - «воно виштрикло саме». **4.20.0 is installed and does what it was made for** (the
+  status «Вимк.», the note, no server). What he complains of is the panel coming up by itself; the
+  plugin cannot fold it; reply #31 says how to fold it and how to make Photoshop fold it.
   **He has not said a word about 4.16.0, 4.17.0, 4.18.0 or 4.19.0** - not on the smear, not on «Глибина»
   10, not on the tick «Стійки», not on the clothes. The questions of replies #25, #26 and #28 got no
   answer; the pair of `0Q5A3522` shows the clothing tool working and no complaint came with it.
@@ -1973,12 +2008,13 @@ _Last updated: by the agent of the first session, after releasing 4.20.0 (the an
     of the server is something he may send in as a fault;
   - the pair of `0Q5A3522` was answered in two sentences, with no option card, although what he
     meant by it is not known: nothing in it is wrong, and he had just stopped a long answer.
-- **Not run in Photoshop yet (4.20.0):** all of it. In particular:
-  - whether Photoshop really loads the panel at its start and whether the server now stays off
-    until a button is pressed - the whole point of the version;
+- **Seen in his Photoshop (4.20.0), one screenshot** (2026-11-28, section 1): the panel loaded with
+  the server off - «Вимк.» with ▶, the note in the footer (a blue box under the buttons, two lines),
+  no server started. Still not known:
   - the cold start from «Очистити фон»: how long he waits, and whether the window then opens by
     itself as it does in the test;
-  - what the footer of the panel looks like with the note in it.
+  - whether Photoshop asks for his consent each time the plugin opens `cleanvinyl2://start`
+    (Adobe: "users will be asked for their consent when your plugin attempts to use openExternal").
 - **Decided by the agent alone for 4.19.0** (no option card, no question: he asked for the tool and
   sent no frame; change it if he says otherwise):
   - «станом на зараз» is read as the clothing tool of this program (section 1);
@@ -2439,16 +2475,19 @@ _Last updated: by the agent of the first session, after releasing 4.20.0 (the an
 
 ### Open questions (ask when he reports on 4.20.0)
 
+- Asked in reply #31 (2026-11-28): after he folded the panel and switched on the folding by itself,
+  does the panel still come up after a plain restart of Photoshop, with no update of the plugin in
+  between? If yes, neither of the two causes named in section 1 is the cause - look further (a
+  command of the Plugins menu instead of the panel is the way out that needs no panel at all:
+  `entrypoints` of type `command`, section 4, «UXP»; not built, never tried here).
+  Offered in the same reply: once the panel stays folded, the server can start again the moment
+  the panel is opened (the behaviour up to 4.19.0) - build it only if he asks.
 - New with 4.20.0 (asked in reply #30): if the window of the server still comes up by itself, what
   did he press before; and, about the pair of `0Q5A3522`, to circle the place if something is wrong.
-  Not asked, to be read from his next message: does he miss the server being ready at once (then:
-  a start on opening the panel, section 2, or a setting).
-- Seen, not asked (2026-11-28): the small buttons of OUR panel carry emoji («🧹 Звільнити VRAM», «💾
-  Бекап налаштувань», «📂 Відновити», «📁 Відкрити папку», «💾 Зберегти…» in the settings). The
-  screenshot of his other plugin, which copied the labels, shows an empty box in place of «💾» in
-  his Photoshop - so ours very likely show boxes too. No screenshot of our panel is at hand, and
-  he never complained. Look at the next screenshot that shows the panel; if there are boxes, take
-  the emoji out (symbols like ▶ and ↻ are drawn: his screenshot of 2026-11-25 shows «↻»).
+  The first is answered by his screenshot: it does not. The second got no answer.
+- The emoji of the small buttons of our panel («🧹 Звільнити VRAM», «💾 Бекап налаштувань», «📂
+  Відновити») ARE drawn in his Photoshop, in colour (his screenshot of 2026-11-28). The empty box in
+  the screenshot of his other plugin is that plugin's own matter. Nothing to do here.
 - New with 4.19.0 (asked in reply #28): if dots or a change of colour show again, a frame and the
   number on the slider. Not asked, to be read from his next message: is 45 too weak or too strong;
   does the partly ironed denim show; does tulle matter to him.
@@ -3038,6 +3077,39 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   the pair at five-fold contrast, and compare the window picture (`comp_jpg_b64` of the answer) with the
   reduced layer.
 
+### UXP: what Adobe's documentation says, and how to read it from here
+
+Nothing of UXP or Photoshop runs in the sandbox, but the documentation can be read: its source is the
+repository `AdobeDocs/uxp-photoshop` on GitHub, and `api.github.com` is reachable.
+
+```
+gh api "repos/AdobeDocs/uxp-photoshop/git/trees/main?recursive=1" --jq '.tree[].path' | grep -i manifest
+gh api "repos/AdobeDocs/uxp-photoshop/contents/src/pages/uxp-api/known-issues.md" --jq .content | base64 -d
+gh api -X GET search/code -f q='uxpshowpanel repo:AdobeDocs/uxp-photoshop' --jq '.items[].path'
+```
+
+Read on 2026-11-28 (the repository was last pushed on 2026-10-29). READ BEFORE YOU WRITE A SENTENCE ABOUT
+WHAT PHOTOSHOP DOES - 4.20.0 was built on two beliefs about UXP that the documentation contradicts.
+
+- **When a plugin is loaded** (`guides/uxp-guide/uxp-misc/manifest-v4/photoshop-manifest`): by default
+  "when its panel UI becomes visible, or when the user chooses to execute a plugin command from the
+  Plugins menu". `"host": {"data": {"loadEvent": "startup"}}` loads it shortly after Photoshop starts;
+  the default is `"use"`. Our manifest sets nothing, so `main.js` runs when Photoshop first shows the
+  panel - a panel folded to an icon is not loaded.
+- **Shown and hidden** (`uxp-api/known-issues.md`, PS-57284): "`uxpshowpanel` and the corresponding
+  `show` callback occurs only once, when the panel is initially made visible", "`uxphidepanel` and the
+  corresponding `hide` callback never occurs". The event reaches `document` as `uxpcommand` with
+  `commandId` `uxpshowpanel` (`guides/how-to`). Manifest v5: "panel `show` is tied to plugin `create`".
+- **A panel cannot be hidden by code** (`manifest-v5`, plugin communication): "panels can only be made
+  visible -- you can't ask to hide the panel". So a plugin cannot fold its own flyout.
+- **Commands** (`manifest-v4`, `reference-js/modules/uxp/entry-points`): an entry point of type
+  `"command"` is an item of the plugin's submenu in the Plugins menu; its handler is given with
+  `entrypoints.setup({commands: {<id>: run}})`, which may be called once. "Shortcuts are not yet
+  available for plugins". `enableMenuRecording` lets an Action record the item. This plugin has never
+  called `entrypoints.setup`.
+- **`openExternal`** (`manifest-v5`): "users will be asked for their consent when your plugin attempts
+  to use `openExternal`". Whether he sees such a question at every start of the server is not known.
+
 ### Traps already paid for
 
 - HIS MESSAGE GOES INTO SECTION 1 FIRST, word for word, before any work on it starts. The message of
@@ -3416,6 +3488,13 @@ python3 tools/build_ccx.py --check && python3 tools/build_zip.py --check
   for nothing that can be named, look for ten minutes (the dates of the files, the map of `zones`, the
   borders), say what the pair shows, ask him to circle what he means, and stop. The long look paid
   for itself only by accident (it showed that 4.19.0 runs on his PC).
+- **"The plugin loads by itself" was about the panel, not the server** (2026-11-28). 4.20.0 took the
+  start of the server away from the load of the panel; his next message showed the panel unfolded by
+  Photoshop, the server off, and the same complaint. Two things went wrong: how Photoshop loads a
+  plugin was written down from memory and was false (the documentation was one `gh api` away); and
+  the question "what does he SEE when it happens?" was never asked - a screenshot would have shown
+  the flyout. When a complaint is about something that "starts by itself", find out which thing is
+  on his screen before choosing what to stop.
 - **Try the plain reading of a wish before a clever one** (4.20.0). "Not until I click the icon"
   became "the first press anywhere inside the panel starts the server" - built, tested, and taken
   out when the list of the panel's controls was read: every button that is no order to the server
