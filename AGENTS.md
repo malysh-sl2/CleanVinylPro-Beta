@@ -472,6 +472,12 @@ written here and in the repository.
   Auto-Collapse Iconic Panels); the screenshot shows that 4.20.0 works; the correction of what reply
   #30 said (the panel is NOT loaded with Photoshop); and one question - does it still come up after a
   plain restart of Photoshop, with no update in between. `README.md` got a section about it.
+- **2026-11-28, after reply #31** (about 16:40 UTC, no files), in his words: «все ок не виштрикає» -
+  "all is fine, it does not pop out". So the panel was unfolded from Photoshop's own state, and
+  folding it (and, presumably, the setting that folds such panels by itself - he did not say which of
+  the two steps he took) cured it. The complaint that began with «плагін сам грузе» is closed. He
+  said nothing about the offer to start the server again when the panel is opened: not built.
+  Reply #32: two lines - nothing is changed, and the offer stands.
 
 ## 2. What is in the repository
 
@@ -1821,8 +1827,8 @@ second plugin next to the installed one and lose his presets.
 
 ## 3. Current state — update this at the end of every session
 
-_Last updated: by the agent of the first session, after reply #31 (2026-11-28: the panel unfolds by
-itself - answered in words). The last release is 4.20.0 (the server is started by a button)._
+_Last updated: by the agent of the first session, after reply #32 (2026-11-28: he wrote that the panel
+no longer unfolds by itself). The last release is 4.20.0 (the server is started by a button)._
 
 - **Released:** 4.20.0, tag `cvp2-v4.20.0`, as a pre-release. Direct download:
   `https://github.com/malysh-sl2/CleanVinylPro-Beta/raw/cvp2-v4.20.0/CleanVinylPro2.zip`
@@ -1890,6 +1896,7 @@ itself - answered in words). The last release is 4.20.0 (the server is started b
   opened a photo - «воно виштрикло саме». **4.20.0 is installed and does what it was made for** (the
   status «Вимк.», the note, no server). What he complains of is the panel coming up by itself; the
   plugin cannot fold it; reply #31 says how to fold it and how to make Photoshop fold it.
+  The same day, after reply #31: «все ок не виштрикає» - it no longer comes up. Closed.
   **He has not said a word about 4.16.0, 4.17.0, 4.18.0 or 4.19.0** - not on the smear, not on «Глибина»
   10, not on the tick «Стійки», not on the clothes. The questions of replies #25, #26 and #28 got no
   answer; the pair of `0Q5A3522` shows the clothing tool working and no complaint came with it.
@@ -2475,13 +2482,17 @@ itself - answered in words). The last release is 4.20.0 (the server is started b
 
 ### Open questions (ask when he reports on 4.20.0)
 
-- Asked in reply #31 (2026-11-28): after he folded the panel and switched on the folding by itself,
-  does the panel still come up after a plain restart of Photoshop, with no update of the plugin in
-  between? If yes, neither of the two causes named in section 1 is the cause - look further (a
-  command of the Plugins menu instead of the panel is the way out that needs no panel at all:
-  `entrypoints` of type `command`, section 4, «UXP»; not built, never tried here).
-  Offered in the same reply: once the panel stays folded, the server can start again the moment
-  the panel is opened (the behaviour up to 4.19.0) - build it only if he asks.
+- The panel that unfolded by itself (replies #31, #32): answered - «все ок не виштрикає». Whether it
+  comes up again after the next UPDATE of the plugin is not known; if he says so, that is Photoshop
+  showing the panel of a plugin it has just installed, and one click on the icon folds it. (A command
+  of the Plugins menu instead of the panel would need no panel at all: `entrypoints` of type
+  `command`, section 4, «UXP»; not built, never tried here.)
+  Offered twice (replies #31, #32), not answered: now that the panel stays folded, the server can
+  start again the moment the panel is opened (the behaviour up to 4.19.0), so that the first
+  cleaning does not wait - build it only if he asks.
+- To do in the next version, whatever it is about: the two wrong sentences of the manual's block
+  «ЩО ЗМІНИЛОСЯ У ВЕРСІЇ 4.20.0» (section 2, 4.20.0), and a short part «якщо панель розгортається
+  сама» there, as in `README.md`.
 - New with 4.20.0 (asked in reply #30): if the window of the server still comes up by itself, what
   did he press before; and, about the pair of `0Q5A3522`, to circle the place if something is wrong.
   The first is answered by his screenshot: it does not. The second got no answer.
