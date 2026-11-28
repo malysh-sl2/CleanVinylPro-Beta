@@ -3986,7 +3986,10 @@ class CleanVinylEngine:
         for _ in range(2):
             r0 = lo_lum - twice(fit, lo_lum)
             q = cv2.dilate(r0 * r0, np.ones((kq, kq), np.uint8))  # (the flanks of a fold go with it)
-            fit = fitter(m / (1.0 + (q / ft(cut)) ** 2))
+            # (a window that holds next to no cloth - the rim of a garment far from the middle of the copy - has
+            #  nothing to fit a plane to, and the departure from that plane is astronomic there. It weighs nothing
+            #  either way; the cap keeps its square inside single precision. Seen on the owner's 0Q5A3522.)
+            fit = fitter(m / (1.0 + np.minimum(q / ft(cut), ft(1e9)) ** 2))
         surf = np.empty_like(lo)
         for c in range(3):
             surf[..., c] = twice(fit, lo[..., c])
@@ -4153,7 +4156,8 @@ class CleanVinylEngine:
                 g_lum = (1.0 - deep) * (1.0 - keep)
                 # colour: a strong tint is a colour of the cloth - a print, a second garment - and no stain
                 col2 = (r_col * r_col * lum_w).sum(axis=2)
-                g_col = (1.0 - deep) * (1.0 - keep_col) / (1.0 + (col2 / (t_col * t_col)) ** 2)
+                # (capped for the same reason as in _cloth_surface: astronomic next to no cloth, and no weight there)
+                g_col = (1.0 - deep) * (1.0 - keep_col) / (1.0 + np.minimum(col2 / (t_col * t_col), 1e9) ** 2)
                 pull = r_lum[..., None] * g_lum[..., None] + r_col * g_col[..., None]
                 cur -= pull * (rung * amount)
                 del surf, keep, keep_col, r, r_lum, r_col, g_lum, g_col, col2, pull

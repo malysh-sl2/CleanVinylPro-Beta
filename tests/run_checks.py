@@ -1415,6 +1415,44 @@ def check_dress():
            f"frame of the camera ({took_cam:.1f} s); wide creases x{left_coarse:.2f} in a close shot and x{left_wide:.2f} with the person half as tall; "
            f"broad soft marks x{mark_close:.2f} and x{mark_wide:.2f}" if not bad else "wrong:\n  " + "\n  ".join(bad))
 
+    # ---- 5. the numbers stay inside single precision --------------------------------------------------------------
+    # (Found on the owner's 0Q5A3522: the server window filled with "RuntimeWarning: overflow encountered in square".
+    # The rim of a garment whose weights fade and are then cut off - the stage cuts them at the outline - far from
+    # the middle of the working copy: the windows just outside see next to no cloth, the plane fitted there is a
+    # wild guess, and the square of its departure left single precision. Nothing of it reached the picture, but a
+    # warning in the window of the server is a line the owner may send in as a fault.)
+    bad = []
+    sh_, sw_ = 1868, 1333                                   # the working copy of a frame of the camera
+    yy, xx = np.mgrid[0:sh_, 0:sw_].astype(np.float32)
+    lum = -1.2 + 0.4 * xx / sw_ + 0.2 * yy / sh_
+    low = np.dstack([lum + 0.02, lum, lum - 0.03]).astype(np.float32)
+    low += np.random.default_rng(3).normal(0.0, 0.004, low.shape).astype(np.float32)
+    lum_w = np.full((sh_, sw_, 3), 1.0 / 3.0, np.float32)
+    piece = np.zeros((sh_, sw_), np.float32)
+    piece[1450:1700, 180:360] = 1.0                         # a small garment in the lower left corner
+    worst = 0.0
+    for feather, sigma in ((1.5, 3.88), (6.0, 3.88), (6.0, 2.80)):
+        wgt = cv2.GaussianBlur(piece, (0, 0), feather)
+        wgt[wgt < 0.05] = 0.0
+        with warnings.catch_warnings(record=True) as heard:
+            warnings.simplefilter("always")
+            surf, keep, keep_col = ENG._cloth_surface(low, wgt, lum_w, sigma, 0.0972, band_guard=0.5, tint_std=0.03)
+        said = sorted({str(x.message) for x in heard})
+        if said:
+            bad.append(f"a small garment with a soft rim (blurred by {feather:g} px, window {sigma:g} px): NumPy warns \"{'; '.join(said)}\" - a number "
+                       f"left single precision next to the garment")
+        on = wgt > 0.5
+        if not (np.isfinite(surf[on]).all() and np.isfinite(keep[on]).all() and np.isfinite(keep_col[on]).all()):
+            bad.append(f"a small garment with a soft rim (blurred by {feather:g} px, window {sigma:g} px): the surface is not a number on the cloth")
+            continue
+        off = float(np.abs(surf[on] - low[on]).max())
+        worst = max(worst, off)
+        if off > 0.03:
+            bad.append(f"a small garment with a soft rim (blurred by {feather:g} px, window {sigma:g} px): the surface lies {off:.3f} log units off "
+                       f"smooth cloth (its grain is 0.004)")
+    report("dress", not bad, f"single precision holds: a small garment with a soft rim far from the middle of the frame raises no warning, and its "
+           f"surface lies within {worst:.3f} log units of the smooth cloth" if not bad else "wrong:\n  " + "\n  ".join(bad))
+
 
 def check_speed():
     bad = []

@@ -6,7 +6,7 @@ const uxpShell = uxp.shell;
 const CANDIDATE_URLS = ["http://127.0.0.1:18746", "http://localhost:18746"];
 // The same number as in manifest.json and server.py. A server of another version still answers (for example the
 // previous one that was left running after an update) - the panel then says how to restart it.
-const PLUGIN_VERSION = "4.19.0";
+const PLUGIN_VERSION = "4.20.0";
 // The name as a person reads it. Since 4.18.0 the version stands next to it wherever the plugin is named: in the
 // Plugins menu and on the tab of the panel (manifest.json - "name" and the label of the panel, written there by
 // hand), in the header of the panel and in the title of the big window (below). The owner: «у назві плагіна пиши
@@ -1346,6 +1346,7 @@ async function probeHealthSilent() {
         if (info.ok) {
           serverOnline = true;
           hideServerErrorCard();
+          dropServerSleepsNote();
           if (playBtn) playBtn.style.display = "none";
           const isCpu = String(info.provider || "").includes("CPU");
           pill.className = isCpu ? "gpu-pill loading" : "gpu-pill";
@@ -1376,28 +1377,33 @@ async function probeHealthSilent() {
   return { ok: false };
 }
 
-async function checkServerHealth() {
+// The status when a probe found no working server: «Вимк.» with the ▶ button, or the card about the models.
+function showServerOff(res) {
   const pill = el("gpuStatusBtn");
   const txt = el("gpuStatusText");
   const playBtn = el("btnPlayServer");
+  serverOnline = false;
+  pill.className = "gpu-pill offline";
+  if (res && res.modelError) {
+    txt.textContent = "Моделі!";
+    if (playBtn) playBtn.style.display = "none";
+    showServerErrorCard("Сервер працює, але AI-моделі не знайдено: " + escapeHtml(res.modelError));
+    return;
+  }
+  txt.textContent = "Вимк.";
+  if (playBtn) playBtn.style.display = "inline-flex";
+}
+
+async function checkServerHealth() {
+  const pill = el("gpuStatusBtn");
+  const txt = el("gpuStatusText");
   pill.className = "gpu-pill loading";
   txt.textContent = "Перевірка...";
 
   const res = await probeHealthSilent();
   if (res.ok) return true;
   if (serverLaunchPromise && !res.modelError) return false;  // it is being started right now: that wait reports
-
-  serverOnline = false;
-  pill.className = "gpu-pill offline";
-  if (res.modelError) {
-    txt.textContent = "Моделі!";
-    if (playBtn) playBtn.style.display = "none";
-    showServerErrorCard("Сервер працює, але AI-моделі не знайдено: " + escapeHtml(res.modelError));
-    return false;
-  }
-
-  txt.textContent = "Вимк.";
-  if (playBtn) playBtn.style.display = "inline-flex";
+  showServerOff(res);
   return false;
 }
 
@@ -1408,10 +1414,10 @@ const SERVER_START_WAIT_MS = 150000;
 const SERVER_START_POLL_MS = 750;
 const SERVER_START_HINT_AFTER_MS = 25000;
 
-async function launchServerViaProtocol(isAutoAttempt = false) {
+async function launchServerViaProtocol() {
   if (serverLaunchPromise) {
     const okExisting = await serverLaunchPromise;
-    if (!okExisting && !isAutoAttempt) {
+    if (!okExisting) {
       showServerErrorCard(
         "ERROR: Не вдалося запустити сервер через кнопку ▶ (порт 18746 не відповідає)."
       );
@@ -1424,8 +1430,9 @@ async function launchServerViaProtocol(isAutoAttempt = false) {
     const txt = el("gpuStatusText");
     const playBtn = el("btnPlayServer");
     setBtnDisabled(playBtn, true);
+    dropServerSleepsNote();
     pill.className = "gpu-pill loading";
-    txt.textContent = isAutoAttempt ? "Автозапуск..." : "Старт...";
+    txt.textContent = "Старт...";
 
     // Check once first in case server just finished booting before firing cleanvinyl2://
     const preCheck = await probeHealthSilent();
@@ -1485,11 +1492,9 @@ async function launchServerViaProtocol(isAutoAttempt = false) {
       setBtnDisabled(playBtn, false);
     }
 
-    if (!isAutoAttempt) {
-      showServerErrorCard(
-        "ERROR: Не вдалося запустити сервер через кнопку ▶ (порт 18746 не відповідає)."
-      );
-    }
+    showServerErrorCard(
+      "ERROR: Не вдалося запустити сервер через кнопку ▶ (порт 18746 не відповідає)."
+    );
     return false;
   })();
 
@@ -1498,6 +1503,27 @@ async function launchServerViaProtocol(isAutoAttempt = false) {
   } finally {
     serverLaunchPromise = null;
   }
+}
+
+// ------------------------------------------------------------------
+// The server is started by a button - not by Photoshop
+// ------------------------------------------------------------------
+// Up to 4.19.0 the panel started the server the moment it was loaded. Photoshop loads a panel together with
+// itself - also one that is folded to an icon - so the server window came up and the AI models went into the
+// video memory with every start of Photoshop, wanted or not. The owner, 2026-11-28: «коли запукаю фотошоп плагін
+// сам грузе зроби щоб поки не нажму на ярлик він не запускається». Photoshop does not tell a panel that its
+// icon was clicked, and "the panel is loaded" says nothing about what the user wants. So nothing is started
+// when the panel loads: the server is only asked whether it is there already (the end of this file). It is
+// started by the buttons that need it («Очистити фон» and the others: ensureServerForAction - the press is
+// remembered and goes on by itself) and by ▶. Not by any press inside the panel: «До / Після», the help, the
+// status itself and «Вивантажити з VRAM» need no server, and starting one from them would be a surprise.
+
+// What the panel says while the server is off and no button has asked for it yet
+const SERVER_SLEEPS_NOTE = "Сервер вимкнено. Він запуститься, коли натиснете «Очистити фон» або ▶ угорі панелі.";
+
+function dropServerSleepsNote() {
+  const f = el("footerStatus");
+  if (f && f.textContent === SERVER_SLEEPS_NOTE) setFooterStatus("");
 }
 
 // ------------------------------------------------------------------
@@ -1548,7 +1574,7 @@ async function ensureServerForAction(btnId, actionName) {
 
   let ok = false;
   try {
-    ok = await Promise.race([launchServerViaProtocol(false), takenBack]);
+    ok = await Promise.race([launchServerViaProtocol(), takenBack]);
   } finally {
     showPendingPress(btnId, false);
     if (pendingPress === ticket) pendingPress = null;
@@ -4149,8 +4175,8 @@ function initEvents() {
 
   // Main Panel Buttons
   el("gpuStatusBtn").addEventListener("click", checkServerHealth);
-  el("btnPlayServer").addEventListener("click", () => launchServerViaProtocol(false));
-  el("btnRetryPlay").addEventListener("click", () => launchServerViaProtocol(false));
+  el("btnPlayServer").addEventListener("click", () => launchServerViaProtocol());
+  el("btnRetryPlay").addEventListener("click", () => launchServerViaProtocol());
   el("btnRecheckServer").addEventListener("click", checkServerHealth);
   el("btnRun").addEventListener("click", pressOrTakeBack("btnRun", openInteractiveWorkspace));
   el("btnSelection").addEventListener("click", pressOrTakeBack("btnSelection", runQuickSelectionClean));
@@ -4716,13 +4742,11 @@ function initEvents() {
   updateSliderVisuals();
   updateFractionButtonsUI();
 
-  // Check health on panel open; if offline, silently try auto-starting once!
-  const firstCheck = await probeHealthSilent();
-  if (!firstCheck.ok) {
-    if (firstCheck.modelError) {
-      await checkServerHealth();
-    } else {
-      await launchServerViaProtocol(true);
-    }
+  // The panel is loaded with Photoshop: the server is only asked whether it is there already. Nothing is started
+  // here - see "The server is started by a button" above.
+  const first = await probeHealthSilent();
+  if (!first.ok && !serverLaunchPromise) {
+    showServerOff(first);
+    if (!first.modelError) setFooterStatus(SERVER_SLEEPS_NOTE, "info");
   }
 })();

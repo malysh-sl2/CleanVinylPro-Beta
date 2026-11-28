@@ -1839,10 +1839,91 @@ async function main() {
     expect(env.state("PLUGIN_VERSION") === PLUGIN_VERSION, `main.js says ${env.state("PLUGIN_VERSION")}, manifest.json says ${PLUGIN_VERSION}`);
   });
 
+  // ---------------------------------------------------------------- the server is started by a button, not by Photoshop
+  // (4.20.0. The owner: «коли запукаю фотошоп плагін сам грузе зроби щоб поки не нажму на ярлик він не
+  //  запускається». Photoshop loads the panel with itself; "the panel is loaded" is what a scenario starts with.)
+  const SLEEPS = "Сервер вимкнено";
+  const serverLooksOff = (env) => env.el("gpuStatusText").textContent === "Вимк." && env.el("gpuStatusBtn").className === "gpu-pill offline" &&
+    env.el("btnPlayServer").style.display !== "none";
+
+  await scenario("the panel is loaded with the server off: nothing is started, and the panel says what will start it",
+    { online: false, bootMs: 300 }, async (env, expect) => {
+      await sleep(1600);                                     // (a server asked for at the load would be up by now)
+      expect(env.server.launches === 0, "loading the panel must not start the server: Windows was asked " + env.server.launches + " time(s)");
+      expect(env.state("serverOnline") === false && env.state("serverLaunchPromise") === null, "no server, and none on its way");
+      expect(serverLooksOff(env), "the status must read 'Вимк.' with the ▶ button: " + env.el("gpuStatusText").textContent + " / " + env.el("gpuStatusBtn").className);
+      expect(env.footer().includes(SLEEPS) && env.footer().includes("Очистити фон") && env.footer().includes("▶"),
+        "the panel must say that the server is off and which buttons start it: " + env.footer());
+      expect(!env.el("serverErrorCard").classList.contains("visible"), "no error card: nothing went wrong");
+      expect(!env.el("statusBanner").classList.contains("visible"), "no banner: " + env.el("statusBannerText").textContent);
+      expect(env.of("/session/start").length === 0 && env.state("sessState.open") === false, "nothing opens");
+    });
+
+  await scenario("the server off: the mouse over the panel, the status, 'До / Після', the help and 'unload' start nothing",
+    { online: false, bootMs: 300 }, async (env, expect) => {
+      env.move(40); env.move(120);                           // the mouse crosses the panel
+      env.mouse(env.el("panelRoot"), "mousedown"); env.release();
+      env.click("panelRoot");                                // a click on the empty part of the panel
+      env.click("gpuStatusBtn");                             // "is the server there?" is a question, not an order
+      await sleep(300);
+      env.click("btnPanelHelp");
+      env.click("btnCompare");
+      env.click("btnQuickUnload");
+      await sleep(1500);
+      expect(env.server.launches === 0, "only ▶ and the buttons that need the server may start it, got " + env.server.launches + " start(s)");
+      expect(serverLooksOff(env), "the status must still read 'Вимк.' with ▶: " + env.el("gpuStatusText").textContent);
+      expect(!env.el("serverErrorCard").classList.contains("visible"), "no error card for a server nobody asked for");
+    });
+
+  await scenario("▶ starts the server: the status counts the seconds and turns green by itself", { online: false, bootMs: 2300 }, async (env, expect) => {
+    expect(env.server.launches === 0, "nothing before the press");
+    env.click("btnPlayServer");
+    await sleep(1200);
+    expect(env.server.launches === 1, "one request to Windows, got " + env.server.launches);
+    expect(env.state("serverOnline") === false && env.el("gpuStatusText").textContent.includes("Запуск"), "still starting: " + env.el("gpuStatusText").textContent);
+    expect(env.el("btnPlayServer").style.display === "none", "no ▶ button while the start is in progress");
+    expect(!env.footer().includes(SLEEPS), "the note about the sleeping server must be gone once a start was asked for: " + env.footer());
+    const up = await env.waitFor(() => env.state("serverOnline") === true, 5000);
+    expect(up, "the plugin must notice the server by itself");
+    expect(env.el("gpuStatusBtn").className === "gpu-pill", "the status must be green: " + env.el("gpuStatusBtn").className);
+    expect(env.of("/session/start").length === 0, "nothing opens by itself when no action button was pressed");
+    expect(env.server.launches === 1, "one launch");
+  });
+
+  await scenario("a server that runs already when the panel is loaded is found without a press", {}, async (env, expect) => {
+    expect(env.server.launches === 0, "nothing to start");
+    expect(env.state("serverOnline") === true && env.el("gpuStatusBtn").className === "gpu-pill", "the status must be green: " + env.el("gpuStatusText").textContent);
+    expect(env.el("btnPlayServer").style.display === "none", "no ▶ button next to a running server");
+    expect(!env.footer().includes(SLEEPS), "no note about a sleeping server: " + env.footer());
+  });
+
+  await scenario("a server started by hand after the panel was loaded: the next press finds it, the note goes",
+    { online: false }, async (env, expect) => {
+      expect(env.footer().includes(SLEEPS), "the note stands while the server is off: " + env.footer());
+      env.server.online = true;                              // start_gpu_server.bat was run by hand
+      env.click("gpuStatusBtn");
+      const up = await env.waitFor(() => env.state("serverOnline") === true, 3000);
+      expect(up && env.el("gpuStatusBtn").className === "gpu-pill", "the status must turn green: " + env.el("gpuStatusText").textContent);
+      expect(!env.footer().includes(SLEEPS), "the note must go when the server answers: " + env.footer());
+      expect(env.server.launches === 0, "nothing was started by the panel");
+    });
+
+  await scenario("the server runs but its AI models are missing: the card says so, nothing is started, no note about a sleeping server",
+    { healthExtra: { ok: false, error: "немає файлу big-lama.onnx" } }, async (env, expect) => {
+      await sleep(400);
+      expect(env.el("gpuStatusText").textContent === "Моделі!" && env.el("gpuStatusBtn").className === "gpu-pill offline",
+        "the status must read 'Моделі!': " + env.el("gpuStatusText").textContent + " / " + env.el("gpuStatusBtn").className);
+      expect(env.el("serverErrorCard").classList.contains("visible") && env.el("serverErrorCard").textContent.includes("big-lama.onnx"),
+        "the card must name what the server said: " + env.el("serverErrorCard").textContent.trim().slice(0, 160));
+      expect(env.el("btnPlayServer").style.display === "none", "no ▶ button: the server is running");
+      expect(!env.footer().includes(SLEEPS), "the server is not off - no note that it sleeps: " + env.footer());
+      expect(env.server.launches === 0, "a server that runs is not started again, got " + env.server.launches);
+    });
+
   // ---------------------------------------------------------------- a press made before the server is ready
-  await scenario("'Очистити фон' pressed while the server is starting is remembered and runs by itself",
+  await scenario("'Очистити фон' pressed with the server off starts it, is remembered and runs by itself",
     { online: false, bootMs: 1700 }, async (env, expect) => {
-      expect(env.server.launches === 1, "the panel must ask for the server once on opening, got " + env.server.launches);
+      expect(env.server.launches === 0, "the panel must not ask for the server on opening, got " + env.server.launches);
       env.click("btnRun");
       await sleep(300);
       expect(env.el("btnRun").textContent.includes("Чекаю на сервер"), "the button must say it is waiting: " + env.el("btnRun").textContent.trim());
@@ -1858,17 +1939,6 @@ async function main() {
       expect(!env.el("serverErrorCard").classList.contains("visible"), "no error card");
       expect(env.el("gpuStatusText").textContent.includes("Test GPU"), "the status must show the GPU: " + env.el("gpuStatusText").textContent);
     });
-
-  await scenario("the status turns green by itself after a slow start, without any press", { online: false, bootMs: 2300 }, async (env, expect) => {
-    await sleep(1200);
-    expect(env.state("serverOnline") === false && env.el("gpuStatusText").textContent.includes("Запуск"), "still starting: " + env.el("gpuStatusText").textContent);
-    expect(env.el("btnPlayServer").style.display === "none", "no ▶ button while the start is in progress");
-    const up = await env.waitFor(() => env.state("serverOnline") === true, 5000);
-    expect(up, "the plugin must notice the server by itself");
-    expect(env.el("gpuStatusBtn").className === "gpu-pill", "the status must be green: " + env.el("gpuStatusBtn").className);
-    expect(env.of("/session/start").length === 0, "nothing opens by itself when no button was pressed");
-    expect(env.server.launches === 1, "one launch");
-  });
 
   await scenario("pressing the waiting button again takes the press back", { online: false, bootMs: 1500 }, async (env, expect) => {
     env.click("btnRun");
@@ -4112,7 +4182,7 @@ async function main() {
   }
   console.log(failed.length
     ? `plugin preview: ${failed.length} of ${results.length} scenarios FAILED`
-    : `plugin preview: ${results.length} scenarios pass (the fast window; drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes, steps back and forward, preset reset, backup, one mode, soft and hard brush edge, the exact picture by itself, strokes on the cleaned photo, zoom keys, right-button drag, the hair slider, the keyboard of the window, depth, a new result leaves 'До', the stands tick stays as it was left, the version next to the name)`);
+    : `plugin preview: ${results.length} scenarios pass (the fast window; drag -> nothing; release -> one light refresh; Apply carries the settings; views, presets, automatic preset, remembered press, smoke notes, steps back and forward, preset reset, backup, one mode, soft and hard brush edge, the exact picture by itself, strokes on the cleaned photo, zoom keys, right-button drag, the hair slider, the keyboard of the window, depth, a new result leaves 'До', the stands tick stays as it was left, the version next to the name, the server started by a button)`);
   process.exit(failed.length ? 1 : 0);
 }
 
