@@ -3755,18 +3755,33 @@ class CleanVinylEngine:
     # be non-zero, so it lay over the dress in spots; a stain was not looked for at all. The owner, 2026-11-27:
     # "it has to even out what was not ironed, wrinkles and stains, as it is - and now it floods the whole dress
     # with dots and changes the colour". Since 4.19.0 the question asked about every spot of cloth is another one:
-    # what is the smooth surface this cloth lies on, and does the cloth depart from it weakly or strongly?
-    #   * The surface (_cloth_surface): a plane fitted to the cloth around the spot (Gaussian window, cloth only,
-    #     outliers weighed down), applied twice the way of Tukey (2 S - S S). It follows a slope AND a bend, so
-    #     the light on a belly, a sleeve, a skirt is the surface itself and is not touched.
-    #   * Weak departures - creases, marks of folding, stains, a tint - are pulled onto the surface. Strong ones -
-    #     folds, drapery, seams, edges, prints, a lock of hair or a hand on the cloth - stay: by the piece (the
-    #     energy of the departures inside the window) and by the pixel (its own departure).
+    # what is the smooth surface this cloth lies on, and does the cloth depart from it a little or a lot?
+    #   * The surface (_cloth_surface): a plane fitted to the cloth around the spot (a window that ends at 2.2
+    #     sigma, cloth only, what departs strongly left out in two rounds), applied twice the way of Tukey
+    #     (2 S - S S). It follows a slope AND a bend, so the light on a belly, a sleeve, a skirt is the surface
+    #     itself and is not touched.
+    #   * What departs a little - creases, marks of folding, stains, a faint tint - is pulled onto the surface.
+    #   * What departs a lot stays, untouched: a fold, drapery, gathers, a seam, an edge (deeper than DRESS_DEEP
+    #     against the surface of the garment as a whole), and a colour of its own (DRESS_PRINT: a print, an
+    #     emblem). Its flanks stay with it. The decision is taken once, before any width is worked on: a gate that
+    #     only weakened let every width take its share, and four shares were a third of the fold.
+    #   * Busy cloth - many creases in one window, ruching - is left to the user's slider: the calmer the piece,
+    #     the more of its departures are taken for creases (the energy inside the window against DRESS_EPS).
     #   * This is done at several widths, from narrow to wide; the widths follow the size of the GARMENT (its
-    #     half-width), not of the frame: the same dress is ironed alike in a close-up and in a wide shot.
-    #   * Brightness and colour are judged apart: a tint is evened only while it is faint.
-    #   * Only the low layer is moved (a gain per channel, smooth); weave, grain and every fine detail ride on it.
+    #     half-width, _dress_scale), not of the frame: the same dress is ironed alike in a close-up and in a wide
+    #     shot. A wide band that runs one way is a fold of the garment and stays (band_guard).
+    #   * Garments of clearly different colour are ironed one by one, each seeing only itself (_cloth_colours):
+    #     a plane fitted across the border of two colours is tilted, and both sides were tinted.
+    #   * Brightness and colour are judged apart: a tint is evened only while it is faint (DRESS_TINT).
+    #   * Only the low layer is moved (a gain per channel, smooth); weave, grain and every detail finer than
+    #     about 5 px of a 22-megapixel frame ride on it. So a stain with a sharp outline keeps a trace of the
+    #     outline, and a hairline crease stays: a seam looks the same to this stage.
     #   * The layer covers the garment evenly, whatever was changed in it.
+    # What it cannot know: whether a crease of middling depth is wear or cut. The slider decides what counts as
+    # shallow; crumpled cloth of low contrast (a heap of tulle) is ironed like a crumpled shirt - the eraser of
+    # the window keeps a zone out.
+    DRESS_SLIDER = (0.0, 45.0, 100.0, 150.0)   # the slider «Сила рівняння одягу» ...
+    DRESS_SLIDER_S = (0.0, 0.6, 1.0, 1.5)      # ... and the strength the stage works with (1 = "100" below)
     DRESS_WIDTH = 0.40      # the widest window, in half-widths of the garment, from strength 100 on
     DRESS_EPS = 0.122       # departures (log units, RMS inside a window) that are half kept at strength 100 ...
     DRESS_EPS_REF = 0.075   # ... in a window this wide (half-widths of the garment); wider windows are stricter
@@ -4026,7 +4041,10 @@ class CleanVinylEngine:
         if strength <= 0 or not np.any(dress_mask_small > 0.02):
             return cleaned_f32, alpha_full
 
-        s = float(np.clip(strength / 100.0, 0.0, 1.5))
+        # The slider of the panel (0..150) and the scale of this stage: 45, what the presets ship and what the owner
+        # has saved in his own since 4.0, is the everyday setting - the creases of wear on calm cloth go; 100 irons
+        # everything that is no fold; above it the iron is heavier.
+        s = float(np.interp(float(strength), cls.DRESS_SLIDER, cls.DRESS_SLIDER_S))
         sc = min(1.0, 2000.0 / max(h, w))
         dw, dh = max(8, int(round(w * sc))), max(8, int(round(h * sc)))
         dm = cv2.resize(dress_mask_small, (dw, dh), interpolation=cv2.INTER_LINEAR).astype(np.float32)
@@ -6834,7 +6852,8 @@ class CleanVinylEngine:
             orig_s = sess["orig_small_bgr"]
             base_clean_s = sess["clean_paint_small_bgr"]
 
-            # Apply dress smooth cleanly on small proxy (~12 ms) when enabled, respecting user eraser!
+            # The clothing on the working copy (0.3 - 1 s: the plugin asks when the slider is let go, not while it
+            # moves), respecting the user's eraser. The same stage as at full size: it works in sizes of the garment.
             if dress_smooth and dress_strength > 0 and sess.get("dress_s") is not None:
                 clean_rgb_f32 = cv2.cvtColor(base_clean_s, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
                 ds = sess["dress_s"].copy()
