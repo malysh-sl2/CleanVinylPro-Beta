@@ -1,0 +1,36 @@
+# Python environment of the local server.
+# It is created on every PC by install_windows.bat and only works on the PC that created it.
+.venv/
+venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Node packages of the plugin window test (npm install --prefix tests jsdom)
+node_modules/
+tests/package.json
+tests/package-lock.json
+
+# AI models (about 1 GB, downloaded by server\download_models.py; GitHub rejects files this large)
+CleanVinylPro2/server/models/
+
+# Runtime files written by the server and by the installer of Clean Vinyl Pro 2
+*.log
+*.tmp
+*.part
+.venv_old/
+CleanVinylPro2/server/launch_server_minimized.vbs
+CleanVinylPro2/server/_task_tmp.xml
+# Backups of the owner's settings (the panel button "Бекап налаштувань" writes them here on his PC)
+CleanVinylPro2/backup/
+
+# OS / editor leftovers
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
+
+# Local experiments and previews made from real client photos - they must never get into the repository
+_local/

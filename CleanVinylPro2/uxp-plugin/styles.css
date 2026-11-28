@@ -1,0 +1,1928 @@
+:root {
+  --bg: #2b2b2b;
+  --bg-dark: #1f1f1f;
+  --card: #242424;
+  --border: #3d3d3d;
+  --border-soft: #353535;
+  --text: #ececec;
+  --muted: #a8a8a8;
+  --blue: #1473e6;
+  --blue-hover: #2680eb;
+  --green: #33b66f;
+  --red: #e35d5d;
+  --amber: #f0a43a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button {
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: inherit;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 11.5px;
+  line-height: 1.3;
+  overflow: hidden;
+}
+
+/* ================================================================ */
+/* КОМПАКТНА ПАНЕЛЬ У PHOTOSHOP                                     */
+/* ================================================================ */
+.panel-root {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+.plugin-header {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  background: #303030;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.plugin-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.brand-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: var(--blue);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.brand-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+/* The version under the name (since 4.18.0): which version is installed can be read on the panel itself */
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.brand-version {
+  margin-top: 1px;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #9fb4c9;
+  white-space: nowrap;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.gpu-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 10px;
+  background: #1f2e25;
+  border: 1px solid #2e5940;
+  color: #7ee2a8;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.gpu-pill.offline {
+  background: #352121;
+  border-color: #7a3636;
+  color: #ffb2b2;
+}
+
+.gpu-pill.loading {
+  background: #332c1d;
+  border-color: #6c572b;
+  color: #ffd37d;
+}
+
+.gpu-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+}
+
+.gpu-pill.offline .gpu-dot {
+  background: #ff4d4d;
+}
+
+.gpu-pill.loading .gpu-dot {
+  background: var(--amber);
+}
+
+.play-srv-btn {
+  width: 24px;
+  height: 22px;
+  border-radius: 5px;
+  border: 1px solid #3c9e64;
+  background: #1f5c39;
+  color: #56ff96;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.play-srv-btn:hover {
+  background: #287549;
+  color: #ffffff;
+}
+
+.play-srv-btn:disabled,
+.play-srv-btn.is-disabled {
+  opacity: 0.5;
+  cursor: wait;
+  pointer-events: none;
+}
+
+[role="button"] {
+  user-select: none;
+  cursor: pointer;
+}
+
+.is-disabled {
+  opacity: 0.48;
+  pointer-events: none;
+  cursor: wait;
+}
+
+/* Червона помилка для першого запуску / збою */
+.server-error-card {
+  display: none;
+  margin: 8px 10px 2px;
+  padding: 8px 9px;
+  border-radius: 6px;
+  background: #381b1b;
+  border: 1px solid #963838;
+  color: #ffd3d3;
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.server-error-card.visible {
+  display: block;
+}
+
+.err-head {
+  font-weight: 700;
+  font-size: 11px;
+  color: #ff8f8f;
+  margin-bottom: 4px;
+}
+
+.err-path {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #231111;
+  border: 1px solid #662b2b;
+  color: #fff0a8;
+  font-family: Consolas, monospace;
+  font-size: 10px;
+  word-break: break-all;
+}
+
+.err-note {
+  display: block;
+  margin-top: 3px;
+  color: #ffb8b8;
+  font-size: 9.8px;
+}
+
+.err-actions {
+  display: flex;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.err-btn-retry {
+  flex: 1;
+  border: 1px solid #3d9a61;
+  background: #205c38;
+  color: #d6ffe6;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+}
+
+.err-btn-retry:hover {
+  background: #297447;
+}
+
+.err-btn-check {
+  border: 1px solid #754040;
+  background: #472525;
+  color: #ffdfdf;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+}
+
+.status-banner {
+  display: none;
+  padding: 5px 10px;
+  font-size: 10px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.status-banner.visible {
+  display: block;
+}
+
+.status-banner.info {
+  background: #1f2d3d;
+  color: #a8d2ff;
+}
+
+.status-banner.error {
+  background: #3a2222;
+  color: #ffb4b4;
+}
+
+.panel-body {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.panel-hero-card {
+  background: #242424;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hero-desc {
+  font-size: 10.5px;
+  color: #bdbdbd;
+  line-height: 1.38;
+}
+
+.btn-primary {
+  width: 100%;
+  border: 1px solid #4da0ff;
+  border-radius: 5px;
+  padding: 9px 10px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #ffffff;
+  background: var(--blue);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.btn-primary:hover {
+  background: var(--blue-hover);
+}
+
+.btn-primary:disabled,
+.btn-primary.is-disabled {
+  opacity: 0.55;
+  cursor: wait;
+  pointer-events: none;
+}
+
+/* A press that waits for the server (the action starts by itself when the status turns green) */
+.btn-primary.waiting,
+.btn-sec.waiting,
+.mini-util-btn.waiting {
+  background: #5a4a1e;
+  border-color: #c79a3a;
+  color: #ffe7b0;
+}
+
+.btn-row {
+  display: flex;
+  gap: 5px;
+}
+
+.btn-sec {
+  flex: 1;
+  border: 1px solid #4d6280;
+  background: #2c384a;
+  color: #e8f1ff;
+  border-radius: 5px;
+  padding: 5px 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.btn-sec:hover {
+  background: #36475e;
+  border-color: #6b88b0;
+}
+
+.btn-sec.active {
+  background: #1f5499;
+  border-color: #5ca2ff;
+  color: #ffffff;
+}
+
+.panel-progress {
+  display: none;
+  background: #1d1f24;
+  border: 1px solid #343a46;
+  border-radius: 4px;
+  padding: 5px 7px;
+}
+
+.panel-progress.visible {
+  display: block;
+}
+
+.progress-text {
+  font-size: 10px;
+  color: #b7d5ff;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 3px;
+}
+
+.progress-bar-bg {
+  height: 5px;
+  background: #111111;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  width: 0%;
+  background: #2680eb;
+}
+
+.panel-tools-row {
+  display: flex;
+  gap: 6px;
+}
+
+.mini-util-btn {
+  flex: 1;
+  border: 1px solid #445368;
+  background: #27303d;
+  color: #dbe8ff;
+  border-radius: 4px;
+  padding: 5px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.mini-util-btn:hover {
+  background: #334052;
+  border-color: #647b9c;
+  color: #ffffff;
+}
+
+.panel-help-box {
+  display: none;
+  padding: 8px 9px;
+  border-radius: 5px;
+  background: #20262e;
+  border: 1px solid #344459;
+  color: #cde1ff;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.panel-help-box.visible {
+  display: block;
+}
+
+/* Бекап налаштувань: текст, шлях до файла, список бекапів для відновлення */
+.backup-line {
+  margin-bottom: 4px;
+}
+
+.backup-path {
+  margin-bottom: 4px;
+  padding: 4px 5px;
+  border-radius: 3px;
+  background: #171b21;
+  color: #ffffff;
+  word-break: break-word;
+}
+
+.backup-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 190px;
+  overflow-y: auto;
+}
+
+.backup-row {
+  margin: 2px 0;
+  border: 1px solid #445368;
+  background: #27303d;
+  color: #dbe8ff;
+  border-radius: 4px;
+  padding: 5px 6px;
+  cursor: pointer;
+}
+
+.backup-row:hover {
+  background: #334052;
+  border-color: #647b9c;
+  color: #ffffff;
+}
+
+.backup-row.armed {
+  background: #6b3a1e;
+  border-color: #ffab5c;
+  color: #ffffff;
+}
+
+.backup-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.footer-status {
+  display: none;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.footer-status.visible {
+  display: block;
+}
+
+.footer-status.success {
+  background: #1d3225;
+  border: 1px solid #2b5a3d;
+  color: #9de8be;
+}
+
+.footer-status.error {
+  background: #3b2020;
+  border: 1px solid #6b3333;
+  color: #ffb8b8;
+}
+
+.footer-status.info {
+  background: #1e2b3b;
+  border: 1px solid #324f73;
+  color: #a9d2ff;
+}
+
+/* ================================================================ */
+/* ВЕЛИКЕ ІНТЕРАКТИВНЕ ВІКНО RETOUCH4ME-СТИЛЮ                      */
+/* ================================================================ */
+.r4m-dialog {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: #262626;
+  color: #ececec;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  overflow: hidden;
+}
+
+.r4m-shell {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #262626;
+  user-select: none;
+}
+
+/* Topbar */
+.r4m-topbar {
+  height: 38px;
+  padding: 0 10px;
+  background: #2d2d2d;
+  border-bottom: 1px solid #3b3b3b;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.r4m-top-left,
+.r4m-top-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.r4m-icon-btn {
+  width: 28px;
+  height: 26px;
+  border-radius: 4px;
+  border: 1px solid #526178;
+  background: #2b3442;
+  color: #eef4ff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.r4m-icon-btn:hover {
+  background: #394659;
+  border-color: #7088ab;
+  color: #ffffff;
+}
+
+.r4m-icon-btn.active {
+  background: #1f559e;
+  border-color: #5ea5ff;
+  color: #ffffff;
+}
+
+/* "До / Після" and "Маска": icon + word, lit while their view is on screen */
+.r4m-text-btn {
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 4px;
+  border: 1px solid #526178;
+  background: #2b3442;
+  color: #eef4ff;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.r4m-text-btn:hover {
+  background: #394659;
+  border-color: #7088ab;
+  color: #ffffff;
+}
+
+.r4m-text-btn.active {
+  background: #1f559e;
+  border-color: #5ea5ff;
+  color: #ffffff;
+}
+
+.mask-swatch {
+  display: inline-flex;
+  border-radius: 2px;
+  overflow: hidden;
+  border: 1px solid #1b1e24;
+}
+
+.mask-swatch .sw-red,
+.mask-swatch .sw-green {
+  width: 7px;
+  height: 12px;
+  display: block;
+}
+
+.mask-swatch .sw-red {
+  background: #c8353c;
+}
+
+.mask-swatch .sw-green {
+  background: #35e05a;
+}
+
+.r4m-info-btn {
+  font-family: Georgia, serif;
+  font-weight: 700;
+  font-style: italic;
+  font-size: 13px;
+  background: #293b54;
+  border-color: #4f72a3;
+  color: #9dc8ff;
+}
+
+.r4m-close-x {
+  background: #422629;
+  border-color: #784247;
+  color: #ffc2c6;
+  font-size: 13px;
+}
+
+.r4m-close-x:hover {
+  background: #732b31;
+  border-color: #c7545e;
+  color: #ffffff;
+}
+
+.r4m-check-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: #2b3340;
+  border: 1px solid #4c596e;
+  font-size: 11px;
+  color: #edf3ff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.r4m-check-pill input {
+  margin: 0;
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
+/* The mixer brush: a caption and a check box, next to the dress and the smoke pills */
+.r4m-mix-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: #2b3340;
+  border: 1px solid #4c596e;
+  font-size: 11px;
+  color: #edf3ff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.r4m-mix-pill.active {
+  border-color: #6fb6ff;
+  background: #24384f;
+}
+
+.r4m-mix-pill input {
+  margin: 0;
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
+/* "Прибирати стійки": the same kind of pill, in the colour its row of the settings had */
+.r4m-stands-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: #3a3024;
+  border: 1px solid #7a6240;
+  font-size: 11px;
+  color: #ffd49e;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.r4m-stands-pill.active {
+  border-color: #ffab5c;
+  background: #5a3d1c;
+  color: #ffffff;
+}
+
+.r4m-stands-pill input {
+  margin: 0;
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
+.r4m-dress-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: #33273d;
+  border: 1px solid #694982;
+  color: #f3d2ff;
+  cursor: pointer;
+}
+
+.r4m-dress-pill.active {
+  background: #4b2b66;
+  border-color: #b46ee6;
+  color: #ffffff;
+}
+
+.r4m-dress-pill input {
+  margin: 0;
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
+.r4m-smoke-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: #22303c;
+  border: 1px solid #44647d;
+  color: #bcecff;
+  cursor: pointer;
+}
+
+.r4m-smoke-pill.active {
+  background: #234761;
+  border-color: #6bc6ff;
+  color: #ffffff;
+}
+
+.r4m-smoke-pill input {
+  margin: 0;
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
+.ui-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+  pointer-events: none;
+}
+
+.ui-icon-sm {
+  width: 14px;
+  height: 14px;
+}
+
+.ui-icon-frac {
+  width: 20px;
+  height: 20px;
+}
+
+.ui-icon-auto {
+  width: 16px;
+  height: 13px;
+  display: block;
+  pointer-events: none;
+}
+
+.r4m-blend-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px;
+  background: #272e3a;
+  border: 1px solid #485366;
+  border-radius: 4px;
+}
+
+.r4m-blend-lbl {
+  font-size: 11px;
+  color: #e4ecfa;
+  white-space: nowrap;
+}
+
+.r4m-blend-slider {
+  width: 110px;
+}
+
+.r4m-presets-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 4px;
+  border: 1px solid #4e6282;
+  background: #293445;
+  color: #f0f6ff;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  max-width: 165px;
+}
+
+.r4m-presets-btn:hover {
+  background: #344359;
+  border-color: #6b88b5;
+}
+
+.r4m-presets-btn #dlgActivePresetName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preset-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4da3ff;
+  flex-shrink: 0;
+}
+
+.caret {
+  font-size: 9px;
+  color: #9e9e9e;
+}
+
+/* Popovers */
+.r4m-popover-anchor {
+  position: relative;
+}
+
+.r4m-popover {
+  display: none;
+  position: absolute;
+  top: 32px;
+  right: 0;
+  z-index: 40;
+  background: #24262a;
+  border: 1px solid #4c525e;
+  border-radius: 6px;
+  padding: 8px;
+  color: #ececec;
+}
+
+.r4m-popover.visible {
+  display: block;
+}
+
+.r4m-presets-popover {
+  width: 245px;
+}
+
+.r4m-gear-popover {
+  width: 280px;
+}
+
+.r4m-info-popover {
+  width: 270px;
+}
+
+.pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 700;
+  color: #d4e4ff;
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #363b45;
+}
+
+.pop-head-btns {
+  display: flex;
+  gap: 4px;
+}
+
+.pop-sm-btn {
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  border: 1px solid #4a4f5a;
+  background: #2e3138;
+  color: #e0e0e0;
+  font-size: 11px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.pop-sm-btn:hover {
+  background: #3d424d;
+  color: #ffffff;
+}
+
+.pop-sm-btn.active {
+  background: var(--blue);
+  border-color: var(--blue-hover);
+  color: #ffffff;
+}
+
+.auto-preset-row {
+  margin-bottom: 6px;
+  padding: 5px 6px;
+  border-radius: 4px;
+  background: #1d2a3a;
+  border: 1px solid #33506f;
+  color: #d6e8ff;
+}
+
+.dlg-presets-list {
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.preset-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.preset-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  border-radius: 4px;
+  border: 1px solid #393d46;
+  background: #1e2024;
+  color: #e0e0e0;
+  font-size: 10.5px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.preset-btn.active {
+  background: #1d3554;
+  border-color: #2f7ae5;
+  color: #ffffff;
+}
+
+.edit-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.ord-btn {
+  width: 18px;
+  height: 22px;
+  border-radius: 3px;
+  border: 1px solid #444;
+  background: #2b2e35;
+  color: #ccc;
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ord-btn.del-btn {
+  color: #ff8e8e;
+  border-color: #6b3535;
+  background: #381e1e;
+}
+
+.ord-btn:disabled,
+.ord-btn.is-disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.add-preset-form {
+  display: none;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.add-preset-form.visible {
+  display: flex;
+}
+
+.add-preset-input {
+  flex: 1;
+  min-width: 0;
+  background: #16181c;
+  border: 1px solid #444a56;
+  color: #fff;
+  border-radius: 3px;
+  padding: 3px 6px;
+  font-size: 10.5px;
+}
+
+.small-save-btn,
+.small-cancel-btn {
+  border-radius: 3px;
+  border: 1px solid #444;
+  background: #333;
+  color: #eee;
+  font-size: 10px;
+  padding: 3px 7px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.small-save-btn {
+  background: var(--blue);
+  border-color: var(--blue-hover);
+  color: #fff;
+}
+
+.restore-presets-btn {
+  margin-top: 5px;
+  width: 100%;
+  border: 1px dashed #4a5568;
+  background: #1d222b;
+  color: #a8c7f0;
+  border-radius: 4px;
+  padding: 4px;
+  font-size: 10px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.gear-scroll {
+  max-height: 360px;  /* fitGearList() of main.js gives it what the window has */
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-right: 3px;
+}
+
+/* The rows of the list keep their height and the list scrolls. Photoshop does not give a flex item the height of
+   what is in it as a minimum, so a list that is longer than its box is squeezed into it instead: on the owner's
+   screenshots of 4.11.0 and 4.12.0 the sliders lie on the captions of the rows below and the check boxes run
+   into each other. Said for every kind of row by name as well - what "> *" does there was never seen. */
+.gear-scroll > * {
+  flex-shrink: 0;
+}
+
+.gear-scroll .g-row,
+.gear-scroll .ps-check,
+.gear-scroll .g-passes-row,
+.gear-scroll .btn-primary,
+.gear-scroll .btn-sec,
+.gear-scroll .g-time-line,
+.gear-scroll .g-vram-box {
+  flex-shrink: 0;
+}
+
+.g-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ctrl-label-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10.5px;
+  color: #d6d6d6;
+}
+
+.ctrl-right-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ctrl-val {
+  font-size: 10px;
+  font-weight: 600;
+  color: #9ec4ff;
+}
+
+.toggle-pill {
+  border: 1px solid #494949;
+  background: #1b1d21;
+  color: #aaaaaa;
+  border-radius: 8px;
+  padding: 1px 6px;
+  font-size: 9.5px;
+  cursor: pointer;
+}
+
+.toggle-pill.on {
+  background: var(--blue);
+  border-color: var(--blue-hover);
+  color: #ffffff;
+}
+
+.ps-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: #dfdfdf;
+  cursor: pointer;
+}
+
+.ps-check input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+}
+
+.ps-check.remove-mode {
+  color: #ffd49e;
+}
+
+.gear-live-note {
+  margin-bottom: 7px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  background: #16261d;
+  border: 1px solid #2f6b47;
+  color: #c9f2d9;
+  font-size: 10px;
+  line-height: 1.38;
+}
+
+.gear-apply-btn {
+  padding: 6px 8px;
+  font-size: 11px;
+}
+
+.gear-save-btn {
+  padding: 5px 8px;
+  font-size: 10.5px;
+}
+
+/* «Скинути пресет до стандартних»: друге натискання підтверджує */
+.gear-reset-btn {
+  margin-top: 4px;
+  border-color: #6b5a3a;
+  color: #ffd9a8;
+}
+
+.gear-reset-btn.is-dim {
+  opacity: 0.5;
+}
+
+.gear-reset-btn.armed {
+  background: #6b3a1e;
+  border-color: #ffab5c;
+  color: #ffffff;
+}
+
+.g-passes-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10.5px;
+  color: #dfe6f2;
+  padding-top: 2px;
+}
+
+.passes-pills {
+  flex: 0 0 155px;
+}
+
+.gear-tip-box {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  background: #171c26;
+  border: 1px solid #354258;
+  color: #c8dcfa;
+  font-size: 10px;
+  line-height: 1.38;
+  min-height: 44px;
+}
+
+.detail-row {
+  margin: 2px 0 6px 0;
+}
+
+.g-time-line {
+  font-size: 10px;
+  color: #a8b0bd;
+  margin: 2px 0 5px 0;
+  min-height: 12px;
+}
+
+.g-time-line.warn {
+  color: #ffb14a;
+}
+
+.g-vram-box {
+  padding-top: 5px;
+  border-top: 1px solid #353942;
+}
+
+.g-vram-lbl {
+  font-size: 10px;
+  color: #a8b0bd;
+  margin-bottom: 4px;
+}
+
+.idle-pills-row {
+  display: flex;
+  gap: 4px;
+}
+
+.idle-pill {
+  flex: 1;
+  border: 1px solid #3e434d;
+  background: #1c1e22;
+  color: #b8b8b8;
+  border-radius: 4px;
+  padding: 3px;
+  font-size: 10px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.idle-pill.active {
+  background: #1d3554;
+  border-color: #2f7ae5;
+  color: #ffffff;
+}
+
+.info-text {
+  font-size: 10.5px;
+  color: #d6deeb;
+  line-height: 1.45;
+}
+
+/* Custom Drag-Only Slider (Zero Wheel Interference) */
+.cv-slider {
+  position: relative;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.cv-slider.disabled {
+  opacity: 0.34;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.cv-slider.disabled .cv-slider-fill {
+  background: #666c75;
+}
+
+.cv-slider-track {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  background: #121212;
+  border-radius: 2px;
+  border: 1px solid #3a3a3a;
+}
+
+.cv-slider-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--blue);
+  border-radius: 2px;
+  width: 50%;
+}
+
+.cv-slider-thumb {
+  position: absolute;
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  margin-top: -5.5px;
+  margin-left: -5.5px;
+  border-radius: 50%;
+  background: #efefef;
+  border: 2px solid var(--blue-hover);
+  pointer-events: none;
+}
+
+/* Main Workspace Area */
+.r4m-main {
+  flex: 1;
+  height: calc(100vh - 78px);
+  min-height: 0;
+  display: flex;
+}
+
+.r4m-leftbar {
+  width: 42px;
+  background: #2b2b2b;
+  border-right: 1px solid #3b3b3b;
+  padding: 8px 5px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.r4m-tool-btn {
+  width: 30px;
+  height: 28px;
+  border-radius: 4px;
+  border: 1px solid #4e5c70;
+  background: #2b3340;
+  color: #eef4ff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.r4m-tool-btn:hover {
+  background: #3a4659;
+  border-color: #7088ab;
+  color: #ffffff;
+}
+
+.r4m-tool-btn.active {
+  background: #1b693b;
+  border-color: #3ef082;
+  color: #ffffff;
+}
+
+.r4m-tool-btn.pan-active {
+  background: #1e5294;
+  border-color: #5ca7ff;
+  color: #ffffff;
+}
+
+.r4m-tool-btn.eraser-active {
+  background: #7c2a32;
+  border-color: #ff6975;
+  color: #ffffff;
+}
+
+.r4m-tool-sep {
+  width: 26px;
+  height: 1px;
+  background: #3d3d3d;
+  margin: 2px 0;
+}
+
+/* Крок назад / уперед: тьмяні, коли кроків немає (натискання тоді лише пояснює це словами) */
+.r4m-step-btn.is-dim {
+  opacity: 0.42;
+}
+
+.r4m-step-btn.is-dim:hover {
+  background: #2b3340;
+  border-color: #4e5c70;
+  color: #eef4ff;
+}
+
+.r4m-size-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 32px;
+  padding: 4px 2px;
+  border-radius: 4px;
+  background: #232933;
+  border: 1px solid #465366;
+}
+
+.size-step-btn {
+  width: 24px;
+  height: 16px;
+  border-radius: 3px;
+  border: 1px solid #526278;
+  background: #2e3847;
+  color: #edf4ff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.size-step-btn:hover {
+  background: #3c4a5e;
+  border-color: #738cb0;
+}
+
+.size-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: #9ec4ff;
+}
+
+/* Край пензля / гумки: дві кнопки одна під одною — м'який (верхня) і жорсткий (нижня); вибрана підсвічена */
+.r4m-edge-box {
+  gap: 3px;
+}
+
+.edge-btn {
+  width: 24px;
+  height: 20px;
+  border-radius: 3px;
+  border: 1px solid #526278;
+  background: #2e3847;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.6;
+}
+
+.edge-btn:hover {
+  background: #3c4a5e;
+  border-color: #738cb0;
+  opacity: 1;
+}
+
+.edge-btn.active {
+  background: #1e5294;
+  border-color: #5ca7ff;
+  opacity: 1;
+}
+
+/* Viewport & Photo Stage */
+/* The photo holds the keyboard of the window (main.js, keepKeysInWindow): that is not shown with a frame around it. */
+.r4m-viewport:focus {
+  outline: none;
+}
+
+.r4m-viewport {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: #1c1e22;
+  cursor: default;
+}
+
+.r4m-stage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100px;
+  height: 100px;
+  background: #141619;
+  overflow: hidden;
+}
+
+.stage-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  display: none;
+}
+
+.stage-dots {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.stroke-dot {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0.65;
+}
+
+.brush-cursor {
+  position: absolute;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  pointer-events: none;
+  display: none;
+}
+
+.r4m-mode-badge {
+  display: none;
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 25;
+  padding: 4px 10px;
+  border-radius: 5px;
+  background: rgba(20, 26, 36, 0.88);
+  border: 1px solid #4da3ff;
+  color: #eaf3ff;
+  font-size: 11px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.r4m-mode-badge.visible {
+  display: inline-block;
+}
+
+.r4m-mode-badge.clean {
+  border-color: #36d97e;
+  color: #bfffdc;
+}
+
+.r4m-mode-badge.mask {
+  border-color: #e0a63c;
+  color: #ffe6b3;
+}
+
+/* the cleaned photo on screen is a quick preview; its exact version is on its way (or was put off) */
+.r4m-mode-badge.refining {
+  border-color: #e0a63c;
+  color: #ffe6b3;
+}
+
+/* State of the preview after the sliders were changed (light refresh, no progress card) */
+.r4m-preview-badge {
+  display: none;
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 25;
+  max-width: 70%;
+  padding: 4px 10px;
+  border-radius: 5px;
+  background: rgba(20, 26, 36, 0.88);
+  border: 1px solid #4da3ff;
+  color: #eaf3ff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+  pointer-events: none;
+}
+
+.r4m-preview-badge.visible {
+  display: inline-block;
+}
+
+.r4m-preview-badge.stale {
+  border-color: #e0a63c;
+  color: #ffe6b3;
+  font-weight: 400;
+}
+
+/* which preset was picked / what a clicked preset changed */
+.r4m-preview-badge.note {
+  border-color: #36d97e;
+  color: #d9ffe9;
+  font-weight: 600;
+}
+
+/* Progress Overlay (center of photo during initial scan) */
+.r4m-progress-overlay {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(20, 22, 26, 0.75);
+  z-index: 30;
+  align-items: center;
+  justify-content: center;
+}
+
+.r4m-progress-overlay.visible {
+  display: flex;
+}
+
+.r4m-prog-card {
+  width: 430px;
+  max-width: 88%;
+  background: #232832;
+  border: 1px solid #4f5e75;
+  border-radius: 7px;
+  padding: 14px 16px;
+}
+
+.r4m-prog-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #f0f5ff;
+  margin-bottom: 8px;
+}
+
+.r4m-prog-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.r4m-prog-track {
+  flex: 1;
+  height: 14px;
+  background: #14181f;
+  border: 1px solid #445166;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.r4m-prog-fill {
+  height: 100%;
+  width: 0%;
+  background: #3391ff;
+}
+
+.r4m-prog-pct {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #cde3ff;
+  min-width: 34px;
+  text-align: right;
+}
+
+.r4m-prog-cancel {
+  border: 1px solid #6b4348;
+  background: #47282c;
+  color: #ffd4d8;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.r4m-prog-cancel:hover {
+  background: #63343a;
+  color: #ffffff;
+}
+
+.r4m-prog-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.r4m-prog-timer {
+  font-size: 11px;
+  font-weight: 700;
+  color: #7dd3fc;
+}
+
+.r4m-prog-tip {
+  margin-top: 8px;
+  padding: 7px 10px;
+  border-radius: 5px;
+  background: #1b222d;
+  border: 1px solid #384963;
+  color: #d7e6fc;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* Hover Tooltip */
+.r4m-tooltip {
+  display: none;
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  max-width: 440px;
+  z-index: 35;
+  padding: 6px 10px;
+  border-radius: 5px;
+  background: #13161c;
+  border: 1px solid #4e5b73;
+  color: #eaf2ff;
+  font-size: 11px;
+  line-height: 1.35;
+  pointer-events: none;
+}
+
+.r4m-tooltip.visible {
+  display: block;
+}
+
+/* Bottom Bar */
+.r4m-bottombar {
+  height: 40px;
+  padding: 0 10px;
+  background: #2d2d2d;
+  border-top: 1px solid #3b3b3b;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.r4m-bot-left,
+.r4m-bot-center,
+.r4m-bot-right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.r4m-frac-btn {
+  width: 30px;
+  height: 28px;
+  border-radius: 4px;
+  border: 1px solid #4d5b70;
+  background: #28313d;
+  color: #cdd8eb;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  opacity: 0.58;
+}
+
+.r4m-frac-btn:hover {
+  background: #344154;
+  border-color: #6b85ab;
+  opacity: 0.9;
+}
+
+.r4m-frac-btn.active {
+  background: #1e5296;
+  border-color: #5ca7ff;
+  color: #ffffff;
+  opacity: 1;
+}
+
+.r4m-auto-btn {
+  width: 38px;
+}
+
+.auto-txt {
+  font-size: 7.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  line-height: 1;
+  margin-top: -1px;
+  color: #d6ecff;
+}
+
+.r4m-zoom-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 1px solid #4f5f78;
+  background: #293342;
+  color: #eef5ff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.r4m-zoom-btn:hover {
+  background: #374559;
+}
+
+.r4m-zoom-val {
+  min-width: 48px;
+  height: 24px;
+  border-radius: 4px;
+  border: 1px solid #4a5970;
+  background: #232c38;
+  color: #f0f6ff;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.r4m-hover-status {
+  font-size: 10px;
+  color: #b4c2d9;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 4px;
+}
+
+.r4m-apply-btn {
+  height: 28px;
+  padding: 0 15px;
+  border-radius: 4px;
+  border: 1px solid #4da0ff;
+  background: #1473e6;
+  color: #ffffff;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.r4m-apply-btn:hover {
+  background: #2680eb;
+}
+
+.r4m-apply-btn:disabled,
+.r4m-apply-btn.is-disabled {
+  opacity: 0.5;
+  cursor: wait;
+  pointer-events: none;
+}
+
+/* "↻ Перерахувати": the exact picture on request, always at hand next to "Застосувати" */
+.r4m-recompute-btn {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 4px;
+  border: 1px solid #4da0ff;
+  background: #22344d;
+  color: #dcecff;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.r4m-recompute-btn:hover {
+  background: #2c4467;
+}
+
+.r4m-cancel-btn {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 4px;
+  border: 1px solid #576478;
+  background: #323b4a;
+  color: #eef4ff;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.r4m-cancel-btn:hover {
+  background: #3f4b5e;
+  border-color: #7789a6;
+}
